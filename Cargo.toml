@@ -1,6 +1,6 @@
 [package]
 name = "sanstun"
-description = "an implementation of the WireGuard® protocol designed for portability and speed"
+description = "A fast, sans-IO implementation of the WireGuard® protocol"
 version = "0.7.0"
 authors = ["Firezone, Inc."]
 license = "BSD-3-Clause"
