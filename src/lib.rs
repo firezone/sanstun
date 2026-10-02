@@ -322,18 +322,12 @@ impl Tunnel {
     /// [`Tunnel::encapsulate_keepalive`] instead. Returns `Err(Error::NoCurrentSession)` when
     /// there is no usable session; in that case **no** handshake is initiated.
     pub fn prepare_encapsulate(&mut self, now: Instant) -> Result<PendingEncapsulate, Error> {
-        let pending = self.prepare_data_message(now)?;
-        self.timer_tick(TimerName::TimeLastDataPacketSent, now);
-
-        Ok(pending)
-    }
-
-    fn prepare_data_message(&mut self, now: Instant) -> Result<PendingEncapsulate, Error> {
         let pending = self
             .sending_session(now)
             .ok_or(Error::NoCurrentSession)?
             .prepare_packet_data();
         self.timer_tick(TimerName::TimeLastPacketSent, now);
+        self.timer_tick(TimerName::TimeLastDataPacketSent, now);
 
         Ok(pending)
     }
@@ -348,8 +342,11 @@ impl Tunnel {
         now: Instant,
     ) -> Result<KeepaliveMessage, Error> {
         let mut message = [0u8; DATA_OVERHEAD_SZ];
-        self.prepare_data_message(now)?
+        self.sending_session(now)
+            .ok_or(Error::NoCurrentSession)?
+            .prepare_packet_data()
             .encrypt_payload(&[], &mut message)?;
+        self.timer_tick(TimerName::TimeLastPacketSent, now);
 
         Ok(KeepaliveMessage(message))
     }
