@@ -128,17 +128,6 @@ pub(crate) struct InitiatorStatic {
     pub(crate) peer_static_public: PublicKey,
 }
 
-impl std::fmt::Debug for InitiatorStatic {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("InitiatorStatic")
-            .field("chaining_key", &"<redacted>")
-            .field("hash", &"<redacted>")
-            .field("peer_ephemeral_public", &self.peer_ephemeral_public)
-            .field("peer_static_public", &self.peer_static_public)
-            .finish()
-    }
-}
-
 pub(crate) fn decrypt_initiator_static(
     static_private: &StaticSecret,
     static_public: &PublicKey,

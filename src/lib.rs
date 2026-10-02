@@ -119,11 +119,19 @@ impl<'a> Macs<'a> {
 }
 
 /// A handshake initiation whose initiator's static public key we decrypted.
-#[derive(Debug)]
 pub struct HandshakeInit<'a> {
     sender_idx: u32,
     encrypted_timestamp: &'a [u8],
     initiator: InitiatorStatic,
+}
+
+impl std::fmt::Debug for HandshakeInit<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HandshakeInit")
+            .field("sender_idx", &self.sender_idx)
+            .field("peer_static_public", &self.peer_static_public())
+            .finish_non_exhaustive()
+    }
 }
 
 impl HandshakeInit<'_> {
