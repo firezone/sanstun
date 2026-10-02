@@ -15,19 +15,20 @@ pub use errors::Error;
 pub use index::Index;
 pub use ingress::{Ingress, Received};
 pub use message::{
-    CookieReplyMessage, HandshakeInitiationMessage, HandshakeResponseMessage, KeepaliveMessage,
+    CookieReplyMessage, DataMessage, HandshakeInit, HandshakeInitiationMessage, HandshakeResponse,
+    HandshakeResponseMessage, KeepaliveMessage, Packet, PacketCookieReply, PacketData,
 };
 pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
 pub use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::handshake::{Handshake, InitiatorStatic};
+use crate::handshake::Handshake;
+use crate::message::DATA_OVERHEAD_SZ;
 use crate::session::Sessions;
 use crate::timers::{TimerName, Timers};
 
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
-use std::ops::Deref;
 use std::time::{Duration, Instant};
 
 /// What the caller needs to do after [`Tunnel::decapsulate`].
@@ -57,18 +58,6 @@ pub enum TimerAction {
 #[must_use = "a keepalive is due; send it with `Tunnel::encapsulate_keepalive`"]
 pub struct Keepalive;
 
-/// An encrypted data message to send to the network, in the buffer it was written into.
-#[derive(Debug)]
-pub struct DataMessage<'a>(&'a mut [u8]);
-
-impl Deref for DataMessage<'_> {
-    type Target = [u8];
-
-    fn deref(&self) -> &[u8] {
-        self.0
-    }
-}
-
 /// What the caller needs to do after [`Tunnel::commit_decrypted`].
 #[derive(Debug)]
 pub enum Committed<B> {
@@ -88,119 +77,6 @@ pub struct Tunnel {
     timers: timers::Timers,
     /// Source of the ephemeral keys and the handshake jitter
     rng: StdRng,
-}
-
-type MessageType = u32;
-const HANDSHAKE_INIT: MessageType = 1;
-const HANDSHAKE_RESP: MessageType = 2;
-const COOKIE_REPLY: MessageType = 3;
-const DATA: MessageType = 4;
-
-const HANDSHAKE_INIT_SZ: usize = 148;
-const HANDSHAKE_RESP_SZ: usize = 92;
-const COOKIE_REPLY_SZ: usize = 64;
-const DATA_OVERHEAD_SZ: usize = 32;
-
-/// The bytes of a handshake message that its MACs cover, and the MACs themselves.
-#[derive(Debug, Clone, Copy)]
-struct Macs<'a> {
-    msg: &'a [u8],
-    mac1: &'a [u8],
-    mac2: &'a [u8],
-}
-
-impl<'a> Macs<'a> {
-    fn new(message: &'a [u8]) -> Self {
-        let (msg, macs) = message.split_at(message.len() - 32);
-        let (mac1, mac2) = macs.split_at(16);
-
-        Self { msg, mac1, mac2 }
-    }
-}
-
-/// A handshake initiation whose initiator's static public key we decrypted.
-pub struct HandshakeInit<'a> {
-    sender_idx: u32,
-    encrypted_timestamp: &'a [u8],
-    initiator: InitiatorStatic,
-}
-
-impl std::fmt::Debug for HandshakeInit<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HandshakeInit")
-            .field("sender_idx", &self.sender_idx)
-            .field("peer_static_public", &self.peer_static_public())
-            .finish_non_exhaustive()
-    }
-}
-
-impl HandshakeInit<'_> {
-    pub fn sender_idx(&self) -> u32 {
-        self.sender_idx
-    }
-
-    /// The initiator's static public key, e.g. to look up the [`Tunnel`] it belongs to.
-    pub fn peer_static_public(&self) -> PublicKey {
-        self.initiator.peer_static_public
-    }
-}
-
-#[derive(Debug)]
-pub struct HandshakeResponse<'a> {
-    sender_idx: u32,
-    receiver_idx: u32,
-    unencrypted_ephemeral: &'a [u8; 32],
-    encrypted_nothing: &'a [u8],
-}
-
-impl HandshakeResponse<'_> {
-    pub fn sender_idx(&self) -> u32 {
-        self.sender_idx
-    }
-
-    pub fn receiver_idx(&self) -> u32 {
-        self.receiver_idx
-    }
-}
-
-#[derive(Debug)]
-pub struct PacketCookieReply<'a> {
-    receiver_idx: u32,
-    nonce: &'a [u8],
-    encrypted_cookie: &'a [u8],
-}
-
-impl PacketCookieReply<'_> {
-    pub fn receiver_idx(&self) -> u32 {
-        self.receiver_idx
-    }
-}
-
-#[derive(Debug)]
-pub struct PacketData {
-    receiver_idx: u32,
-    counter: u64,
-}
-
-impl PacketData {
-    pub fn receiver_idx(&self) -> u32 {
-        self.receiver_idx
-    }
-
-    pub fn counter(&self) -> u64 {
-        self.counter
-    }
-}
-
-/// A message received from the network.
-///
-/// It can only be obtained from [`Ingress::receive`], which verifies it.
-#[derive(Debug)]
-pub enum Packet<'a> {
-    HandshakeInit(HandshakeInit<'a>),
-    HandshakeResponse(HandshakeResponse<'a>),
-    PacketCookieReply(PacketCookieReply<'a>),
-    PacketData(PacketData),
 }
 
 impl Tunnel {

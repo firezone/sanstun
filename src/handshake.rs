@@ -1,10 +1,13 @@
 use super::index::Index;
 use super::timers::COOKIE_EXPIRATION_TIME;
-use super::{HandshakeInit, HandshakeResponse, PacketCookieReply};
 use crate::crypto::{
     aead_chacha20_open, aead_chacha20_seal, b2s_hash, b2s_hmac, b2s_hmac2, b2s_keyed_mac_16,
 };
 use crate::errors::Error;
+use crate::message::{
+    HANDSHAKE_INIT, HANDSHAKE_INIT_SZ, HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeInit,
+    HandshakeResponse, PacketCookieReply,
+};
 use crate::session::Session;
 use crate::tai64n::{Tai64N, TimeStamper};
 use aead::{AeadInPlace, KeyInit as _};
@@ -283,7 +286,7 @@ impl Handshake {
         packet: HandshakeInit,
         rng: &mut StdRng,
         now: Instant,
-    ) -> Result<([u8; super::HANDSHAKE_RESP_SZ], Session), Error> {
+    ) -> Result<([u8; HANDSHAKE_RESP_SZ], Session), Error> {
         let HandshakeInit {
             // msg.sender_index = little_endian(initiator.sender_index)
             sender_idx: peer_index,
@@ -482,8 +485,8 @@ impl Handshake {
         &mut self,
         rng: &mut StdRng,
         now: Instant,
-    ) -> ([u8; super::HANDSHAKE_INIT_SZ], Index) {
-        let mut dst = [0u8; super::HANDSHAKE_INIT_SZ];
+    ) -> ([u8; HANDSHAKE_INIT_SZ], Index) {
+        let mut dst = [0u8; HANDSHAKE_INIT_SZ];
 
         let (message_type, rest) = dst.split_at_mut(4);
         let (sender_index, rest) = rest.split_at_mut(4);
@@ -502,7 +505,7 @@ impl Handshake {
         let ephemeral_private = x25519_dalek::ReusableSecret::random_from_rng(rng);
         // msg.message_type = 1
         // msg.reserved_zero = { 0, 0, 0 }
-        message_type.copy_from_slice(&super::HANDSHAKE_INIT.to_le_bytes());
+        message_type.copy_from_slice(&HANDSHAKE_INIT.to_le_bytes());
         // msg.sender_index = little_endian(initiator.sender_index)
         sender_index.copy_from_slice(&local_index.to_le_bytes());
         // msg.unencrypted_ephemeral = DH_PUBKEY(initiator.ephemeral_private)
@@ -565,8 +568,8 @@ impl Handshake {
         peer_index: u32,
         rng: &mut StdRng,
         now: Instant,
-    ) -> ([u8; super::HANDSHAKE_RESP_SZ], Session) {
-        let mut dst = [0u8; super::HANDSHAKE_RESP_SZ];
+    ) -> ([u8; HANDSHAKE_RESP_SZ], Session) {
+        let mut dst = [0u8; HANDSHAKE_RESP_SZ];
 
         let (message_type, rest) = dst.split_at_mut(4);
         let (sender_index, rest) = rest.split_at_mut(4);
@@ -579,7 +582,7 @@ impl Handshake {
         let local_index = self.next_index.wrapping_increment();
         // msg.message_type = 2
         // msg.reserved_zero = { 0, 0, 0 }
-        message_type.copy_from_slice(&super::HANDSHAKE_RESP.to_le_bytes());
+        message_type.copy_from_slice(&HANDSHAKE_RESP.to_le_bytes());
         // msg.sender_index = little_endian(responder.sender_index)
         sender_index.copy_from_slice(&local_index.to_le_bytes());
         // msg.receiver_index = little_endian(initiator.sender_index)
