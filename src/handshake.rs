@@ -3,7 +3,7 @@ use super::timers::COOKIE_EXPIRATION_TIME;
 use super::{HandshakeInit, HandshakeResponse, PacketCookieReply};
 use crate::errors::Error;
 use crate::session::Session;
-use aead::{Aead, KeyInit as _, Payload};
+use aead::{AeadInPlace, KeyInit as _};
 use blake2::digest::{FixedOutput, KeyInit};
 use blake2::{Blake2s256, Blake2sMac, Digest};
 use chacha20poly1305::XChaCha20Poly1305;
@@ -196,24 +196,13 @@ impl Tai64N {
     }
 
     /// Parse a timestamp from a 12 byte u8 slice
-    fn parse(buf: &[u8; 12]) -> Result<Tai64N, Error> {
-        if buf.len() < 12 {
-            return Err(Error::InvalidTai64nTimestamp);
-        }
-
+    fn parse(buf: &[u8; 12]) -> Tai64N {
         let (sec_bytes, nano_bytes) = buf.split_at(std::mem::size_of::<u64>());
         let secs = u64::from_be_bytes(sec_bytes.try_into().unwrap());
         let nano = u32::from_be_bytes(nano_bytes.try_into().unwrap());
 
         // WireGuard does not actually expect tai64n timestamp, just monotonically increasing one
-        //if secs < (1u64 << 62) || secs >= (1u64 << 63) {
-        //    return Err(Error::InvalidTai64nTimestamp);
-        //};
-        //if nano >= 1_000_000_000 {
-        //   return Err(Error::InvalidTai64nTimestamp);
-        //}
-
-        Ok(Tai64N { secs, nano })
+        Tai64N { secs, nano }
     }
 
     /// Check if this timestamp represents a time that is chronologically after the time represented
@@ -543,7 +532,7 @@ impl Handshake {
         let mut timestamp = [0u8; TIMESTAMP_LEN];
         aead_chacha20_open(&mut timestamp, &key, 0, packet.encrypted_timestamp, &hash)?;
 
-        let timestamp = Tai64N::parse(&timestamp)?;
+        let timestamp = Tai64N::parse(&timestamp);
 
         tracing::debug!(new_handshake_ts = %timestamp, last_handshake_ts = %self.last_handshake_timestamp);
 
@@ -668,16 +657,14 @@ impl Handshake {
         // msg.encrypted_cookie = XAEAD(HASH(LABEL_COOKIE || responder.static_public), msg.nonce, cookie, last_received_msg.mac1)
         let key = b2s_hash(LABEL_COOKIE, self.params.peer_static_public.as_bytes()); // TODO: pre-compute
 
-        let payload = Payload {
-            aad: &mac1[0..16],
-            msg: packet.encrypted_cookie,
-        };
-        let plaintext = XChaCha20Poly1305::new_from_slice(&key)
+        let (encrypted_cookie, tag) = packet.encrypted_cookie.split_at(16);
+        let mut cookie = [0u8; 16];
+        cookie.copy_from_slice(encrypted_cookie);
+        XChaCha20Poly1305::new_from_slice(&key)
             .unwrap()
-            .decrypt(packet.nonce.into(), payload)
+            .decrypt_in_place_detached(packet.nonce.into(), &mac1[0..16], &mut cookie, tag.into())
             .map_err(|_| Error::InvalidAeadTag)?;
 
-        let cookie = plaintext.try_into().map_err(|_| Error::InvalidPacket)?;
         self.cookies.write_cookie = Some(WriteCookie {
             value: cookie,
             received_at: now,

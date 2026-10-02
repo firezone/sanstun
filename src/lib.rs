@@ -358,7 +358,12 @@ impl Tunnel {
             return Ok(Decapsulated::CookieReply(CookieReplyMessage(cookie)));
         }
 
-        self.handle_verified_packet(packet, now)
+        match packet {
+            Packet::HandshakeInit(p) => self.handle_handshake_init(p, now),
+            Packet::HandshakeResponse(p) => self.handle_handshake_response(p, now),
+            Packet::PacketCookieReply(p) => self.handle_cookie_reply(p, now),
+            Packet::PacketData(p) => self.handle_data(p).map(Decapsulated::Data),
+        }
     }
 
     /// Completes the decapsulation of a decrypted data message.
@@ -396,19 +401,6 @@ impl Tunnel {
         self.timer_tick(TimerName::TimeLastDataPacketReceived, now);
 
         Ok(Committed::Data { buffer, len })
-    }
-
-    fn handle_verified_packet(
-        &mut self,
-        packet: Packet,
-        now: Instant,
-    ) -> Result<Decapsulated, Error> {
-        match packet {
-            Packet::HandshakeInit(p) => self.handle_handshake_init(p, now),
-            Packet::HandshakeResponse(p) => self.handle_handshake_response(p, now),
-            Packet::PacketCookieReply(p) => self.handle_cookie_reply(p, now),
-            Packet::PacketData(p) => self.handle_data(p).map(Decapsulated::Data),
-        }
     }
 
     fn handle_handshake_init(

@@ -6,7 +6,6 @@ pub enum Error {
     UnexpectedPacket,
     WrongIndex,
     WrongKey,
-    InvalidTai64nTimestamp,
     WrongTai64nTimestamp,
     InvalidMac,
     InvalidAeadTag,
@@ -38,7 +37,6 @@ impl Display for Error {
                 f,
                 "decrypted public key from handshake initiation did not match expected key"
             ),
-            Error::InvalidTai64nTimestamp => write!(f, "timestamp is less than 12bytes"),
             Error::WrongTai64nTimestamp => {
                 write!(f, "timestamp of packet is in the past; possible a replay?")
             }
