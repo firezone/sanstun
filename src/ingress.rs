@@ -7,8 +7,8 @@ use crate::message::{
 };
 use crate::{CookieReplyMessage, Error, PublicKey, StaticSecret};
 
-use std::net::IpAddr;
-use std::time::Instant;
+use std::net::{IpAddr, SocketAddr};
+use std::time::{Duration, Instant};
 
 use aead::generic_array::GenericArray;
 use aead::{AeadInPlace, KeyInit};
@@ -16,8 +16,10 @@ use chacha20poly1305::{Key, XChaCha20Poly1305};
 use constant_time_eq::constant_time_eq;
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
+use zeroize::Zeroizing;
 
-const COOKIE_REFRESH: u64 = 128; // Use 128 and not 120 so the compiler can optimize out the division
+/// How long a cookie secret is used before it is replaced
+const COOKIE_SECRET_MAX_AGE: Duration = Duration::from_secs(120);
 const COOKIE_SIZE: usize = 16;
 const COOKIE_NONCE_SIZE: usize = 24;
 
@@ -34,10 +36,10 @@ type Cookie = [u8; COOKIE_SIZE];
 pub struct Ingress {
     static_private: StaticSecret,
     static_public: PublicKey,
-    /// The key we use to derive the cookie
-    secret_key: [u8; 16],
-    start_time: Instant,
-    /// Draws the nonces of cookie replies
+    /// The secret that cookies are derived from
+    cookie_secret: Zeroizing<[u8; 32]>,
+    cookie_secret_created_at: Instant,
+    /// Replaces the cookie secret and draws the nonces of cookie replies
     rng: StdRng,
     mac1_key: [u8; 32],
     cookie_key: Key,
@@ -58,12 +60,14 @@ impl Ingress {
     pub fn new(static_private: StaticSecret, limit: u64, rng_seed: [u8; 32], now: Instant) -> Self {
         let mut rng = StdRng::from_seed(rng_seed);
         let static_public = PublicKey::from(&static_private);
+        let mut cookie_secret = Zeroizing::new([0; 32]);
+        rng.fill(&mut cookie_secret[..]);
 
         Ingress {
             static_private,
             static_public,
-            secret_key: rng.random(),
-            start_time: now,
+            cookie_secret,
+            cookie_secret_created_at: now,
             rng,
             mac1_key: b2s_hash(LABEL_MAC1, static_public.as_bytes()),
             cookie_key: b2s_hash(LABEL_COOKIE, static_public.as_bytes()).into(),
@@ -77,10 +81,10 @@ impl Ingress {
     ///
     /// This is the only entry point for inbound datagrams and enforces WireGuard's cookie mechanism.
     ///
-    /// `src_addr` is the source address of the datagram, which cookies are bound to.
+    /// `src_addr` is the address and port the datagram came from, which cookies are bound to.
     pub fn receive<'a>(
         &mut self,
-        src_addr: IpAddr,
+        src_addr: SocketAddr,
         datagram: &'a [u8],
         now: Instant,
     ) -> Result<Received<'a>, Error> {
@@ -147,7 +151,7 @@ impl Ingress {
     /// and it lacks a valid mac2.
     fn verify_macs(
         &mut self,
-        src_addr: IpAddr,
+        src_addr: SocketAddr,
         sender_idx: u32,
         message: &[u8],
         now: Instant,
@@ -189,21 +193,38 @@ impl Ingress {
         }
     }
 
-    /// Compute the correct cookie value based on the current secret value and the source IP
-    fn current_cookie(&self, addr: IpAddr, now: Instant) -> Cookie {
-        let mut addr_bytes = [0u8; 16];
+    /// The cookie for `addr`: MAC(responder.changing_secret_every_two_minutes, initiator.ip_address || initiator.port)
+    ///
+    /// The address is tagged with its family so that an IPv4 and an IPv6 address never share an
+    /// encoding.
+    fn current_cookie(&mut self, addr: SocketAddr, now: Instant) -> Cookie {
+        let mut addr_bytes = [0u8; 19];
+        let len = match addr.ip() {
+            IpAddr::V4(ip) => {
+                addr_bytes[0] = 4;
+                addr_bytes[1..5].copy_from_slice(&ip.octets());
+                5
+            }
+            IpAddr::V6(ip) => {
+                addr_bytes[0] = 6;
+                addr_bytes[1..17].copy_from_slice(&ip.octets());
+                17
+            }
+        };
+        addr_bytes[len..len + 2].copy_from_slice(&addr.port().to_be_bytes());
 
-        match addr {
-            IpAddr::V4(a) => addr_bytes[..4].copy_from_slice(&a.octets()[..]),
-            IpAddr::V6(a) => addr_bytes[..].copy_from_slice(&a.octets()[..]),
+        b2s_keyed_mac_16(self.cookie_secret(now), &addr_bytes[..len + 2])
+    }
+
+    /// The current cookie secret, replaced in place by a fresh one once it is
+    /// `COOKIE_SECRET_MAX_AGE` old.
+    fn cookie_secret(&mut self, now: Instant) -> &[u8; 32] {
+        if now.duration_since(self.cookie_secret_created_at) >= COOKIE_SECRET_MAX_AGE {
+            self.rng.fill(&mut self.cookie_secret[..]);
+            self.cookie_secret_created_at = now;
         }
 
-        // The current cookie for a given IP is the MAC(responder.changing_secret_every_two_minutes, initiator.ip_address)
-        // First we derive the secret from the current time, the value of cur_counter would change with time.
-        let cur_counter = now.duration_since(self.start_time).as_secs() / COOKIE_REFRESH;
-
-        // Next we derive the cookie
-        b2s_keyed_mac_16_2(&self.secret_key, &cur_counter.to_le_bytes(), &addr_bytes)
+        &self.cookie_secret
     }
 
     fn nonce(&mut self) -> [u8; COOKIE_NONCE_SIZE] {
@@ -261,4 +282,87 @@ pub enum Received<'a> {
     /// Send this cookie reply to the peer: we are under load and its handshake message needs
     /// a valid cookie.
     CookieReply(CookieReplyMessage),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cookies_differ_across_address_families() {
+        let now = Instant::now();
+        let mut ingress = under_load(now);
+
+        let v4 = ingress.current_cookie("1.2.3.4:51820".parse().unwrap(), now);
+        let v6 = ingress.current_cookie("[102:304::]:51820".parse().unwrap(), now);
+
+        assert_ne!(v4, v6);
+    }
+
+    #[test]
+    fn cookies_differ_across_ports() {
+        let now = Instant::now();
+        let mut ingress = under_load(now);
+
+        let first = ingress.current_cookie("1.2.3.4:51820".parse().unwrap(), now);
+        let second = ingress.current_cookie("1.2.3.4:51821".parse().unwrap(), now);
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn cookie_secret_rotates_every_120_seconds() {
+        let start = Instant::now();
+        let mut ingress = under_load(start);
+        let addr = "1.2.3.4:51820".parse().unwrap();
+
+        let first = ingress.current_cookie(addr, start);
+        let before_rotation = ingress.current_cookie(addr, start + secs(119));
+        let second = ingress.current_cookie(addr, start + secs(120));
+        let before_next_rotation = ingress.current_cookie(addr, start + secs(239));
+        let third = ingress.current_cookie(addr, start + secs(240));
+
+        assert_eq!(before_rotation, first);
+        assert_ne!(second, first);
+        assert_eq!(before_next_rotation, second);
+        assert_ne!(third, second);
+    }
+
+    #[test]
+    fn mac2_from_the_previous_cookie_secret_is_rejected() {
+        let start = Instant::now();
+        let mut ingress = under_load(start);
+        let addr = "1.2.3.4:51820".parse().unwrap();
+        let cookie = ingress.current_cookie(addr, start);
+        let init = handshake_initiation(&ingress, &cookie);
+
+        let within = ingress.verify_macs(addr, 0, &init, start + secs(119));
+        let after = ingress.verify_macs(addr, 0, &init, start + secs(120));
+
+        assert!(matches!(within, Ok(None)));
+        assert!(matches!(after, Ok(Some(_))));
+    }
+
+    fn under_load(now: Instant) -> Ingress {
+        Ingress::new(StaticSecret::from([1; 32]), 0, [2; 32], now)
+    }
+
+    /// A handshake initiation with a valid mac1 and its mac2 keyed with `cookie`.
+    fn handshake_initiation(ingress: &Ingress, cookie: &Cookie) -> [u8; HANDSHAKE_INIT_SZ] {
+        let mac1_off = HANDSHAKE_INIT_SZ - 32;
+        let mac2_off = HANDSHAKE_INIT_SZ - 16;
+        let mut init = [0u8; HANDSHAKE_INIT_SZ];
+        init[0] = 1;
+
+        let mac1 = b2s_keyed_mac_16(&ingress.mac1_key, &init[..mac1_off]);
+        init[mac1_off..mac2_off].copy_from_slice(&mac1);
+        let mac2 = b2s_keyed_mac_16(cookie, &init[..mac2_off]);
+        init[mac2_off..].copy_from_slice(&mac2);
+
+        init
+    }
+
+    fn secs(n: u64) -> Duration {
+        Duration::from_secs(n)
+    }
 }
