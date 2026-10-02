@@ -293,12 +293,13 @@ impl PendingEncapsulate {
         dst: &'a mut [u8],
     ) -> Result<DataMessage<'a>, Error> {
         let len = DATA_OFFSET + plaintext.len() + AEAD_SIZE;
-        let buf_len = dst.len();
+        let available = dst.len();
 
         let Some(message) = dst.get_mut(..len) else {
-            tracing::warn!(%buf_len, %len, "Destination buffer too small for outgoing packet data");
-
-            return Err(Error::DestinationBufferTooSmall);
+            return Err(Error::DestinationBufferTooSmall {
+                required: len,
+                available,
+            });
         };
 
         let (header, rest) = message.split_at_mut(DATA_OFFSET);
@@ -360,12 +361,13 @@ impl PendingDecapsulate {
 
     fn decrypt_in_place(&self, ciphertext: &[u8], dst: &mut [u8]) -> Result<usize, Error> {
         let ct_len = ciphertext.len();
-        let buf_len = dst.len();
+        let available = dst.len();
 
         let Some(buf) = dst.get_mut(..ct_len) else {
-            tracing::warn!(%buf_len, %ct_len, "Destination buffer too small for incoming packet data");
-
-            return Err(Error::DestinationBufferTooSmall);
+            return Err(Error::DestinationBufferTooSmall {
+                required: ct_len,
+                available,
+            });
         };
         buf.copy_from_slice(ciphertext);
 

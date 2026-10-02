@@ -72,7 +72,7 @@ fn encrypt_into_a_short_buffer_fails() {
 
     assert!(matches!(
         pending.encrypt(&ip_packet, &mut buf),
-        Err(Error::DestinationBufferTooSmall)
+        Err(Error::DestinationBufferTooSmall { .. })
     ));
 }
 
@@ -166,7 +166,7 @@ fn decrypt_into_a_short_buffer_fails() {
 
     assert!(matches!(
         commit(sim.tunn_mut(B), decrypted, now),
-        Err(Error::DestinationBufferTooSmall)
+        Err(Error::DestinationBufferTooSmall { .. })
     ));
 }
 

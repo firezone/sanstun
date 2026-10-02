@@ -386,10 +386,14 @@ impl Tunnel {
             return Err(Error::NoCurrentSession);
         };
         let len = session.finish_receive_packet_data(counter, plaintext_len)?;
+        let available = buffer.as_ref().len();
         let plaintext = buffer
             .as_ref()
             .get(..len)
-            .ok_or(Error::DestinationBufferTooSmall)?;
+            .ok_or(Error::DestinationBufferTooSmall {
+                required: len,
+                available,
+            })?;
 
         self.set_current_session(remote_idx);
 
