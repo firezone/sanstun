@@ -1,6 +1,6 @@
 use criterion::Criterion;
 
-pub fn bench_x25519_public_key(c: &mut Criterion) {
+fn bench_x25519_public_key(c: &mut Criterion) {
     let mut group = c.benchmark_group("x25519_public_key");
 
     group.sample_size(1000);
@@ -27,3 +27,6 @@ pub fn bench_x25519_public_key(c: &mut Criterion) {
 
     group.finish();
 }
+
+criterion::criterion_group!(benches, bench_x25519_public_key);
+criterion::criterion_main!(benches);
