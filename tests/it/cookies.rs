@@ -137,7 +137,7 @@ fn rate_limiter_resets_without_driving_timers() {
         "11th handshake within a second"
     );
 
-    // Advance time *without* calling `update_timers_at`, so the only thing that
+    // Advance time *without* calling `update_timers`, so the only thing that
     // can clear the window is the lazy reset on the next handshake verification.
     sim.now += secs(2);
 
