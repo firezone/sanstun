@@ -288,29 +288,6 @@ pub enum Received<'a> {
 mod tests {
     use super::*;
 
-    fn under_load(now: Instant) -> Ingress {
-        Ingress::new(StaticSecret::from([1; 32]), 0, [2; 32], now)
-    }
-
-    /// A handshake initiation with a valid mac1 and its mac2 keyed with `cookie`.
-    fn handshake_initiation(ingress: &Ingress, cookie: &Cookie) -> [u8; HANDSHAKE_INIT_SZ] {
-        let mac1_off = HANDSHAKE_INIT_SZ - 32;
-        let mac2_off = HANDSHAKE_INIT_SZ - 16;
-        let mut init = [0u8; HANDSHAKE_INIT_SZ];
-        init[0] = 1;
-
-        let mac1 = b2s_keyed_mac_16(&ingress.mac1_key, &init[..mac1_off]);
-        init[mac1_off..mac2_off].copy_from_slice(&mac1);
-        let mac2 = b2s_keyed_mac_16(cookie, &init[..mac2_off]);
-        init[mac2_off..].copy_from_slice(&mac2);
-
-        init
-    }
-
-    fn secs(n: u64) -> Duration {
-        Duration::from_secs(n)
-    }
-
     #[test]
     fn cookies_differ_across_address_families() {
         let now = Instant::now();
@@ -364,5 +341,28 @@ mod tests {
 
         assert!(matches!(within, Ok(None)));
         assert!(matches!(after, Ok(Some(_))));
+    }
+
+    fn under_load(now: Instant) -> Ingress {
+        Ingress::new(StaticSecret::from([1; 32]), 0, [2; 32], now)
+    }
+
+    /// A handshake initiation with a valid mac1 and its mac2 keyed with `cookie`.
+    fn handshake_initiation(ingress: &Ingress, cookie: &Cookie) -> [u8; HANDSHAKE_INIT_SZ] {
+        let mac1_off = HANDSHAKE_INIT_SZ - 32;
+        let mac2_off = HANDSHAKE_INIT_SZ - 16;
+        let mut init = [0u8; HANDSHAKE_INIT_SZ];
+        init[0] = 1;
+
+        let mac1 = b2s_keyed_mac_16(&ingress.mac1_key, &init[..mac1_off]);
+        init[mac1_off..mac2_off].copy_from_slice(&mac1);
+        let mac2 = b2s_keyed_mac_16(cookie, &init[..mac2_off]);
+        init[mac2_off..].copy_from_slice(&mac2);
+
+        init
+    }
+
+    fn secs(n: u64) -> Duration {
+        Duration::from_secs(n)
     }
 }
