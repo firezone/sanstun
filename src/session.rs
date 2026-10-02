@@ -5,6 +5,7 @@ use super::{
 };
 use crate::errors::Error;
 use crate::DataMessage;
+use crossbeam_utils::CachePadded;
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, CHACHA20_POLY1305};
 use std::sync::Arc;
 use std::time::Instant;
@@ -173,10 +174,10 @@ impl Session {
             established_at: now,
             receiving_index: local_index,
             sending_index: peer_index,
-            receiver: Arc::new(Key(LessSafeKey::new(
+            receiver: Arc::new(Key::new(LessSafeKey::new(
                 UnboundKey::new(&CHACHA20_POLY1305, &receiving_key).unwrap(),
             ))),
-            sender: Arc::new(Key(LessSafeKey::new(
+            sender: Arc::new(Key::new(LessSafeKey::new(
                 UnboundKey::new(&CHACHA20_POLY1305, &sending_key).unwrap(),
             ))),
             sending_key_counter: 0,
@@ -318,7 +319,6 @@ impl PendingEncapsulate {
         nonce[4..12].copy_from_slice(&self.counter.to_le_bytes());
         let computed_tag = self
             .key
-            .0
             .seal_in_place_separate_tag(Nonce::assume_unique_for_key(nonce), Aad::from(&[]), data)
             .expect("plaintext of a data message is always within the AEAD's limits");
         tag.copy_from_slice(computed_tag.as_ref());
@@ -375,7 +375,6 @@ impl PendingDecapsulate {
         nonce[4..12].copy_from_slice(&self.counter.to_le_bytes());
         let plaintext = self
             .key
-            .0
             .open_in_place(Nonce::assume_unique_for_key(nonce), Aad::from(&[]), buf)
             .map_err(|_| Error::InvalidAeadTag)?;
 
@@ -401,6 +400,4 @@ pub struct Decrypted<B> {
 /// A session key on a cache line of its own, apart from the reference count of its [`Arc`].
 ///
 /// Threads that only read the key then never contend with the thread updating the count.
-#[derive(Debug)]
-#[repr(align(128))]
-pub(crate) struct Key(LessSafeKey);
+pub(crate) type Key = CachePadded<LessSafeKey>;
