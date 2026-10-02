@@ -1,11 +1,10 @@
 use super::{
-    PacketData,
     index::Index,
     timers::{REJECT_AFTER_TIME, SHOULD_NOT_USE_AFTER_TIME},
 };
-use crate::DataMessage;
 use crate::crypto::nonce;
 use crate::errors::Error;
+use crate::message::{AEAD_TAG_SZ, DATA, DATA_HEADER_SZ, DataMessage, PacketData};
 use crate::replay::ReceivingKeyCounterValidator;
 use crossbeam_utils::CachePadded;
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
@@ -31,11 +30,6 @@ impl std::fmt::Debug for Session {
         )
     }
 }
-
-/// Where encrypted data resides in a data packet
-const DATA_OFFSET: usize = 16;
-/// The overhead of the AEAD
-const AEAD_SIZE: usize = 16;
 
 impl Session {
     pub(super) fn new(
@@ -274,7 +268,7 @@ impl PendingEncapsulate {
         plaintext: &[u8],
         dst: &'a mut [u8],
     ) -> Result<DataMessage<'a>, Error> {
-        let len = DATA_OFFSET + plaintext.len() + AEAD_SIZE;
+        let len = DATA_HEADER_SZ + plaintext.len() + AEAD_TAG_SZ;
         let available = dst.len();
 
         let Some(message) = dst.get_mut(..len) else {
@@ -284,12 +278,12 @@ impl PendingEncapsulate {
             });
         };
 
-        let (header, rest) = message.split_at_mut(DATA_OFFSET);
+        let (header, rest) = message.split_at_mut(DATA_HEADER_SZ);
         let (data, tag) = rest.split_at_mut(plaintext.len());
 
         let (message_type, rest) = header.split_at_mut(4);
         let (receiver_index, counter) = rest.split_at_mut(4);
-        message_type.copy_from_slice(&super::DATA.to_le_bytes());
+        message_type.copy_from_slice(&DATA.to_le_bytes());
         receiver_index.copy_from_slice(&self.receiver_index.to_le_bytes());
         counter.copy_from_slice(&self.counter.to_le_bytes());
 
@@ -330,7 +324,7 @@ impl PendingDecapsulate {
     /// to authenticate. The returned [`Decrypted`] message owns `dst`; hand it to
     /// [`Tunnel::commit_decrypted`](crate::Tunnel::commit_decrypted).
     pub fn decrypt<B: AsMut<[u8]>>(self, message: &[u8], mut dst: B) -> Decrypted<B> {
-        let ciphertext = message.get(DATA_OFFSET..).unwrap_or_default();
+        let ciphertext = message.get(DATA_HEADER_SZ..).unwrap_or_default();
         let plaintext_len = self.decrypt_in_place(ciphertext, dst.as_mut());
 
         Decrypted {

@@ -1,10 +1,11 @@
 use crate::crypto::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2};
 use crate::handshake::{LABEL_COOKIE, LABEL_MAC1, decrypt_initiator_static};
-use crate::{
-    COOKIE_REPLY, COOKIE_REPLY_SZ, CookieReplyMessage, DATA, DATA_OVERHEAD_SZ, Error,
-    HANDSHAKE_INIT, HANDSHAKE_INIT_SZ, HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeInit,
-    HandshakeResponse, Macs, Packet, PacketCookieReply, PacketData, PublicKey, StaticSecret,
+use crate::message::{
+    COOKIE_REPLY, COOKIE_REPLY_SZ, DATA, DATA_OVERHEAD_SZ, HANDSHAKE_INIT, HANDSHAKE_INIT_SZ,
+    HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeInit, HandshakeResponse, Macs, Packet,
+    PacketCookieReply, PacketData,
 };
+use crate::{CookieReplyMessage, Error, PublicKey, StaticSecret};
 
 use std::net::IpAddr;
 use std::time::Instant;
