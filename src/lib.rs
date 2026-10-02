@@ -149,21 +149,13 @@ pub struct HandshakeResponse<'a> {
     encrypted_nothing: &'a [u8],
 }
 
-impl<'a> HandshakeResponse<'a> {
+impl HandshakeResponse<'_> {
     pub fn sender_idx(&self) -> u32 {
         self.sender_idx
     }
 
     pub fn receiver_idx(&self) -> u32 {
         self.receiver_idx
-    }
-
-    pub fn unencrypted_ephemeral(&self) -> &'a [u8; 32] {
-        self.unencrypted_ephemeral
-    }
-
-    pub fn encrypted_nothing(&self) -> &'a [u8] {
-        self.encrypted_nothing
     }
 }
 
@@ -174,17 +166,9 @@ pub struct PacketCookieReply<'a> {
     encrypted_cookie: &'a [u8],
 }
 
-impl<'a> PacketCookieReply<'a> {
+impl PacketCookieReply<'_> {
     pub fn receiver_idx(&self) -> u32 {
         self.receiver_idx
-    }
-
-    pub fn nonce(&self) -> &'a [u8] {
-        self.nonce
-    }
-
-    pub fn encrypted_cookie(&self) -> &'a [u8] {
-        self.encrypted_cookie
     }
 }
 
