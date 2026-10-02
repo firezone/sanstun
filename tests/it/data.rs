@@ -2,7 +2,7 @@
 //! keepalives, tampering and validation of the decrypted payload.
 
 use crate::harness::{
-    ipv4_packet, ipv6_packet, Outcome as _, Peer::A, Peer::B, Sim, DATA_OVERHEAD, KEEPALIVE_SIZE,
+    DATA_OVERHEAD, KEEPALIVE_SIZE, Outcome as _, Peer::A, Peer::B, Sim, ipv4_packet, ipv6_packet,
 };
 use sanstun::{Error, Keepalive};
 

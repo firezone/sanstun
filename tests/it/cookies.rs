@@ -4,8 +4,8 @@
 //! echoing the cookie in mac2.
 
 use crate::harness::{
-    classify, secs, Kind, Outcome as _, Peer::A, Peer::B, Sim, COOKIE_EXPIRATION_TIME,
-    COOKIE_REPLY_SIZE,
+    COOKIE_EXPIRATION_TIME, COOKIE_REPLY_SIZE, Kind, Outcome as _, Peer::A, Peer::B, Sim, classify,
+    secs,
 };
 use sanstun::Error;
 

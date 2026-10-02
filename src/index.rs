@@ -1,6 +1,6 @@
 use std::fmt;
 
-use super::{session::Session, N_SESSIONS};
+use super::{N_SESSIONS, session::Session};
 
 /// A unique identifier for an instance of [`Tunnel`](super::Tunnel).
 ///

@@ -1,7 +1,7 @@
 //! Nonce-based replay protection (whitepaper §5.4.6): a sliding window
 //! tolerates reordering but rejects duplicates and stale packets.
 
-use crate::harness::{ipv4_packet, Outcome as _, Peer::A, Peer::B, Sim, REPLAY_WINDOW};
+use crate::harness::{Outcome as _, Peer::A, Peer::B, REPLAY_WINDOW, Sim, ipv4_packet};
 use sanstun::Error;
 
 #[test]

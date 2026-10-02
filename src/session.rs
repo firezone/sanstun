@@ -1,12 +1,12 @@
 use super::{
+    PacketData,
     index::Index,
     timers::{REJECT_AFTER_TIME, SHOULD_NOT_USE_AFTER_TIME},
-    PacketData,
 };
-use crate::errors::Error;
 use crate::DataMessage;
+use crate::errors::Error;
 use crossbeam_utils::CachePadded;
-use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, CHACHA20_POLY1305};
+use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
 use std::sync::Arc;
 use std::time::Instant;
 

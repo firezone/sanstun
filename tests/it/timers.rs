@@ -2,9 +2,9 @@
 //! passive and persistent keepalives, and session expiry.
 
 use crate::harness::{
-    assert_close, assert_fires_at, ipv4_packet, secs, Kind, Outcome as _, Peer::A, Peer::B, Sim,
-    KEEPALIVE_TIMEOUT, MAX_JITTER, REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_ATTEMPT_TIME,
-    REKEY_TIMEOUT, SHOULD_NOT_USE_AFTER_TIME, TICK,
+    KEEPALIVE_TIMEOUT, Kind, MAX_JITTER, Outcome as _, Peer::A, Peer::B, REJECT_AFTER_TIME,
+    REKEY_AFTER_TIME, REKEY_ATTEMPT_TIME, REKEY_TIMEOUT, SHOULD_NOT_USE_AFTER_TIME, Sim, TICK,
+    assert_close, assert_fires_at, ipv4_packet, secs,
 };
 use sanstun::Error;
 
@@ -52,10 +52,11 @@ fn handshake_retries_cease_after_rekey_attempt_time() {
         inits.len()
     );
     assert!(sim.tunn(A).is_expired());
-    assert!(sim
-        .errors(A)
-        .iter()
-        .any(|e| matches!(e, Error::ConnectionExpired)));
+    assert!(
+        sim.errors(A)
+            .iter()
+            .any(|e| matches!(e, Error::ConnectionExpired))
+    );
 }
 
 #[test]
@@ -281,10 +282,11 @@ fn tunnel_expires_when_a_used_session_expires() {
 
     for peer in [A, B] {
         assert!(sim.tunn(peer).is_expired());
-        assert!(sim
-            .errors(peer)
-            .iter()
-            .any(|e| matches!(e, Error::ConnectionExpired)));
+        assert!(
+            sim.errors(peer)
+                .iter()
+                .any(|e| matches!(e, Error::ConnectionExpired))
+        );
     }
     assert!(
         sim.sent_at(A, Kind::Init)
@@ -322,10 +324,11 @@ fn tunnel_is_wiped_after_three_times_reject_after_time() {
     sim.advance(3 * REJECT_AFTER_TIME + secs(2));
 
     assert!(sim.tunn(B).is_expired());
-    assert!(sim
-        .errors(B)
-        .iter()
-        .any(|e| matches!(e, Error::ConnectionExpired)));
+    assert!(
+        sim.errors(B)
+            .iter()
+            .any(|e| matches!(e, Error::ConnectionExpired))
+    );
 }
 
 /// sanstun-specific: the initiator refuses to *send* on a session within

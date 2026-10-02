@@ -9,7 +9,7 @@ use blake2::{Blake2s256, Blake2sMac, Digest};
 use chacha20poly1305::XChaCha20Poly1305;
 use constant_time_eq::constant_time_eq;
 use rand::rngs::StdRng;
-use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, CHACHA20_POLY1305};
+use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
 use std::convert::TryInto;
 use std::fmt::{self, Debug};
 use std::time::{Duration, Instant};
