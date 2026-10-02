@@ -17,7 +17,7 @@ use crate::handshake::Handshake;
 use crate::timers::{TimerName, Timers};
 
 use std::convert::{TryFrom, TryInto};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::net::IpAddr;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,13 +27,9 @@ const PEER_HANDSHAKE_RATE_LIMIT: u64 = 10;
 
 const IPV4_MIN_HEADER_SIZE: usize = 20;
 const IPV4_LEN_OFF: usize = 2;
-const IPV4_SRC_IP_OFF: usize = 12;
-const IPV4_IP_SZ: usize = 4;
 
 const IPV6_MIN_HEADER_SIZE: usize = 40;
 const IPV6_LEN_OFF: usize = 4;
-const IPV6_SRC_IP_OFF: usize = 8;
-const IPV6_IP_SZ: usize = 16;
 
 const IP_LEN_SZ: usize = 2;
 
@@ -46,8 +42,7 @@ const N_SESSIONS: u8 = 8;
 pub enum TunnelResult<'a> {
     Done,
     WriteToNetwork(Ciphertext<'a>),
-    WriteToTunnelV4(Plaintext<'a>, Ipv4Addr),
-    WriteToTunnelV6(Plaintext<'a>, Ipv6Addr),
+    WriteToTunnel(Plaintext<'a>),
 }
 
 /// A datagram to send to the network.
@@ -500,40 +495,25 @@ impl Tunnel {
         Ok(Some(Ciphertext(packet)))
     }
 
-    /// Check if an IP packet is v4 or v6, truncate to the length indicated by the length field
-    /// Returns the truncated packet and the source IP as TunnelResult
+    /// Check if an IP packet is v4 or v6 and truncate it to the length indicated by its length field
     fn validate_decapsulated_packet<'a>(
         &mut self,
         packet: &'a mut [u8],
         now: Instant,
     ) -> Result<TunnelResult<'a>, Error> {
-        let (computed_len, src_ip_address) = match packet.len() {
+        let computed_len = match packet.len() {
             0 => return Ok(TunnelResult::Done), // This is keepalive, and not an error
             _ if packet[0] >> 4 == 4 && packet.len() >= IPV4_MIN_HEADER_SIZE => {
                 let len_bytes: [u8; IP_LEN_SZ] = packet[IPV4_LEN_OFF..IPV4_LEN_OFF + IP_LEN_SZ]
                     .try_into()
                     .unwrap();
-                let addr_bytes: [u8; IPV4_IP_SZ] = packet
-                    [IPV4_SRC_IP_OFF..IPV4_SRC_IP_OFF + IPV4_IP_SZ]
-                    .try_into()
-                    .unwrap();
-                (
-                    u16::from_be_bytes(len_bytes) as usize,
-                    IpAddr::from(addr_bytes),
-                )
+                u16::from_be_bytes(len_bytes) as usize
             }
             _ if packet[0] >> 4 == 6 && packet.len() >= IPV6_MIN_HEADER_SIZE => {
                 let len_bytes: [u8; IP_LEN_SZ] = packet[IPV6_LEN_OFF..IPV6_LEN_OFF + IP_LEN_SZ]
                     .try_into()
                     .unwrap();
-                let addr_bytes: [u8; IPV6_IP_SZ] = packet
-                    [IPV6_SRC_IP_OFF..IPV6_SRC_IP_OFF + IPV6_IP_SZ]
-                    .try_into()
-                    .unwrap();
-                (
-                    u16::from_be_bytes(len_bytes) as usize + IPV6_MIN_HEADER_SIZE,
-                    IpAddr::from(addr_bytes),
-                )
+                u16::from_be_bytes(len_bytes) as usize + IPV6_MIN_HEADER_SIZE
             }
             _ => return Err(Error::InvalidPacket),
         };
@@ -544,13 +524,8 @@ impl Tunnel {
 
         self.timer_tick(TimerName::TimeLastDataPacketReceived, now);
 
-        Ok(match src_ip_address {
-            IpAddr::V4(addr) => {
-                TunnelResult::WriteToTunnelV4(Plaintext(&mut packet[..computed_len]), addr)
-            }
-            IpAddr::V6(addr) => {
-                TunnelResult::WriteToTunnelV6(Plaintext(&mut packet[..computed_len]), addr)
-            }
-        })
+        Ok(TunnelResult::WriteToTunnel(Plaintext(
+            &mut packet[..computed_len],
+        )))
     }
 }
