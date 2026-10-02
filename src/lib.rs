@@ -314,16 +314,20 @@ impl Tunnel {
         self.timers.set_rekey_timeout(rekey_timeout);
     }
 
-    /// Prepares a data message carrying a plaintext of `len` bytes, deferring writing and
-    /// encrypting it to the returned [`PendingEncapsulate`].
+    /// Prepares a data message, deferring writing and encrypting it to the returned
+    /// [`PendingEncapsulate`].
     ///
     /// All state of the [`Tunnel`] is updated immediately; the caller may run
-    /// [`PendingEncapsulate::encrypt`] later and on another thread. Returns
-    /// `Err(Error::NoCurrentSession)` when there is no usable session; in that case **no**
-    /// handshake is initiated.
-    pub fn prepare_encapsulate(
+    /// [`PendingEncapsulate::encrypt`] later and on another thread. Keepalives are sent with
+    /// [`Tunnel::encapsulate_keepalive`] instead. Returns `Err(Error::NoCurrentSession)` when
+    /// there is no usable session; in that case **no** handshake is initiated.
+    pub fn prepare_encapsulate(&mut self, now: Instant) -> Result<PendingEncapsulate, Error> {
+        self.prepare_data_message(false, now)
+    }
+
+    fn prepare_data_message(
         &mut self,
-        len: usize,
+        is_keepalive: bool,
         now: Instant,
     ) -> Result<PendingEncapsulate, Error> {
         let pending = self
@@ -332,8 +336,7 @@ impl Tunnel {
             .prepare_packet_data();
 
         self.timer_tick(TimerName::TimeLastPacketSent, now);
-        // Exclude Keepalive packets from timer update.
-        if len != 0 {
+        if !is_keepalive {
             self.timer_tick(TimerName::TimeLastDataPacketSent, now);
         }
 
@@ -350,8 +353,8 @@ impl Tunnel {
         now: Instant,
     ) -> Result<KeepaliveMessage, Error> {
         let mut message = [0u8; DATA_OVERHEAD_SZ];
-        self.prepare_encapsulate(0, now)?
-            .encrypt(&[], &mut message)?;
+        self.prepare_data_message(true, now)?
+            .encrypt_payload(&[], &mut message)?;
 
         Ok(KeepaliveMessage(message))
     }

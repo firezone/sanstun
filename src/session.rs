@@ -272,8 +272,22 @@ pub struct PendingEncapsulate {
 impl PendingEncapsulate {
     /// Writes the data message encrypting `plaintext` to the start of `dst`.
     ///
-    /// The data message is 32 bytes longer than `plaintext`.
+    /// The data message is 32 bytes longer than `plaintext`. Fails with
+    /// `Err(Error::EmptyPlaintext)` if `plaintext` is empty: an empty data message is a keepalive,
+    /// which is sent with [`Tunnel::encapsulate_keepalive`](crate::Tunnel::encapsulate_keepalive).
     pub fn encrypt<'a>(
+        self,
+        plaintext: &[u8],
+        dst: &'a mut [u8],
+    ) -> Result<DataMessage<'a>, Error> {
+        if plaintext.is_empty() {
+            return Err(Error::EmptyPlaintext);
+        }
+
+        self.encrypt_payload(plaintext, dst)
+    }
+
+    pub(crate) fn encrypt_payload<'a>(
         self,
         plaintext: &[u8],
         dst: &'a mut [u8],

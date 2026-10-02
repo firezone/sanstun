@@ -16,6 +16,7 @@ pub enum Error {
     NoCurrentSession,
     ConnectionExpired,
     UnderLoad,
+    EmptyPlaintext,
 }
 
 impl Display for Error {
@@ -53,6 +54,10 @@ impl Display for Error {
             Error::NoCurrentSession => write!(f, "no active session"),
             Error::ConnectionExpired => write!(f, "connection is expired"),
             Error::UnderLoad => write!(f, "rate limit exceeded"),
+            Error::EmptyPlaintext => write!(
+                f,
+                "an empty data message is a keepalive; send it with `Tunnel::encapsulate_keepalive`"
+            ),
         }
     }
 }

@@ -4,7 +4,7 @@
 use crate::harness::{
     ipv4_packet, ipv6_packet, Outcome as _, Peer::A, Peer::B, Sim, DATA_OVERHEAD, KEEPALIVE_SIZE,
 };
-use sanstun::Error;
+use sanstun::{Error, Keepalive};
 
 #[test]
 fn ipv4_packets_round_trip() {
@@ -39,7 +39,11 @@ fn data_messages_have_32_bytes_of_overhead() {
 fn keepalives_are_consumed_silently() {
     let mut sim = Sim::connected();
 
-    let keepalive = sim.encapsulate(A, &[]);
+    let now = sim.now;
+    let keepalive = sim
+        .tunn_mut(A)
+        .encapsulate_keepalive(Keepalive, now)
+        .unwrap();
     assert_eq!(keepalive.len(), KEEPALIVE_SIZE);
 
     sim.deliver(B, &keepalive).expect_consumed();
