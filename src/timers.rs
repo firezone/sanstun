@@ -492,10 +492,10 @@ impl Tunnel {
         }
 
         if keepalive_required {
-            // A keepalive is only ever sent on an established session, so encrypt the empty packet
-            // in place; there is no need to queue it or start a handshake.
-            return match self.encapsulate_data(&[], dst, now) {
-                Ok(packet) => Ok(Some(packet)),
+            // A keepalive is only ever sent on an established session, so seal the empty packet
+            // right away; there is no need to queue it or start a handshake.
+            return match self.encapsulate_data(0, now) {
+                Ok(seal) => seal.seal_into(&[], dst).map(Some),
                 Err(Error::NoCurrentSession) => Ok(None),
                 Err(e) => Err(e),
             };

@@ -11,6 +11,7 @@ pub use errors::Error;
 pub use handshake::{parse_handshake_anon, HalfHandshake};
 pub use index::Index;
 pub use rate_limiter::RateLimiter;
+pub use session::PendingSeal;
 pub use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::handshake::Handshake;
@@ -279,36 +280,28 @@ impl Tunnel {
         self.timers.set_rekey_timeout(rekey_timeout);
     }
 
-    /// Encapsulate a single packet from the tunnel interface **in place**, but only if
-    /// there is currently a usable session.
+    /// Prepares a data message carrying a plaintext of `len` bytes, deferring writing and
+    /// encrypting it to the returned [`PendingSeal`].
     ///
-    /// Returns the encrypted WireGuard data message, written to the start of `dst`. Returns
-    /// `Err(Error::NoCurrentSession)` when there is no usable session; in that case `dst` is left
-    /// untouched and **no** handshake is initiated.
-    pub fn encapsulate_data<'a>(
-        &mut self,
-        src: &[u8],
-        dst: &'a mut [u8],
-        now: Instant,
-    ) -> Result<Ciphertext<'a>, Error> {
+    /// All state of the [`Tunnel`] is updated immediately; the caller may run
+    /// [`PendingSeal::seal_into`] later and on another thread. Returns
+    /// `Err(Error::NoCurrentSession)` when there is no usable session; in that case **no**
+    /// handshake is initiated.
+    pub fn encapsulate_data(&mut self, len: usize, now: Instant) -> Result<PendingSeal, Error> {
         let is_responder = self.timers.is_responder();
-        let Some(session) = self.sessions[self.current]
+        let seal = self.sessions[self.current]
             .as_mut()
             .filter(|s| s.should_use_at(now) || is_responder)
-        else {
-            return Err(Error::NoCurrentSession);
-        };
-
-        // Send the packet using an established session
-        let packet = session.format_packet_data(src, dst)?;
+            .ok_or(Error::NoCurrentSession)?
+            .prepare_packet_data();
 
         self.timer_tick(TimerName::TimeLastPacketSent, now);
         // Exclude Keepalive packets from timer update.
-        if !src.is_empty() {
+        if len != 0 {
             self.timer_tick(TimerName::TimeLastDataPacketSent, now);
         }
 
-        Ok(Ciphertext(packet))
+        Ok(seal)
     }
 
     /// Receives a UDP datagram from the network and parses it.
@@ -392,7 +385,7 @@ impl Tunnel {
 
         let mut session = self.handshake.receive_handshake_response(p, now)?;
 
-        let keepalive_packet = session.format_packet_data(&[], dst)?;
+        let keepalive_packet = session.prepare_packet_data().seal_into(&[], dst)?;
         // Store new session in ring buffer
         let local_idx = session.local_index();
         self.sessions[local_idx] = Some(session);
@@ -403,7 +396,7 @@ impl Tunnel {
 
         tracing::debug!(%local_idx, "Sending keepalive");
 
-        Ok(TunnelResult::WriteToNetwork(Ciphertext(keepalive_packet))) // Send a keepalive as a response
+        Ok(TunnelResult::WriteToNetwork(keepalive_packet)) // Send a keepalive as a response
     }
 
     fn handle_cookie_reply<'a>(

@@ -4,7 +4,9 @@ use super::{
     PacketData,
 };
 use crate::errors::Error;
+use crate::Ciphertext;
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, CHACHA20_POLY1305};
+use std::sync::Arc;
 use std::time::Instant;
 
 pub struct Session {
@@ -12,7 +14,7 @@ pub struct Session {
     pub(crate) receiving_index: Index,
     sending_index: Index,
     receiver: LessSafeKey,
-    sender: LessSafeKey,
+    sender: Arc<LessSafeKey>,
     sending_key_counter: u64,
     receiving_key_counter: ReceivingKeyCounterValidator,
 }
@@ -174,7 +176,9 @@ impl Session {
             receiver: LessSafeKey::new(
                 UnboundKey::new(&CHACHA20_POLY1305, &receiving_key).unwrap(),
             ),
-            sender: LessSafeKey::new(UnboundKey::new(&CHACHA20_POLY1305, &sending_key).unwrap()),
+            sender: Arc::new(LessSafeKey::new(
+                UnboundKey::new(&CHACHA20_POLY1305, &sending_key).unwrap(),
+            )),
             sending_key_counter: 0,
             receiving_key_counter: Default::default(),
         }
@@ -206,53 +210,16 @@ impl Session {
         self.receiving_key_counter.mark_did_receive(counter)
     }
 
-    /// src - an IP packet from the interface
-    /// dst - pre-allocated space to hold the encapsulating UDP packet to send over the network
-    /// returns the size of the formatted packet
-    pub(super) fn format_packet_data<'a>(
-        &mut self,
-        src: &[u8],
-        dst: &'a mut [u8],
-    ) -> Result<&'a mut [u8], Error> {
-        let buf_len = dst.len();
-        let num_required = src.len() + super::DATA_OVERHEAD_SZ;
-
-        if buf_len < num_required {
-            tracing::warn!(%buf_len, %num_required, "Destination buffer too small for outgoing packet data");
-
-            return Err(Error::DestinationBufferTooSmall);
-        }
-
-        let sending_key_counter = self.sending_key_counter;
+    /// Assigns the next counter to a data message, deferring writing and encrypting it.
+    pub(super) fn prepare_packet_data(&mut self) -> PendingSeal {
+        let counter = self.sending_key_counter;
         self.sending_key_counter += 1;
 
-        let (message_type, rest) = dst.split_at_mut(4);
-        let (receiver_index, rest) = rest.split_at_mut(4);
-        let (counter, data) = rest.split_at_mut(8);
-
-        message_type.copy_from_slice(&super::DATA.to_le_bytes());
-        receiver_index.copy_from_slice(&self.sending_index.to_le_bytes());
-        counter.copy_from_slice(&sending_key_counter.to_le_bytes());
-
-        // TODO: spec requires padding to 16 bytes, but actually works fine without it
-        let n = {
-            let mut nonce = [0u8; 12];
-            nonce[4..12].copy_from_slice(&sending_key_counter.to_le_bytes());
-            data[..src.len()].copy_from_slice(src);
-            self.sender
-                .seal_in_place_separate_tag(
-                    Nonce::assume_unique_for_key(nonce),
-                    Aad::from(&[]),
-                    &mut data[..src.len()],
-                )
-                .map(|tag| {
-                    data[src.len()..src.len() + AEAD_SIZE].copy_from_slice(tag.as_ref());
-                    src.len() + AEAD_SIZE
-                })
-                .unwrap()
-        };
-
-        Ok(&mut dst[..DATA_OFFSET + n])
+        PendingSeal {
+            key: Arc::clone(&self.sender),
+            receiver_index: self.sending_index,
+            counter,
+        }
     }
 
     /// packet - a data packet we received from the network
@@ -294,5 +261,59 @@ impl Session {
         // After decryption is done, check counter again, and mark as received
         self.receiving_counter_mark(packet.counter)?;
         Ok(ret)
+    }
+}
+
+/// The encryption of a data message whose counter is already assigned.
+///
+/// The nonce is fixed when the [`PendingSeal`] is created, so seals may run in any order and on
+/// any thread: the receiver's sliding replay window accepts data messages that arrive out of order.
+#[derive(Debug)]
+#[must_use = "the data message is not sent until it is sealed"]
+pub struct PendingSeal {
+    key: Arc<LessSafeKey>,
+    receiver_index: Index,
+    counter: u64,
+}
+
+impl PendingSeal {
+    /// Writes the data message encrypting `plaintext` to the start of `dst`.
+    ///
+    /// The data message is 32 bytes longer than `plaintext`.
+    pub fn seal_into<'a>(
+        self,
+        plaintext: &[u8],
+        dst: &'a mut [u8],
+    ) -> Result<Ciphertext<'a>, Error> {
+        let len = DATA_OFFSET + plaintext.len() + AEAD_SIZE;
+        let buf_len = dst.len();
+
+        let Some(message) = dst.get_mut(..len) else {
+            tracing::warn!(%buf_len, %len, "Destination buffer too small for outgoing packet data");
+
+            return Err(Error::DestinationBufferTooSmall);
+        };
+
+        let (header, rest) = message.split_at_mut(DATA_OFFSET);
+        let (data, tag) = rest.split_at_mut(plaintext.len());
+
+        let (message_type, rest) = header.split_at_mut(4);
+        let (receiver_index, counter) = rest.split_at_mut(4);
+        message_type.copy_from_slice(&super::DATA.to_le_bytes());
+        receiver_index.copy_from_slice(&self.receiver_index.to_le_bytes());
+        counter.copy_from_slice(&self.counter.to_le_bytes());
+
+        // TODO: spec requires padding to 16 bytes, but actually works fine without it
+        data.copy_from_slice(plaintext);
+
+        let mut nonce = [0u8; 12];
+        nonce[4..12].copy_from_slice(&self.counter.to_le_bytes());
+        let computed_tag = self
+            .key
+            .seal_in_place_separate_tag(Nonce::assume_unique_for_key(nonce), Aad::from(&[]), data)
+            .expect("plaintext of a data message is always within the AEAD's limits");
+        tag.copy_from_slice(computed_tag.as_ref());
+
+        Ok(Ciphertext(message))
     }
 }
