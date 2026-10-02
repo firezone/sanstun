@@ -7,8 +7,7 @@ use crate::harness::{
     REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_TIMEOUT, Sim, classify, ipv4_packet, secs,
 };
 use sanstun::{
-    Decapsulated, Error, Index, Packet, PublicKey, RateLimiter, StaticSecret, TimerAction, Tunnel,
-    Verified,
+    Decapsulated, Error, Index, Ingress, PublicKey, Received, StaticSecret, TimerAction, Tunnel,
 };
 use std::time::{Duration, Instant};
 
@@ -206,6 +205,7 @@ fn identical_seeds_produce_identical_handshakes() {
         let unix = Duration::from_secs(1_700_000_000);
         let secret_a = StaticSecret::from([1; 32]);
         let secret_b = StaticSecret::from([2; 32]);
+        let ingress_b = Ingress::new(secret_b.clone(), 10, [5; 32], now);
         let public_a = PublicKey::from(&secret_a);
         let public_b = PublicKey::from(&secret_b);
 
@@ -237,11 +237,8 @@ fn identical_seeds_produce_identical_handshakes() {
             .expect("a handshake initiation")
             .to_vec();
 
-        let rate_limiter_b = RateLimiter::new(&public_b, 10, [5; 32], now);
-        let Ok(Verified::Packet(init_packet)) =
-            rate_limiter_b.verify(None, Packet::parse(&init).unwrap(), now)
-        else {
-            panic!("expected a verified handshake initiation");
+        let Ok(Received::Packet(init_packet)) = ingress_b.receive(None, &init, now) else {
+            panic!("expected a handshake initiation to pass");
         };
         let Decapsulated::HandshakeResponse(response) = b.decapsulate(init_packet, now).unwrap()
         else {

@@ -7,7 +7,7 @@ use crate::harness::{
     COOKIE_EXPIRATION_TIME, COOKIE_REPLY_SIZE, HANDSHAKE_INIT_SIZE, Kind, Outcome as _, Peer::A,
     Peer::B, Sim, classify, secs,
 };
-use sanstun::{Error, Verified};
+use sanstun::{Error, Received};
 
 #[test]
 fn responder_under_load_replies_with_a_cookie_instead_of_a_handshake() {
@@ -21,30 +21,32 @@ fn responder_under_load_replies_with_a_cookie_instead_of_a_handshake() {
     assert!(!sim.is_established(B), "no session state was created");
 }
 
-/// The rate limiter answers an initiation without a valid mac2 on its own, so
-/// the initiation never reaches the expensive handshake processing.
+/// The [`Ingress`](sanstun::Ingress) answers an initiation without a valid
+/// mac2 on its own, so the initiation never reaches the expensive handshake
+/// processing.
 #[test]
-fn rate_limiter_replies_with_a_cookie_before_any_tunnel_is_involved() {
+fn ingress_replies_with_a_cookie_before_any_tunnel_is_involved() {
     let mut sim = Sim::builder().responder_under_load().build();
 
     let init = sim.initiate_handshake(A);
-    let result = sim.try_verify(B, &init);
+    let result = sim.try_receive(B, &init);
 
-    let Ok(Verified::CookieReply(reply)) = result else {
+    let Ok(Received::CookieReply(reply)) = result else {
         panic!("expected a cookie reply, got {result:?}");
     };
     assert_eq!(classify(&reply), Kind::CookieReply);
 }
 
 /// §5.4.4: a datagram shaped like a handshake initiation but without a valid
-/// mac1 is rejected by the rate limiter, whether or not it is under load.
+/// mac1 is rejected before its static key is decrypted, whether or not we are
+/// under load.
 #[test]
-fn rate_limiter_rejects_an_initiation_without_a_valid_mac1() {
+fn ingress_rejects_an_initiation_without_a_valid_mac1() {
     let mut garbage = [0xa5; HANDSHAKE_INIT_SIZE];
     garbage[..4].copy_from_slice(&1u32.to_le_bytes());
 
     for sim in [Sim::new(), Sim::builder().responder_under_load().build()] {
-        let result = sim.try_verify(B, &garbage);
+        let result = sim.try_receive(B, &garbage);
 
         assert!(
             matches!(result, Err(Error::InvalidMac)),
@@ -121,7 +123,7 @@ fn expired_cookie_forces_a_new_cookie_round_trip() {
     assert_eq!(classify(&reply), Kind::CookieReply);
 }
 
-/// A rate limiter with a limit of 10 considers itself under load beyond 10
+/// An `Ingress` with a limit of 10 considers itself under load beyond 10
 /// handshake messages per second and recovers once the flood stops.
 #[test]
 fn rate_limited_tunnel_recovers_once_load_subsides() {
@@ -141,18 +143,18 @@ fn rate_limited_tunnel_recovers_once_load_subsides() {
         "11th handshake within a second"
     );
 
-    sim.advance(secs(2)); // The rate limiter resets its counter every second.
+    sim.advance(secs(2)); // The rate limit resets its counter every second.
 
     let init = sim.force_handshake_initiation(A);
     let response = sim.deliver(B, &init).expect_one_net();
     assert_eq!(classify(&response), Kind::Response);
 }
 
-/// The rate limiter resets its window lazily when a handshake is verified, so
+/// The rate limit resets its window lazily when a handshake is received, so
 /// it recovers even if no timers are driven in the meantime. This is what lets
 /// an idle tunnel avoid waking up once a second just to reset the counter.
 #[test]
-fn rate_limiter_resets_without_driving_timers() {
+fn rate_limit_resets_without_driving_timers() {
     let mut sim = Sim::new();
 
     for _ in 0..10 {
@@ -170,7 +172,7 @@ fn rate_limiter_resets_without_driving_timers() {
     );
 
     // Advance time *without* calling `update_timers`, so the only thing that
-    // can clear the window is the lazy reset on the next handshake verification.
+    // can clear the window is the lazy reset on the next received handshake.
     sim.now += secs(2);
 
     let init = sim.force_handshake_initiation(A);
@@ -178,6 +180,6 @@ fn rate_limiter_resets_without_driving_timers() {
     assert_eq!(
         classify(&response),
         Kind::Response,
-        "window reset on verify, no timer needed"
+        "window reset on receive, no timer needed"
     );
 }

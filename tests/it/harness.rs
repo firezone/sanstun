@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 
 use sanstun::Error;
 use sanstun::{Committed, Decapsulated, Index, Packet, TimerAction, Tunnel};
+use sanstun::{Ingress, Received};
 use sanstun::{PublicKey, StaticSecret};
-use sanstun::{RateLimiter, Verified, VerifiedPacket};
 
 // Protocol constants from the WireGuard whitepaper (§6.1, table on p. 14).
 // They are deliberately redefined here instead of imported: the tests assert
@@ -83,22 +83,25 @@ pub enum Kind {
     Keepalive,
 }
 
+/// The kind of a datagram by its message type and size (§5.4).
 pub fn classify(datagram: &[u8]) -> Kind {
-    match Packet::parse(datagram).expect("only valid packets should be routed") {
-        Packet::HandshakeInit(_) => Kind::Init,
-        Packet::HandshakeResponse(_) => Kind::Response,
-        Packet::PacketCookieReply(_) => Kind::CookieReply,
-        Packet::PacketData(_) if datagram.len() == KEEPALIVE_SIZE => Kind::Keepalive,
-        Packet::PacketData(_) => Kind::Data,
+    let message_type = u32::from_le_bytes(datagram[..4].try_into().unwrap());
+
+    match (message_type, datagram.len()) {
+        (1, HANDSHAKE_INIT_SIZE) => Kind::Init,
+        (2, HANDSHAKE_RESPONSE_SIZE) => Kind::Response,
+        (3, COOKIE_REPLY_SIZE) => Kind::CookieReply,
+        (4, KEEPALIVE_SIZE) => Kind::Keepalive,
+        (4, len) if len > DATA_OVERHEAD => Kind::Data,
+        other => panic!("only valid packets should be routed, got {other:?}"),
     }
 }
 
 /// The receiver index of a data message, identifying the session it uses.
 pub fn receiver_index(datagram: &[u8]) -> u32 {
-    match Packet::parse(datagram).unwrap() {
-        Packet::PacketData(p) => p.receiver_idx,
-        other => panic!("not a data packet: {other:?}"),
-    }
+    assert!(matches!(classify(datagram), Kind::Data | Kind::Keepalive));
+
+    u32::from_le_bytes(datagram[4..8].try_into().unwrap())
 }
 
 /// A datagram observed on the simulated wire.
@@ -163,7 +166,7 @@ impl Outcome for Vec<Out> {
 
 struct Node {
     tunn: Tunnel,
-    rate_limiter: RateLimiter,
+    ingress: Ingress,
     addr: IpAddr,
     inbox: Vec<Vec<u8>>,
     errors: Vec<Error>,
@@ -202,7 +205,7 @@ impl Builder {
         self
     }
 
-    /// Give the responder a rate limiter that considers it permanently under
+    /// Give the responder an [`Ingress`] that considers it permanently under
     /// load, forcing the cookie mechanism (§5.3) on every handshake.
     pub fn responder_under_load(mut self) -> Self {
         self.responder_under_load = true;
@@ -224,6 +227,14 @@ impl Builder {
         let public_a = PublicKey::from(&secret_a);
         let secret_b = StaticSecret::random();
         let public_b = PublicKey::from(&secret_b);
+
+        let limit_b = if self.responder_under_load {
+            0
+        } else {
+            HANDSHAKE_RATE_LIMIT
+        };
+        let ingress_a = Ingress::new(secret_a.clone(), HANDSHAKE_RATE_LIMIT, [3; 32], start);
+        let ingress_b = Ingress::new(secret_b.clone(), limit_b, [4; 32], start);
 
         let a = Tunnel::new(
             secret_a,
@@ -254,19 +265,13 @@ impl Builder {
             unix,
         );
 
-        let limit_b = if self.responder_under_load {
-            0
-        } else {
-            HANDSHAKE_RATE_LIMIT
-        };
-
         Sim {
             start,
             now: start,
             nodes: [
                 Node {
                     tunn: a,
-                    rate_limiter: RateLimiter::new(&public_a, HANDSHAKE_RATE_LIMIT, [3; 32], start),
+                    ingress: ingress_a,
                     addr: "10.0.0.1".parse().unwrap(),
                     inbox: Vec::new(),
                     errors: Vec::new(),
@@ -274,7 +279,7 @@ impl Builder {
                 },
                 Node {
                     tunn: b,
-                    rate_limiter: RateLimiter::new(&public_b, limit_b, [4; 32], start),
+                    ingress: ingress_b,
                     addr: "10.0.0.2".parse().unwrap(),
                     inbox: Vec::new(),
                     errors: Vec::new(),
@@ -496,20 +501,18 @@ impl Sim {
         self.deliver_from(to, datagram, None)
     }
 
-    /// Run a datagram through the rate limiter of `to`, as if sent by its peer.
-    pub fn try_verify<'a>(&self, to: Peer, datagram: &'a [u8]) -> Result<Verified<'a>, Error> {
+    /// Run a datagram through the [`Ingress`] of `to`, as if sent by its peer.
+    pub fn try_receive<'a>(&self, to: Peer, datagram: &'a [u8]) -> Result<Received<'a>, Error> {
         let src = Some(self.node(to.other()).addr);
-        self.node(to)
-            .rate_limiter
-            .verify(src, Packet::parse(datagram)?, self.now)
+        self.node(to).ingress.receive(src, datagram, self.now)
     }
 
-    /// Like [`Sim::try_verify`], panicking unless the datagram passes.
+    /// Like [`Sim::try_receive`], panicking unless the datagram passes.
     #[track_caller]
-    pub fn verify<'a>(&self, to: Peer, datagram: &'a [u8]) -> VerifiedPacket<'a> {
-        match self.try_verify(to, datagram) {
-            Ok(Verified::Packet(packet)) => packet,
-            other => panic!("expected a verified packet, got {other:?}"),
+    pub fn receive<'a>(&self, to: Peer, datagram: &'a [u8]) -> Packet<'a> {
+        match self.try_receive(to, datagram) {
+            Ok(Received::Packet(packet)) => packet,
+            other => panic!("expected a packet, got {other:?}"),
         }
     }
 
@@ -518,11 +521,9 @@ impl Sim {
         let node = self.node_mut(to);
         let mut outs = Vec::new();
 
-        let verified =
-            Packet::parse(datagram).and_then(|packet| node.rate_limiter.verify(src, packet, now));
-        let packet = match verified {
-            Ok(Verified::Packet(packet)) => packet,
-            Ok(Verified::CookieReply(reply)) => return vec![Out::Net(reply.to_vec())],
+        let packet = match node.ingress.receive(src, datagram, now) {
+            Ok(Received::Packet(packet)) => packet,
+            Ok(Received::CookieReply(reply)) => return vec![Out::Net(reply.to_vec())],
             Err(e) => return vec![Out::Err(e)],
         };
 

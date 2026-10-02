@@ -200,7 +200,7 @@ fn handshake_response_leaves_the_keepalive_to_the_caller() {
     let response = sim.deliver(B, &init).expect_one_net();
     let now = sim.now;
 
-    let packet = sim.verify(A, &response);
+    let packet = sim.receive(A, &response);
     let result = sim.tunn_mut(A).decapsulate(packet, now);
     let Ok(Decapsulated::KeepaliveDue(keepalive)) = result else {
         panic!("expected a due keepalive, got {result:?}");
@@ -260,7 +260,7 @@ fn prepare_decrypt(
     datagram: &[u8],
     now: Instant,
 ) -> Result<PendingDecapsulate, Error> {
-    let packet = sim.verify(to, datagram);
+    let packet = sim.receive(to, datagram);
     match sim.tunn_mut(to).decapsulate(packet, now)? {
         Decapsulated::Data(pending) => Ok(pending),
         other => panic!("expected a data message, got {other:?}"),

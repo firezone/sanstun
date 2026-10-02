@@ -6,8 +6,7 @@ use crate::harness::{
     classify,
 };
 use sanstun::{
-    Error, Index, Packet, PublicKey, RateLimiter, StaticSecret, Tunnel, Verified,
-    parse_handshake_anon,
+    Decapsulated, Error, Index, Ingress, Packet, PublicKey, Received, StaticSecret, Tunnel,
 };
 use std::time::{Duration, Instant};
 
@@ -174,35 +173,47 @@ fn malformed_datagrams_are_rejected() {
     assert_eq!(kind, Kind::Init, "the untampered packet parses fine");
 }
 
-/// A responder with many peers learns from a verified initiation which peer's
-/// tunnel to hand it to.
+/// A responder with many peers hands an initiation to the tunnel of the
+/// initiator's static key.
 #[test]
-fn verified_initiation_reveals_the_initiator() {
+fn initiation_is_routed_by_the_initiators_static_key() {
     let now = Instant::now();
-    let secret_a = StaticSecret::from([1; 32]);
-    let secret_b = StaticSecret::from([2; 32]);
-    let public_a = PublicKey::from(&secret_a);
-    let public_b = PublicKey::from(&secret_b);
-    let mut a = Tunnel::new(
-        secret_a,
-        public_b,
+    let [secret_a, secret_b, secret_c] = [1, 2, 3].map(|n| StaticSecret::from([n; 32]));
+    let [public_a, public_b, public_c] = [&secret_a, &secret_b, &secret_c].map(PublicKey::from);
+    let ingress_b = Ingress::new(secret_b.clone(), 10, [4; 32], now);
+    let mut tunnels_b =
+        [public_a, public_c].map(|peer| (peer, tunnel(secret_b.clone(), peer, now)));
+    let mut c = tunnel(secret_c, public_b, now);
+
+    let init = c.format_handshake_initiation(false, now).unwrap();
+    let Ok(Received::Packet(packet)) = ingress_b.receive(None, &init, now) else {
+        panic!("expected a handshake initiation to pass");
+    };
+    let Packet::HandshakeInit(init) = &packet else {
+        panic!("expected a handshake initiation, got {packet:?}");
+    };
+    let peer = init.peer_static_public();
+    assert_eq!(peer, public_c);
+
+    let (_, tunnel) = tunnels_b.iter_mut().find(|(p, _)| *p == peer).unwrap();
+    let result = tunnel.decapsulate(packet, now);
+
+    assert!(
+        matches!(result, Ok(Decapsulated::HandshakeResponse(_))),
+        "expected a handshake response, got {result:?}"
+    );
+}
+
+fn tunnel(secret: StaticSecret, peer: PublicKey, now: Instant) -> Tunnel {
+    Tunnel::new(
+        secret,
+        peer,
         None,
         None,
         Index::new_local(1),
-        [3; 32],
+        [5; 32],
         now,
         now,
         Duration::from_secs(1_700_000_000),
-    );
-    let rate_limiter_b = RateLimiter::new(&public_b, 10, [4; 32], now);
-
-    let init = a.format_handshake_initiation(false, now).unwrap();
-    let Ok(Verified::Packet(packet)) =
-        rate_limiter_b.verify(None, Packet::parse(&init).unwrap(), now)
-    else {
-        panic!("expected a verified handshake initiation");
-    };
-    let half = parse_handshake_anon(&secret_b, &public_b, &packet).unwrap();
-
-    assert_eq!(half.peer_static_public, public_a.to_bytes());
+    )
 }

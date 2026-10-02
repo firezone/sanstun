@@ -1,0 +1,286 @@
+use crate::crypto::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, b2s_mac_24};
+use crate::handshake::{LABEL_COOKIE, LABEL_MAC1, decrypt_initiator_static};
+use crate::{
+    COOKIE_REPLY, COOKIE_REPLY_SZ, CookieReplyMessage, DATA, DATA_OVERHEAD_SZ, Error,
+    HANDSHAKE_INIT, HANDSHAKE_INIT_SZ, HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeInit,
+    HandshakeResponse, Macs, Packet, PacketCookieReply, PacketData, PublicKey, StaticSecret,
+};
+
+use std::net::IpAddr;
+use std::time::Instant;
+
+use aead::generic_array::GenericArray;
+use aead::{AeadInPlace, KeyInit};
+use chacha20poly1305::{Key, XChaCha20Poly1305};
+use constant_time_eq::constant_time_eq;
+use parking_lot::Mutex;
+use portable_atomic::{AtomicU64, Ordering};
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
+
+const COOKIE_REFRESH: u64 = 128; // Use 128 and not 120 so the compiler can optimize out the division
+const COOKIE_SIZE: usize = 16;
+const COOKIE_NONCE_SIZE: usize = 24;
+
+/// How often should reset count in seconds
+const RESET_PERIOD: u64 = 1;
+
+type Cookie = [u8; COOKIE_SIZE];
+
+/// The entry point for every datagram received from the network for one static key.
+///
+/// [`Ingress::receive`] verifies the MACs of handshake messages and applies the cookie mechanism
+/// under load before any expensive work, and is the only way to obtain a [`Packet`] for
+/// [`Tunnel::decapsulate`](crate::Tunnel::decapsulate).
+///
+/// There are two places where WireGuard requires "randomness" for cookies
+/// * The 24 byte nonce in the cookie massage - here the only goal is to avoid nonce reuse
+/// * A secret value that changes every two minutes
+///
+/// Because the main goal of the cookie is simply for a party to prove ownership of an IP address
+/// we can relax the randomness definition a bit, in order to avoid locking, because using less
+/// resources is the main goal of any DoS prevention mechanism.
+/// In order to avoid locking and calls to rand we derive pseudo random values using the AEAD and
+/// some counters.
+pub struct Ingress {
+    static_private: StaticSecret,
+    static_public: PublicKey,
+    /// The key we use to derive the nonce
+    nonce_key: [u8; 32],
+    /// The key we use to derive the cookie
+    secret_key: [u8; 16],
+    start_time: Instant,
+    /// A single 64 bit counter (should suffice for many years)
+    nonce_ctr: AtomicU64,
+    mac1_key: [u8; 32],
+    cookie_key: Key,
+    limit: u64,
+    /// The counter since last reset
+    count: AtomicU64,
+    /// The time the handshake count was last reset
+    last_reset: Mutex<Instant>,
+}
+
+impl Ingress {
+    /// Creates the entry point for datagrams addressed to our `static_private` key.
+    ///
+    /// Share one instance across all [`Tunnel`](crate::Tunnel)s using that key, so that `limit`
+    /// handshake messages per second apply to all of them together.
+    ///
+    /// `rng_seed` must come from a cryptographically secure source because the cookie secrets are derived from it.
+    pub fn new(static_private: StaticSecret, limit: u64, rng_seed: [u8; 32], now: Instant) -> Self {
+        let mut rng = StdRng::from_seed(rng_seed);
+        let static_public = PublicKey::from(&static_private);
+
+        Ingress {
+            static_private,
+            static_public,
+            nonce_key: rng.random(),
+            secret_key: rng.random(),
+            start_time: now,
+            nonce_ctr: AtomicU64::new(0),
+            mac1_key: b2s_hash(LABEL_MAC1, static_public.as_bytes()),
+            cookie_key: b2s_hash(LABEL_COOKIE, static_public.as_bytes()).into(),
+            limit,
+            count: AtomicU64::new(0),
+            last_reset: Mutex::new(now),
+        }
+    }
+
+    /// Reset packet count once `RESET_PERIOD` has passed since the last reset
+    fn reset_count(&self, current_time: Instant) {
+        // The rate limit is not very accurate, but at the scale we care about it doesn't matter much
+        let mut last_reset_time = self.last_reset.lock();
+        if current_time.duration_since(*last_reset_time).as_secs() >= RESET_PERIOD {
+            self.count.store(0, Ordering::SeqCst);
+            *last_reset_time = current_time;
+        }
+    }
+
+    /// Compute the correct cookie value based on the current secret value and the source IP
+    fn current_cookie(&self, addr: IpAddr, now: Instant) -> Cookie {
+        let mut addr_bytes = [0u8; 16];
+
+        match addr {
+            IpAddr::V4(a) => addr_bytes[..4].copy_from_slice(&a.octets()[..]),
+            IpAddr::V6(a) => addr_bytes[..].copy_from_slice(&a.octets()[..]),
+        }
+
+        // The current cookie for a given IP is the MAC(responder.changing_secret_every_two_minutes, initiator.ip_address)
+        // First we derive the secret from the current time, the value of cur_counter would change with time.
+        let cur_counter = now.duration_since(self.start_time).as_secs() / COOKIE_REFRESH;
+
+        // Next we derive the cookie
+        b2s_keyed_mac_16_2(&self.secret_key, &cur_counter.to_le_bytes(), &addr_bytes)
+    }
+
+    fn nonce(&self) -> [u8; COOKIE_NONCE_SIZE] {
+        let ctr = self.nonce_ctr.fetch_add(1, Ordering::Relaxed);
+
+        b2s_mac_24(&self.nonce_key, &ctr.to_le_bytes())
+    }
+
+    fn is_under_load(&self) -> bool {
+        self.count.fetch_add(1, Ordering::SeqCst) >= self.limit
+    }
+
+    fn format_cookie_reply(&self, idx: u32, cookie: Cookie, mac1: &[u8]) -> [u8; COOKIE_REPLY_SZ] {
+        let mut dst = [0u8; COOKIE_REPLY_SZ];
+
+        let (message_type, rest) = dst.split_at_mut(4);
+        let (receiver_index, rest) = rest.split_at_mut(4);
+        let (nonce, rest) = rest.split_at_mut(24);
+        let (encrypted_cookie, _) = rest.split_at_mut(16 + 16);
+
+        // msg.message_type = 3
+        // msg.reserved_zero = { 0, 0, 0 }
+        message_type.copy_from_slice(&COOKIE_REPLY.to_le_bytes());
+        // msg.receiver_index = little_endian(initiator.sender_index)
+        receiver_index.copy_from_slice(&idx.to_le_bytes());
+        nonce.copy_from_slice(&self.nonce()[..]);
+
+        let cipher = XChaCha20Poly1305::new(&self.cookie_key);
+
+        let iv = GenericArray::from_slice(nonce);
+
+        encrypted_cookie[..16].copy_from_slice(&cookie);
+        let tag = cipher
+            .encrypt_in_place_detached(iv, mac1, &mut encrypted_cookie[..16])
+            .expect("a cookie is always within the AEAD's limits");
+
+        encrypted_cookie[16..].copy_from_slice(&tag);
+
+        dst
+    }
+
+    /// Parses and verifies a datagram received from the network.
+    ///
+    /// Run this on every incoming datagram: it is the only way to obtain a [`Packet`]. Handshake
+    /// messages are only processed further once they carry a valid mac1 and, under load, a
+    /// valid mac2. Under load, a handshake message with a missing or invalid mac2 yields a
+    /// [`Received::CookieReply`] for the sender instead. Only then is the initiator's static
+    /// public key of a handshake initiation decrypted, see [`HandshakeInit::peer_static_public`].
+    /// Cookie replies and data messages pass unchanged because they are authenticated by their
+    /// own AEAD.
+    ///
+    /// `src_addr` is the source address of the datagram; without it, handshake messages fail
+    /// with [`Error::UnderLoad`] under load.
+    pub fn receive<'a>(
+        &self,
+        src_addr: Option<IpAddr>,
+        datagram: &'a [u8],
+        now: Instant,
+    ) -> Result<Received<'a>, Error> {
+        if datagram.len() < 4 {
+            return Err(Error::InvalidPacket);
+        }
+
+        // Checks the type, as well as the reserved zero fields
+        let packet_type = u32::from_le_bytes(datagram[0..4].try_into().unwrap());
+
+        let packet = match (packet_type, datagram.len()) {
+            (HANDSHAKE_INIT, HANDSHAKE_INIT_SZ) => {
+                let sender_idx = u32::from_le_bytes(datagram[4..8].try_into().unwrap());
+                if let Some(reply) = self.verify_macs(src_addr, sender_idx, datagram, now)? {
+                    return Ok(Received::CookieReply(reply));
+                }
+
+                Packet::HandshakeInit(HandshakeInit {
+                    sender_idx,
+                    encrypted_timestamp: &datagram[88..116],
+                    initiator: decrypt_initiator_static(
+                        &self.static_private,
+                        &self.static_public,
+                        datagram[8..40]
+                            .try_into()
+                            .expect("length already checked above"),
+                        &datagram[40..88],
+                    )?,
+                })
+            }
+            (HANDSHAKE_RESP, HANDSHAKE_RESP_SZ) => {
+                let sender_idx = u32::from_le_bytes(datagram[4..8].try_into().unwrap());
+                if let Some(reply) = self.verify_macs(src_addr, sender_idx, datagram, now)? {
+                    return Ok(Received::CookieReply(reply));
+                }
+
+                Packet::HandshakeResponse(HandshakeResponse {
+                    sender_idx,
+                    receiver_idx: u32::from_le_bytes(datagram[8..12].try_into().unwrap()),
+                    unencrypted_ephemeral: datagram[12..44]
+                        .try_into()
+                        .expect("length already checked above"),
+                    encrypted_nothing: &datagram[44..60],
+                })
+            }
+            (COOKIE_REPLY, COOKIE_REPLY_SZ) => Packet::PacketCookieReply(PacketCookieReply {
+                receiver_idx: u32::from_le_bytes(datagram[4..8].try_into().unwrap()),
+                nonce: &datagram[8..32],
+                encrypted_cookie: &datagram[32..64],
+            }),
+            (DATA, DATA_OVERHEAD_SZ..=usize::MAX) => Packet::PacketData(PacketData {
+                receiver_idx: u32::from_le_bytes(datagram[4..8].try_into().unwrap()),
+                counter: u64::from_le_bytes(datagram[8..16].try_into().unwrap()),
+            }),
+            _ => return Err(Error::InvalidPacket),
+        };
+
+        Ok(Received::Packet(packet))
+    }
+
+    /// Verifies the MACs of a handshake message and applies rate limiting.
+    ///
+    /// Returns the cookie reply to send instead of processing the message when we are under load
+    /// and it lacks a valid mac2.
+    fn verify_macs(
+        &self,
+        src_addr: Option<IpAddr>,
+        sender_idx: u32,
+        message: &[u8],
+        now: Instant,
+    ) -> Result<Option<CookieReplyMessage>, Error> {
+        let Macs { msg, mac1, mac2 } = Macs::new(message);
+
+        let computed_mac1 = b2s_keyed_mac_16(&self.mac1_key, msg);
+        if !constant_time_eq(&computed_mac1[..16], mac1) {
+            return Err(Error::InvalidMac);
+        }
+
+        // Advance the per-second window before checking it. Resetting it
+        // lazily here, on use, means callers don't need a background timer
+        // ticking once a second just to keep the counter accurate.
+        self.reset_count(now);
+
+        if !self.is_under_load() {
+            return Ok(None);
+        }
+
+        let addr = match src_addr {
+            None => return Err(Error::UnderLoad),
+            Some(addr) => addr,
+        };
+
+        // Only given an address can we validate mac2
+        let cookie = self.current_cookie(addr, now);
+        let computed_mac2 = b2s_keyed_mac_16_2(&cookie, msg, mac1);
+
+        if !constant_time_eq(&computed_mac2[..16], mac2) {
+            return Ok(Some(CookieReplyMessage(
+                self.format_cookie_reply(sender_idx, cookie, mac1),
+            )));
+        }
+
+        Ok(None)
+    }
+}
+
+/// What the caller needs to do after [`Ingress::receive`].
+#[derive(Debug)]
+pub enum Received<'a> {
+    /// Route the packet to its [`Tunnel`](crate::Tunnel) and hand it to
+    /// [`Tunnel::decapsulate`](crate::Tunnel::decapsulate).
+    Packet(Packet<'a>),
+    /// Send this cookie reply to the peer: we are under load and its handshake message needs
+    /// a valid cookie.
+    CookieReply(CookieReplyMessage),
+}
