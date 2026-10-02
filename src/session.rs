@@ -258,10 +258,11 @@ impl Session {
 
 /// The encryption of a data message whose counter is already assigned.
 ///
-/// The nonce is fixed when the [`PendingEncapsulate`] is created, so seals may run in any order and on
-/// any thread: the receiver's sliding replay window accepts data messages that arrive out of order.
+/// The nonce is fixed when the [`PendingEncapsulate`] is created, so encryptions may run in any
+/// order and on any thread: the receiver's sliding replay window accepts data messages that arrive
+/// out of order.
 #[derive(Debug)]
-#[must_use = "the data message is not sent until it is sealed"]
+#[must_use = "the data message is not sent until it is encrypted"]
 pub struct PendingEncapsulate {
     key: Arc<Key>,
     receiver_index: Index,
@@ -272,11 +273,7 @@ impl PendingEncapsulate {
     /// Writes the data message encrypting `plaintext` to the start of `dst`.
     ///
     /// The data message is 32 bytes longer than `plaintext`.
-    pub fn seal_into<'a>(
-        self,
-        plaintext: &[u8],
-        dst: &'a mut [u8],
-    ) -> Result<Ciphertext<'a>, Error> {
+    pub fn encrypt<'a>(self, plaintext: &[u8], dst: &'a mut [u8]) -> Result<Ciphertext<'a>, Error> {
         let len = DATA_OFFSET + plaintext.len() + AEAD_SIZE;
         let buf_len = dst.len();
 
@@ -314,10 +311,10 @@ impl PendingEncapsulate {
 /// The decryption of a data message whose counter has been checked.
 ///
 /// Its counter has passed the replay check but is not yet marked as received: that only happens
-/// once the [`Opened`] message is handed back to the [`Tunnel`](crate::Tunnel), so a message that
+/// once the [`Decrypted`] message is handed back to the [`Tunnel`](crate::Tunnel), so a message that
 /// fails to authenticate never advances the replay window.
 #[derive(Debug)]
-#[must_use = "the data message is not decrypted until it is opened"]
+#[must_use = "the data message is not decrypted until `decrypt` is called"]
 pub struct PendingDecapsulate {
     key: Arc<Key>,
     receiving_index: Index,
@@ -328,13 +325,13 @@ impl PendingDecapsulate {
     /// Copies the ciphertext of `message` to the start of `dst` and decrypts it in place.
     ///
     /// `message` is the data message this [`PendingDecapsulate`] was prepared from; anything else fails
-    /// to authenticate. The returned [`Opened`] message owns `dst`; hand it to
-    /// [`Tunnel::finish_decapsulate`](crate::Tunnel::finish_decapsulate).
-    pub fn open_into<B: AsMut<[u8]>>(self, message: &[u8], mut dst: B) -> Opened<B> {
+    /// to authenticate. The returned [`Decrypted`] message owns `dst`; hand it to
+    /// [`Tunnel::commit_decrypted`](crate::Tunnel::commit_decrypted).
+    pub fn decrypt<B: AsMut<[u8]>>(self, message: &[u8], mut dst: B) -> Decrypted<B> {
         let ciphertext = message.get(DATA_OFFSET..).unwrap_or_default();
-        let plaintext_len = self.open(ciphertext, dst.as_mut());
+        let plaintext_len = self.decrypt_in_place(ciphertext, dst.as_mut());
 
-        Opened {
+        Decrypted {
             receiving_index: self.receiving_index,
             counter: self.counter,
             plaintext_len,
@@ -343,7 +340,7 @@ impl PendingDecapsulate {
         }
     }
 
-    fn open(&self, ciphertext: &[u8], dst: &mut [u8]) -> Result<usize, Error> {
+    fn decrypt_in_place(&self, ciphertext: &[u8], dst: &mut [u8]) -> Result<usize, Error> {
         let ct_len = ciphertext.len();
         let buf_len = dst.len();
 
@@ -366,16 +363,16 @@ impl PendingDecapsulate {
     }
 }
 
-/// A data message decrypted by [`PendingDecapsulate::open_into`], to be handed back to the
-/// [`Tunnel`](crate::Tunnel).
+/// A data message decrypted by [`PendingDecapsulate::decrypt`], to be committed to the
+/// [`Tunnel`](crate::Tunnel) with [`Tunnel::commit_decrypted`](crate::Tunnel::commit_decrypted).
 #[derive(Debug)]
-#[must_use = "the data message is not accepted until it is handed back to the `Tunnel`"]
-pub struct Opened<B> {
+#[must_use = "the data message is not accepted until it is committed to the `Tunnel`"]
+pub struct Decrypted<B> {
     pub(crate) receiving_index: Index,
     pub(crate) counter: u64,
     pub(crate) plaintext_len: Result<usize, Error>,
     pub(crate) buffer: B,
-    /// Released when the [`Tunnel`](crate::Tunnel) accepts the message, so that opening a message
+    /// Released when the [`Tunnel`](crate::Tunnel) accepts the message, so that decrypting a message
     /// leaves the reference count of the key to the thread that owns the
     /// [`Tunnel`](crate::Tunnel).
     pub(crate) _key: Arc<Key>,

@@ -499,9 +499,9 @@ impl Sim {
             Ok(Decapsulated::WriteToNetwork(packet)) => {
                 outs.push(Out::Net(packet.to_vec()));
             }
-            Ok(Decapsulated::Data(open)) => {
-                let opened = open.open_into(datagram, vec![0u8; BUF]);
-                match node.tunn.finish_decapsulate(opened, now) {
+            Ok(Decapsulated::Data(pending)) => {
+                let decrypted = pending.decrypt(datagram, vec![0u8; BUF]);
+                match node.tunn.commit_decrypted(decrypted, now) {
                     Ok(None) => {}
                     Ok(Some(packet)) => outs.push(Out::Ip(packet.to_vec())),
                     Err(e) => outs.push(Out::Err(e)),
@@ -511,7 +511,7 @@ impl Sim {
                 let keepalive = node
                     .tunn
                     .prepare_encapsulate(0, now)
-                    .and_then(|seal| seal.seal_into(&[], &mut buf))
+                    .and_then(|pending| pending.encrypt(&[], &mut buf))
                     .expect("a keepalive is only due on a usable session");
                 outs.push(Out::Net(keepalive.to_vec()));
             }
@@ -581,7 +581,7 @@ impl Sim {
             .node_mut(from)
             .tunn
             .prepare_encapsulate(ip_packet.len(), now)?
-            .seal_into(ip_packet, &mut buf)?;
+            .encrypt(ip_packet, &mut buf)?;
         Ok(packet.to_vec())
     }
 

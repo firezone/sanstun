@@ -67,7 +67,7 @@ fn next_timer_update_predicts_the_passive_keepalive() {
     let packet = tunn
         .prepare_encapsulate(0, wake)
         .unwrap()
-        .seal_into(&[], &mut buf)
+        .encrypt(&[], &mut buf)
         .unwrap();
     assert_eq!(packet.len(), KEEPALIVE_SIZE);
 
