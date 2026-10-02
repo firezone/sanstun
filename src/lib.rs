@@ -1,26 +1,27 @@
 //! A sans-IO implementation of the WireGuard protocol, acting as both initiator and responder.
 
+mod cookie;
 mod crypto;
 mod errors;
 mod handshake;
 mod index;
 mod message;
-mod rate_limiter;
 mod replay;
 mod session;
 mod tai64n;
 mod timers;
 
+pub use cookie::RateLimiter;
 pub use errors::Error;
 pub use handshake::{HalfHandshake, parse_handshake_anon};
 pub use index::Index;
 pub use message::{
     CookieReplyMessage, HandshakeInitiationMessage, HandshakeResponseMessage, KeepaliveMessage,
 };
-pub use rate_limiter::RateLimiter;
 pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
 pub use x25519_dalek::{PublicKey, StaticSecret};
 
+use crate::cookie::PEER_HANDSHAKE_RATE_LIMIT;
 use crate::handshake::Handshake;
 use crate::session::Sessions;
 use crate::timers::{TimerName, Timers};
@@ -33,9 +34,6 @@ use std::net::IpAddr;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-/// The default value to use for rate limiting, when no other rate limiter is defined
-const PEER_HANDSHAKE_RATE_LIMIT: u64 = 10;
 
 /// What the caller needs to do after [`Tunnel::decapsulate`].
 #[derive(Debug)]
@@ -455,7 +453,7 @@ impl Tunnel {
 
         tracing::debug!(%local_idx, "Received cookie_reply");
 
-        self.handshake.receive_cookie_reply(p, now)?;
+        self.handshake.cookies.receive_cookie_reply(p, now)?;
         self.timers.tick(TimerName::TimeLastPacketReceived, now);
 
         tracing::debug!(%local_idx, "Did set cookie");

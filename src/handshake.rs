@@ -1,22 +1,16 @@
 use super::index::Index;
-use super::timers::COOKIE_EXPIRATION_TIME;
-use super::{HandshakeInit, HandshakeResponse, PacketCookieReply};
-use crate::crypto::{
-    aead_chacha20_open, aead_chacha20_seal, b2s_hash, b2s_hmac, b2s_hmac2, b2s_keyed_mac_16,
-};
+use super::{HandshakeInit, HandshakeResponse};
+use crate::cookie::Cookies;
+use crate::crypto::{aead_chacha20_open, aead_chacha20_seal, b2s_hash, b2s_hmac, b2s_hmac2};
 use crate::errors::Error;
 use crate::session::Session;
 use crate::tai64n::{Tai64N, TimeStamper};
-use aead::{AeadInPlace, KeyInit as _};
-use chacha20poly1305::XChaCha20Poly1305;
 use constant_time_eq::constant_time_eq;
 use rand::rngs::StdRng;
 use std::fmt::Debug;
 use std::time::{Duration, Instant};
 use x25519_dalek::{PublicKey, StaticSecret};
 
-pub(crate) const LABEL_MAC1: &[u8; 8] = b"mac1----";
-pub(crate) const LABEL_COOKIE: &[u8; 8] = b"cookie--";
 const KEY_LEN: usize = 32;
 const TIMESTAMP_LEN: usize = 12;
 
@@ -42,8 +36,6 @@ struct NoiseParams {
     peer_static_public: PublicKey,
     /// A shared key = DH(static_private, peer_static_public)
     static_shared: x25519_dalek::SharedSecret,
-    /// A pre-computation of HASH("mac1----", peer_static_public) for this peer
-    sending_mac1_key: [u8; KEY_LEN],
     /// A preshared key.
     ///
     /// Initialized to all zeroes by default.
@@ -57,7 +49,6 @@ impl std::fmt::Debug for NoiseParams {
             .field("static_private", &"<redacted>")
             .field("peer_static_public", &self.peer_static_public)
             .field("static_shared", &"<redacted>")
-            .field("sending_mac1_key", &self.sending_mac1_key)
             .field("preshared_key", &"<redacted>")
             .finish()
     }
@@ -101,23 +92,10 @@ pub(crate) struct Handshake {
     previous: HandshakeState,
     /// Current handshake state
     state: HandshakeState,
-    cookies: Cookies,
+    pub(crate) cookies: Cookies,
     /// The timestamp of the last handshake we received
     last_handshake_timestamp: Tai64N,
     stamper: TimeStamper,
-}
-
-#[derive(Default)]
-struct Cookies {
-    last_mac1: Option<[u8; 16]>,
-    index: Index,
-    write_cookie: Option<WriteCookie>,
-}
-
-#[derive(Clone, Copy)]
-struct WriteCookie {
-    value: [u8; 16],
-    received_at: Instant,
 }
 
 #[derive(Debug)]
@@ -217,14 +195,11 @@ impl NoiseParams {
     ) -> NoiseParams {
         let static_shared = static_private.diffie_hellman(&peer_static_public);
 
-        let initial_sending_mac_key = b2s_hash(LABEL_MAC1, peer_static_public.as_bytes());
-
         NoiseParams {
             static_public,
             static_private,
             peer_static_public,
             static_shared,
-            sending_mac1_key: initial_sending_mac_key,
             preshared_key: preshared_key.unwrap_or_else(|| StaticSecret::from([0u8; 32])),
         }
     }
@@ -254,7 +229,7 @@ impl Handshake {
             state: HandshakeState::None,
             last_handshake_timestamp: Tai64N::zero(),
             stamper: TimeStamper::new(unix_instant, unix),
-            cookies: Default::default(),
+            cookies: Cookies::new(&peer_static_public),
         }
     }
 
@@ -288,14 +263,6 @@ impl Handshake {
 
     pub(crate) fn is_expired(&self) -> bool {
         matches!(self.state, HandshakeState::Expired)
-    }
-
-    pub(crate) fn cookie_expiration(&self) -> Option<Instant> {
-        Some(self.cookies.write_cookie?.received_at + COOKIE_EXPIRATION_TIME)
-    }
-
-    pub(crate) fn clear_cookie(&mut self) {
-        self.cookies.write_cookie = None;
     }
 
     pub(super) fn receive_handshake_initialization(
@@ -442,64 +409,6 @@ impl Handshake {
         ))
     }
 
-    pub(super) fn receive_cookie_reply(
-        &mut self,
-        packet: PacketCookieReply,
-        now: Instant,
-    ) -> Result<(), Error> {
-        let mac1 = match self.cookies.last_mac1 {
-            Some(mac) => mac,
-            None => {
-                return Err(Error::UnexpectedPacket);
-            }
-        };
-
-        let local_index = self.cookies.index;
-        if Index::from_peer(packet.receiver_idx) != local_index {
-            return Err(Error::WrongIndex);
-        }
-        // msg.encrypted_cookie = XAEAD(HASH(LABEL_COOKIE || responder.static_public), msg.nonce, cookie, last_received_msg.mac1)
-        let key = b2s_hash(LABEL_COOKIE, self.params.peer_static_public.as_bytes()); // TODO: pre-compute
-
-        let (encrypted_cookie, tag) = packet.encrypted_cookie.split_at(16);
-        let mut cookie = [0u8; 16];
-        cookie.copy_from_slice(encrypted_cookie);
-        XChaCha20Poly1305::new_from_slice(&key)
-            .unwrap()
-            .decrypt_in_place_detached(packet.nonce.into(), &mac1[0..16], &mut cookie, tag.into())
-            .map_err(|_| Error::InvalidAeadTag)?;
-
-        self.cookies.write_cookie = Some(WriteCookie {
-            value: cookie,
-            received_at: now,
-        });
-        Ok(())
-    }
-
-    // Compute and append mac1 and mac2 to a handshake message
-    fn append_mac1_and_mac2(&mut self, local_index: Index, dst: &mut [u8]) {
-        let mac1_off = dst.len() - 32;
-        let mac2_off = dst.len() - 16;
-
-        // msg.mac1 = MAC(HASH(LABEL_MAC1 || responder.static_public), msg[0:offsetof(msg.mac1)])
-        let msg_mac1 = b2s_keyed_mac_16(&self.params.sending_mac1_key, &dst[..mac1_off]);
-
-        dst[mac1_off..mac2_off].copy_from_slice(&msg_mac1[..]);
-
-        //msg.mac2 = MAC(initiator.last_received_cookie, msg[0:offsetof(msg.mac2)])
-        let msg_mac2: [u8; 16] =
-            if let Some(WriteCookie { value: cookie, .. }) = self.cookies.write_cookie {
-                b2s_keyed_mac_16(&cookie, &dst[..mac2_off])
-            } else {
-                [0u8; 16]
-            };
-
-        dst[mac2_off..].copy_from_slice(&msg_mac2[..]);
-
-        self.cookies.index = local_index;
-        self.cookies.last_mac1 = Some(msg_mac1);
-    }
-
     pub(super) fn format_handshake_initiation(
         &mut self,
         rng: &mut StdRng,
@@ -574,7 +483,7 @@ impl Handshake {
             }),
         );
 
-        self.append_mac1_and_mac2(local_index, &mut dst);
+        self.cookies.append_mac1_and_mac2(local_index, &mut dst);
 
         (dst, local_index)
     }
@@ -643,7 +552,7 @@ impl Handshake {
 
         let (temp2, temp3) = derive_transport_keys(&chaining_key);
 
-        self.append_mac1_and_mac2(local_index, &mut dst);
+        self.cookies.append_mac1_and_mac2(local_index, &mut dst);
 
         (
             dst,

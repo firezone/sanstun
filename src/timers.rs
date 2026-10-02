@@ -13,7 +13,6 @@ pub(crate) const REJECT_AFTER_TIME: Duration = Duration::from_secs(180);
 const REKEY_ATTEMPT_TIME: Duration = Duration::from_secs(90);
 const REKEY_TIMEOUT: Duration = Duration::from_secs(5);
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
-pub(crate) const COOKIE_EXPIRATION_TIME: Duration = Duration::from_secs(120);
 const MAX_JITTER: Duration = Duration::from_millis(333);
 
 /// Time-period after which a session should no longer be used for new packets.
@@ -342,11 +341,12 @@ impl Tunnel {
         // Clear cookie after COOKIE_EXPIRATION_TIME
         if self
             .handshake
-            .cookie_expiration()
+            .cookies
+            .expiration()
             .is_some_and(|deadline| now >= deadline)
         {
             tracing::debug!("COOKIE_EXPIRED");
-            self.handshake.clear_cookie();
+            self.handshake.cookies.clear();
         }
 
         // All ephemeral private keys and symmetric session keys are zeroed out after
@@ -497,7 +497,8 @@ impl Tunnel {
             )
             .chain(
                 self.handshake
-                    .cookie_expiration()
+                    .cookies
+                    .expiration()
                     .map(|instant| (instant, "cookie expiration")),
             )
             .chain(iter::once((
