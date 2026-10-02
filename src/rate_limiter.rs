@@ -1,6 +1,6 @@
 use super::handshake::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, b2s_mac_24};
-use crate::noise::handshake::{LABEL_COOKIE, LABEL_MAC1};
-use crate::noise::{HandshakeInit, HandshakeResponse, Packet, Tunn, TunnResult, WireGuardError};
+use crate::handshake::{LABEL_COOKIE, LABEL_MAC1};
+use crate::{HandshakeInit, HandshakeResponse, Packet, Tunn, TunnResult, WireGuardError};
 
 use std::net::IpAddr;
 use std::time::Instant;

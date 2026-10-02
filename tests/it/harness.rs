@@ -11,10 +11,10 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use sanstun::noise::errors::WireGuardError;
-use sanstun::noise::rate_limiter::RateLimiter;
-use sanstun::noise::{Index, Packet, Tunn, TunnResult};
+use sanstun::errors::WireGuardError;
+use sanstun::rate_limiter::RateLimiter;
 use sanstun::x25519::{PublicKey, StaticSecret};
+use sanstun::{Index, Packet, Tunn, TunnResult};
 
 // Protocol constants from the WireGuard whitepaper (§6.1, table on p. 14).
 // They are deliberately redefined here instead of imported: the tests assert

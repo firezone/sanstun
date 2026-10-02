@@ -6,7 +6,7 @@ use super::{
     timers::{REJECT_AFTER_TIME, SHOULD_NOT_USE_AFTER_TIME},
     PacketData,
 };
-use crate::noise::errors::WireGuardError;
+use crate::errors::WireGuardError;
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, CHACHA20_POLY1305};
 use std::time::Instant;
 

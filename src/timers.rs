@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 use super::errors::WireGuardError;
-use crate::noise::{Tunn, TunnResult};
+use crate::{Tunn, TunnResult};
 use std::iter;
 use std::ops::{Index, IndexMut};
 

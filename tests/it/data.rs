@@ -4,7 +4,7 @@
 use crate::harness::{
     ipv4_packet, ipv6_packet, Outcome as _, Peer::A, Peer::B, Sim, DATA_OVERHEAD, KEEPALIVE_SIZE,
 };
-use sanstun::noise::errors::WireGuardError;
+use sanstun::errors::WireGuardError;
 
 #[test]
 fn ipv4_packets_round_trip() {

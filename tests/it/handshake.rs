@@ -5,7 +5,7 @@ use crate::harness::{
     classify, Kind, Outcome as _, Peer::A, Peer::B, Sim, HANDSHAKE_INIT_SIZE,
     HANDSHAKE_RESPONSE_SIZE,
 };
-use sanstun::noise::errors::WireGuardError;
+use sanstun::errors::WireGuardError;
 
 #[test]
 fn handshake_completes_in_one_round_trip() {

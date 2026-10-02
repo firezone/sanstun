@@ -4,8 +4,8 @@
 use super::index::Index;
 use super::timers::COOKIE_EXPIRATION_TIME;
 use super::{HandshakeInit, HandshakeResponse, PacketCookieReply};
-use crate::noise::errors::WireGuardError;
-use crate::noise::session::Session;
+use crate::errors::WireGuardError;
+use crate::session::Session;
 use crate::x25519;
 use aead::{Aead, KeyInit as _, Payload};
 use blake2::digest::{FixedOutput, KeyInit};
