@@ -6,8 +6,8 @@ use crate::harness::{
     ipv4_packet, Outcome as _, Peer::A, Peer::B, Sim, DATA_OVERHEAD, REPLAY_WINDOW,
 };
 use sanstun::{
-    Decapsulated, Decrypted, Error, Keepalive, Packet, PendingDecapsulate, PendingEncapsulate,
-    Tunnel,
+    Committed, Decapsulated, Decrypted, Error, Keepalive, Packet, PendingDecapsulate,
+    PendingEncapsulate, Tunnel,
 };
 use std::time::Instant;
 
@@ -179,16 +179,15 @@ fn decrypted_message_owns_its_buffer() {
     let decrypted = prepare_decrypt(sim.tunn_mut(B), &datagram, now)
         .unwrap()
         .decrypt(&datagram, buf);
-    let plaintext = sim
-        .tunn_mut(B)
-        .commit_decrypted(decrypted, now)
-        .unwrap()
-        .expect("an IP packet");
+    let Committed::IpPacket { buffer, len } =
+        sim.tunn_mut(B).commit_decrypted(decrypted, now).unwrap()
+    else {
+        panic!("expected an IP packet");
+    };
 
-    assert_eq!(&*plaintext, ip_packet.as_slice());
-    let buf = plaintext.into_inner();
-    assert_eq!(buf.len(), BUF);
-    assert_eq!(&buf[..ip_packet.len()], ip_packet.as_slice());
+    assert_eq!(len, ip_packet.len());
+    assert_eq!(buffer.len(), BUF);
+    assert_eq!(&buffer[..len], ip_packet.as_slice());
 }
 
 #[test]
@@ -227,7 +226,10 @@ fn self_created_keepalive_is_decapsulated_as_a_keepalive() {
     let decrypted = prepare_decrypt(sim.tunn_mut(B), &keepalive, now)
         .unwrap()
         .decrypt(&keepalive, vec![0u8; BUF]);
-    assert_eq!(commit(sim.tunn_mut(B), decrypted, now).unwrap(), None);
+    assert!(matches!(
+        sim.tunn_mut(B).commit_decrypted(decrypted, now),
+        Ok(Committed::Keepalive)
+    ));
 }
 
 #[test]
@@ -266,9 +268,10 @@ fn commit<B: AsRef<[u8]>>(
     decrypted: Decrypted<B>,
     now: Instant,
 ) -> Result<Option<Vec<u8>>, Error> {
-    let plaintext = tunn.commit_decrypted(decrypted, now)?;
-
-    Ok(plaintext.map(|p| p.to_vec()))
+    match tunn.commit_decrypted(decrypted, now)? {
+        Committed::IpPacket { buffer, len } => Ok(Some(buffer.as_ref()[..len].to_vec())),
+        Committed::Keepalive => Ok(None),
+    }
 }
 
 fn counter(datagram: &[u8]) -> u64 {

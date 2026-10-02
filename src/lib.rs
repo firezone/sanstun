@@ -100,37 +100,13 @@ impl DerefMut for DataMessage<'_> {
     }
 }
 
-/// A decrypted IP packet to write to the tunnel, at the start of the buffer it was decrypted into.
-pub struct Plaintext<B> {
-    buffer: B,
-    len: usize,
-}
-
-impl<B> Plaintext<B> {
-    /// Returns the whole buffer; the IP packet is its first `self.len()` bytes.
-    pub fn into_inner(self) -> B {
-        self.buffer
-    }
-}
-
-impl<B: AsRef<[u8]>> Deref for Plaintext<B> {
-    type Target = [u8];
-
-    fn deref(&self) -> &[u8] {
-        &self.buffer.as_ref()[..self.len]
-    }
-}
-
-impl<B: AsRef<[u8]> + AsMut<[u8]>> DerefMut for Plaintext<B> {
-    fn deref_mut(&mut self) -> &mut [u8] {
-        &mut self.buffer.as_mut()[..self.len]
-    }
-}
-
-impl<B: AsRef<[u8]>> std::fmt::Debug for Plaintext<B> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("Plaintext").field(&&**self).finish()
-    }
+/// What the caller needs to do after [`Tunnel::commit_decrypted`].
+#[derive(Debug)]
+pub enum Committed<B> {
+    /// Write the IP packet in the first `len` bytes of `buffer` to the tunnel.
+    IpPacket { buffer: B, len: usize },
+    /// The data message was a keepalive; nothing to write.
+    Keepalive,
 }
 
 /// Tunnel represents a point-to-point WireGuard connection
@@ -394,12 +370,11 @@ impl Tunnel {
     /// Marks its counter as received, which rejects a duplicate that passed
     /// [`Tunnel::decapsulate`] before the original got here.
     ///
-    /// Returns the IP packet to write to the tunnel interface, or `None` for a keepalive.
     pub fn commit_decrypted<B: AsRef<[u8]>>(
         &mut self,
         decrypted: Decrypted<B>,
         now: Instant,
-    ) -> Result<Option<Plaintext<B>>, Error> {
+    ) -> Result<Committed<B>, Error> {
         let Decrypted {
             receiving_index: remote_idx,
             counter,
@@ -426,10 +401,10 @@ impl Tunnel {
         self.timer_tick(TimerName::TimeLastPacketReceived, now);
 
         let Some(len) = self.validate_decapsulated_packet(plaintext, now)? else {
-            return Ok(None);
+            return Ok(Committed::Keepalive);
         };
 
-        Ok(Some(Plaintext { buffer, len }))
+        Ok(Committed::IpPacket { buffer, len })
     }
 
     /// Handles a message received from the network.

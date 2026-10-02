@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use sanstun::Error;
 use sanstun::RateLimiter;
-use sanstun::{Decapsulated, Index, Packet, TimerAction, Tunnel};
+use sanstun::{Committed, Decapsulated, Index, Packet, TimerAction, Tunnel};
 use sanstun::{PublicKey, StaticSecret};
 
 // Protocol constants from the WireGuard whitepaper (§6.1, table on p. 14).
@@ -505,8 +505,11 @@ impl Sim {
             Ok(Decapsulated::Data(pending)) => {
                 let decrypted = pending.decrypt(datagram, vec![0u8; BUF]);
                 match node.tunn.commit_decrypted(decrypted, now) {
-                    Ok(None) => {}
-                    Ok(Some(packet)) => outs.push(Out::Ip(packet.to_vec())),
+                    Ok(Committed::Keepalive) => {}
+                    Ok(Committed::IpPacket { mut buffer, len }) => {
+                        buffer.truncate(len);
+                        outs.push(Out::Ip(buffer));
+                    }
                     Err(e) => outs.push(Out::Err(e)),
                 }
             }
