@@ -11,8 +11,8 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use sanstun::Error;
 use sanstun::RateLimiter;
-use sanstun::WireGuardError;
 use sanstun::{Index, Packet, Tunn, TunnResult};
 use sanstun::{PublicKey, StaticSecret};
 
@@ -115,13 +115,13 @@ pub enum Out {
     Ip(Vec<u8>),
     /// A datagram to be sent back over the network.
     Net(Vec<u8>),
-    Err(WireGuardError),
+    Err(Error),
 }
 
 pub trait Outcome {
     fn expect_one_ip(self) -> Vec<u8>;
     fn expect_one_net(self) -> Vec<u8>;
-    fn expect_err(self) -> WireGuardError;
+    fn expect_err(self) -> Error;
     fn expect_consumed(self);
 }
 
@@ -143,7 +143,7 @@ impl Outcome for Vec<Out> {
     }
 
     #[track_caller]
-    fn expect_err(self) -> WireGuardError {
+    fn expect_err(self) -> Error {
         match <[Out; 1]>::try_from(self) {
             Ok([Out::Err(e)]) => e,
             other => panic!("expected an error, got {other:?}"),
@@ -163,7 +163,7 @@ struct Node {
     tunn: Tunn,
     addr: IpAddr,
     inbox: Vec<Vec<u8>>,
-    errors: Vec<WireGuardError>,
+    errors: Vec<Error>,
     drop_outgoing: bool,
 }
 
@@ -342,7 +342,7 @@ impl Sim {
             .is_some()
     }
 
-    pub fn errors(&self, peer: Peer) -> &[WireGuardError] {
+    pub fn errors(&self, peer: Peer) -> &[Error] {
         &self.node(peer).errors
     }
 
@@ -559,11 +559,7 @@ impl Sim {
             .expect("an active session")
     }
 
-    pub fn try_encapsulate(
-        &mut self,
-        from: Peer,
-        ip_packet: &[u8],
-    ) -> Result<Vec<u8>, WireGuardError> {
+    pub fn try_encapsulate(&mut self, from: Peer, ip_packet: &[u8]) -> Result<Vec<u8>, Error> {
         let now = self.now;
         let mut buf = vec![0u8; BUF];
         let len = self

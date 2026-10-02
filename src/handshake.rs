@@ -4,7 +4,7 @@
 use super::index::Index;
 use super::timers::COOKIE_EXPIRATION_TIME;
 use super::{HandshakeInit, HandshakeResponse, PacketCookieReply};
-use crate::errors::WireGuardError;
+use crate::errors::Error;
 use crate::session::Session;
 use aead::{Aead, KeyInit as _, Payload};
 use blake2::digest::{FixedOutput, KeyInit};
@@ -125,12 +125,11 @@ fn aead_chacha20_open(
     counter: u64,
     data: &[u8],
     aad: &[u8],
-) -> Result<(), WireGuardError> {
+) -> Result<(), Error> {
     let mut nonce: [u8; 12] = [0; 12];
     nonce[4..].copy_from_slice(&counter.to_le_bytes());
 
-    aead_chacha20_open_inner(buffer, key, nonce, data, aad)
-        .map_err(|_| WireGuardError::InvalidAeadTag)?;
+    aead_chacha20_open_inner(buffer, key, nonce, data, aad).map_err(|_| Error::InvalidAeadTag)?;
     Ok(())
 }
 
@@ -199,9 +198,9 @@ impl Tai64N {
     }
 
     /// Parse a timestamp from a 12 byte u8 slice
-    fn parse(buf: &[u8; 12]) -> Result<Tai64N, WireGuardError> {
+    fn parse(buf: &[u8; 12]) -> Result<Tai64N, Error> {
         if buf.len() < 12 {
-            return Err(WireGuardError::InvalidTai64nTimestamp);
+            return Err(Error::InvalidTai64nTimestamp);
         }
 
         let (sec_bytes, nano_bytes) = buf.split_at(std::mem::size_of::<u64>());
@@ -210,10 +209,10 @@ impl Tai64N {
 
         // WireGuard does not actually expect tai64n timestamp, just monotonically increasing one
         //if secs < (1u64 << 62) || secs >= (1u64 << 63) {
-        //    return Err(WireGuardError::InvalidTai64nTimestamp);
+        //    return Err(Error::InvalidTai64nTimestamp);
         //};
         //if nano >= 1_000_000_000 {
-        //   return Err(WireGuardError::InvalidTai64nTimestamp);
+        //   return Err(Error::InvalidTai64nTimestamp);
         //}
 
         Ok(Tai64N { secs, nano })
@@ -339,7 +338,7 @@ pub fn parse_handshake_anon(
     static_private: &StaticSecret,
     static_public: &PublicKey,
     packet: &HandshakeInit,
-) -> Result<HalfHandshake, WireGuardError> {
+) -> Result<HalfHandshake, Error> {
     // initiator.chaining_key = HASH(CONSTRUCTION)
     let mut chaining_key = INITIAL_CHAIN_KEY;
     // initiator.hash = HASH(HASH(initiator.chaining_key || IDENTIFIER) || responder.static_public)
@@ -472,7 +471,7 @@ impl Handshake {
         packet: HandshakeInit,
         dst: &'a mut [u8],
         now: Instant,
-    ) -> Result<(&'a mut [u8], Session), WireGuardError> {
+    ) -> Result<(&'a mut [u8], Session), Error> {
         // initiator.chaining_key = HASH(CONSTRUCTION)
         let mut chaining_key = INITIAL_CHAIN_KEY;
         // initiator.hash = HASH(HASH(initiator.chaining_key || IDENTIFIER) || responder.static_public)
@@ -515,7 +514,7 @@ impl Handshake {
             self.params.peer_static_public.as_bytes(),
             &peer_static_public_decrypted,
         ) {
-            return Err(WireGuardError::WrongKey);
+            return Err(Error::WrongKey);
         }
 
         // initiator.hash = HASH(initiator.hash || msg.encrypted_static)
@@ -536,7 +535,7 @@ impl Handshake {
 
         if !timestamp.after(&self.last_handshake_timestamp) {
             // Possibly a replay
-            return Err(WireGuardError::WrongTai64nTimestamp);
+            return Err(Error::WrongTai64nTimestamp);
         }
         self.last_handshake_timestamp = timestamp;
 
@@ -557,12 +556,12 @@ impl Handshake {
         &mut self,
         packet: HandshakeResponse,
         now: Instant,
-    ) -> Result<Session, WireGuardError> {
+    ) -> Result<Session, Error> {
         // Check if there is a handshake awaiting a response and return the correct one
         let (state, is_previous) = match (&self.state, &self.previous) {
             (HandshakeState::InitSent(s), _) if s.local_index == packet.receiver_idx => (s, false),
             (_, HandshakeState::InitSent(s)) if s.local_index == packet.receiver_idx => (s, true),
-            _ => return Err(WireGuardError::UnexpectedPacket),
+            _ => return Err(Error::UnexpectedPacket),
         };
 
         let peer_index = packet.sender_idx;
@@ -640,17 +639,17 @@ impl Handshake {
         &mut self,
         packet: PacketCookieReply,
         now: Instant,
-    ) -> Result<(), WireGuardError> {
+    ) -> Result<(), Error> {
         let mac1 = match self.cookies.last_mac1 {
             Some(mac) => mac,
             None => {
-                return Err(WireGuardError::UnexpectedPacket);
+                return Err(Error::UnexpectedPacket);
             }
         };
 
         let local_index = self.cookies.index;
         if packet.receiver_idx != local_index {
-            return Err(WireGuardError::WrongIndex);
+            return Err(Error::WrongIndex);
         }
         // msg.encrypted_cookie = XAEAD(HASH(LABEL_COOKIE || responder.static_public), msg.nonce, cookie, last_received_msg.mac1)
         let key = b2s_hash(LABEL_COOKIE, self.params.peer_static_public.as_bytes()); // TODO: pre-compute
@@ -662,11 +661,9 @@ impl Handshake {
         let plaintext = XChaCha20Poly1305::new_from_slice(&key)
             .unwrap()
             .decrypt(packet.nonce.into(), payload)
-            .map_err(|_| WireGuardError::InvalidAeadTag)?;
+            .map_err(|_| Error::InvalidAeadTag)?;
 
-        let cookie = plaintext
-            .try_into()
-            .map_err(|_| WireGuardError::InvalidPacket)?;
+        let cookie = plaintext.try_into().map_err(|_| Error::InvalidPacket)?;
         self.cookies.write_cookie = Some(WriteCookie {
             value: cookie,
             received_at: now,
@@ -704,12 +701,12 @@ impl Handshake {
         &mut self,
         dst: &'a mut [u8],
         now: Instant,
-    ) -> Result<(&'a mut [u8], Index), WireGuardError> {
+    ) -> Result<(&'a mut [u8], Index), Error> {
         let buf_len = dst.len();
         if buf_len < super::HANDSHAKE_INIT_SZ {
             tracing::warn!(%buf_len, msg_len = %super::HANDSHAKE_INIT_SZ, "Destination buffer too small for handshake init message");
 
-            return Err(WireGuardError::DestinationBufferTooSmall);
+            return Err(Error::DestinationBufferTooSmall);
         }
 
         let (message_type, rest) = dst.split_at_mut(4);
@@ -792,12 +789,12 @@ impl Handshake {
         peer_index: u32,
         dst: &'a mut [u8],
         now: Instant,
-    ) -> Result<(&'a mut [u8], Session), WireGuardError> {
+    ) -> Result<(&'a mut [u8], Session), Error> {
         let buf_len = dst.len();
         if dst.len() < super::HANDSHAKE_RESP_SZ {
             tracing::warn!(%buf_len, msg_len = %super::HANDSHAKE_RESP_SZ, "Destination buffer too small for handshake init message");
 
-            return Err(WireGuardError::DestinationBufferTooSmall);
+            return Err(Error::DestinationBufferTooSmall);
         }
 
         let (message_type, rest) = dst.split_at_mut(4);

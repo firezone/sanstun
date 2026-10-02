@@ -7,7 +7,7 @@ use crate::harness::{
     classify, secs, Kind, Outcome as _, Peer::A, Peer::B, Sim, COOKIE_EXPIRATION_TIME,
     COOKIE_REPLY_SIZE,
 };
-use sanstun::WireGuardError;
+use sanstun::Error;
 
 #[test]
 fn responder_under_load_replies_with_a_cookie_instead_of_a_handshake() {
@@ -53,7 +53,7 @@ fn handshake_without_source_address_fails_under_load() {
     let init = sim.initiate_handshake(A);
     let error = sim.deliver_anonymous(B, &init).expect_err();
 
-    assert!(matches!(error, WireGuardError::UnderLoad));
+    assert!(matches!(error, Error::UnderLoad));
 }
 
 /// A cookie stays valid for two minutes; within that window new handshakes

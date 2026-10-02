@@ -6,7 +6,7 @@ use super::{
     timers::{REJECT_AFTER_TIME, SHOULD_NOT_USE_AFTER_TIME},
     PacketData,
 };
-use crate::errors::WireGuardError;
+use crate::errors::Error;
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, CHACHA20_POLY1305};
 use std::time::Instant;
 
@@ -93,29 +93,29 @@ impl ReceivingKeyCounterValidator {
 
     /// Returns true if the counter was not yet received, and is not too far back
     #[inline(always)]
-    fn will_accept(&self, counter: u64) -> Result<(), WireGuardError> {
+    fn will_accept(&self, counter: u64) -> Result<(), Error> {
         if counter >= self.next {
             // As long as the counter is growing no replay took place for sure
             return Ok(());
         }
         if counter + N_BITS < self.next {
             // Drop if too far back
-            return Err(WireGuardError::InvalidCounter);
+            return Err(Error::InvalidCounter);
         }
         if !self.check_bit(counter) {
             Ok(())
         } else {
-            Err(WireGuardError::DuplicateCounter)
+            Err(Error::DuplicateCounter)
         }
     }
 
     /// Marks the counter as received, and returns true if it is still good (in case during
     /// decryption something changed)
     #[inline(always)]
-    fn mark_did_receive(&mut self, counter: u64) -> Result<(), WireGuardError> {
+    fn mark_did_receive(&mut self, counter: u64) -> Result<(), Error> {
         if counter + N_BITS < self.next {
             // Drop if too far back
-            return Err(WireGuardError::InvalidCounter);
+            return Err(Error::InvalidCounter);
         }
         if counter == self.next {
             // Usually the packets arrive in order, in that case we simply mark the bit and
@@ -127,7 +127,7 @@ impl ReceivingKeyCounterValidator {
         if counter < self.next {
             // A packet arrived out of order, check if it is valid, and mark
             if self.check_bit(counter) {
-                return Err(WireGuardError::DuplicateCounter);
+                return Err(Error::DuplicateCounter);
             }
             self.set_bit(counter);
             return Ok(());
@@ -200,12 +200,12 @@ impl Session {
     }
 
     /// Returns true if receiving counter is good to use
-    fn receiving_counter_quick_check(&self, counter: u64) -> Result<(), WireGuardError> {
+    fn receiving_counter_quick_check(&self, counter: u64) -> Result<(), Error> {
         self.receiving_key_counter.will_accept(counter)
     }
 
     /// Returns true if receiving counter is good to use, and marks it as used {
-    fn receiving_counter_mark(&mut self, counter: u64) -> Result<(), WireGuardError> {
+    fn receiving_counter_mark(&mut self, counter: u64) -> Result<(), Error> {
         self.receiving_key_counter.mark_did_receive(counter)
     }
 
@@ -216,14 +216,14 @@ impl Session {
         &mut self,
         src: &[u8],
         dst: &'a mut [u8],
-    ) -> Result<&'a mut [u8], WireGuardError> {
+    ) -> Result<&'a mut [u8], Error> {
         let buf_len = dst.len();
         let num_required = src.len() + super::DATA_OVERHEAD_SZ;
 
         if buf_len < num_required {
             tracing::warn!(%buf_len, %num_required, "Destination buffer too small for outgoing packet data");
 
-            return Err(WireGuardError::DestinationBufferTooSmall);
+            return Err(Error::DestinationBufferTooSmall);
         }
 
         let sending_key_counter = self.sending_key_counter;
@@ -266,17 +266,17 @@ impl Session {
         &mut self,
         packet: PacketData,
         dst: &'a mut [u8],
-    ) -> Result<&'a mut [u8], WireGuardError> {
+    ) -> Result<&'a mut [u8], Error> {
         let ct_len = packet.encrypted_encapsulated_packet.len();
         let buf_len = dst.len();
 
         if buf_len < ct_len {
             tracing::warn!(%buf_len, %ct_len, "Destination buffer too small for incoming packet data");
 
-            return Err(WireGuardError::DestinationBufferTooSmall);
+            return Err(Error::DestinationBufferTooSmall);
         }
         if packet.receiver_idx != self.receiving_index {
-            return Err(WireGuardError::WrongIndex);
+            return Err(Error::WrongIndex);
         }
         // Don't reuse counters, in case this is a replay attack we want to quickly check the counter without running expensive decryption
         self.receiving_counter_quick_check(packet.counter)?;
@@ -291,7 +291,7 @@ impl Session {
                     Aad::from(&[]),
                     &mut dst[..ct_len],
                 )
-                .map_err(|_| WireGuardError::InvalidAeadTag)?
+                .map_err(|_| Error::InvalidAeadTag)?
         };
 
         // After decryption is done, check counter again, and mark as received

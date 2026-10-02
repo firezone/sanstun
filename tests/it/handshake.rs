@@ -5,7 +5,7 @@ use crate::harness::{
     classify, Kind, Outcome as _, Peer::A, Peer::B, Sim, HANDSHAKE_INIT_SIZE,
     HANDSHAKE_RESPONSE_SIZE,
 };
-use sanstun::WireGuardError;
+use sanstun::Error;
 
 #[test]
 fn handshake_completes_in_one_round_trip() {
@@ -59,7 +59,7 @@ fn handshake_with_mismatched_preshared_key_fails() {
 
     assert!(!sim.is_established(A));
     assert!(!sim.is_established(B));
-    assert!(matches!(sim.errors(A), [WireGuardError::InvalidAeadTag]));
+    assert!(matches!(sim.errors(A), [Error::InvalidAeadTag]));
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn responder_rejects_initiator_with_unexpected_static_key() {
     let init = sim.initiate_handshake(A);
     sim.route(A, init);
 
-    assert!(matches!(sim.errors(B), [WireGuardError::WrongKey]));
+    assert!(matches!(sim.errors(B), [Error::WrongKey]));
     assert_eq!(
         sim.count(B, Kind::Response),
         0,
@@ -89,7 +89,7 @@ fn replayed_handshake_initiation_is_rejected() {
 
     let error = sim.deliver(B, &init).expect_err();
 
-    assert!(matches!(error, WireGuardError::WrongTai64nTimestamp));
+    assert!(matches!(error, Error::WrongTai64nTimestamp));
 }
 
 // sanstun keeps two outgoing handshakes in flight so that a delayed
@@ -134,7 +134,7 @@ fn tampered_handshake_initiation_is_rejected() {
 
     let error = sim.deliver(B, &init).expect_err();
 
-    assert!(matches!(error, WireGuardError::InvalidMac));
+    assert!(matches!(error, Error::InvalidMac));
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn cookie_reply_out_of_the_blue_is_rejected() {
 
     let error = sim.deliver(B, &cookie_reply).expect_err();
 
-    assert!(matches!(error, WireGuardError::UnexpectedPacket));
+    assert!(matches!(error, Error::UnexpectedPacket));
 }
 
 #[test]
@@ -163,7 +163,7 @@ fn malformed_datagrams_are_rejected() {
     ] {
         let error = sim.deliver(B, garbage).expect_err();
 
-        assert!(matches!(error, WireGuardError::InvalidPacket));
+        assert!(matches!(error, Error::InvalidPacket));
     }
 
     let kind = classify(&init);

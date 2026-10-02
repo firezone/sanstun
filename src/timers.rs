@@ -1,7 +1,7 @@
 // Copyright (c) 2019 Cloudflare, Inc. All rights reserved.
 // SPDX-License-Identifier: BSD-3-Clause
 
-use super::errors::WireGuardError;
+use super::errors::Error;
 use crate::{Tunn, TunnResult};
 use std::iter;
 use std::ops::{Index, IndexMut};
@@ -275,7 +275,7 @@ impl Tunn {
     ///
     /// Fails if the current session was among them and had carried data, because
     /// the re-key that data made due never landed.
-    fn expire_sessions(&mut self, now: Instant) -> Result<(), WireGuardError> {
+    fn expire_sessions(&mut self, now: Instant) -> Result<(), Error> {
         let carried_data = self.timers.current_session_carried_data();
         let mut result = Ok(());
 
@@ -295,7 +295,7 @@ impl Tunn {
                 *maybe_session = None;
 
                 if is_current && carried_data {
-                    result = Err(WireGuardError::ConnectionExpired);
+                    result = Err(Error::ConnectionExpired);
                 }
             }
         }
@@ -373,7 +373,7 @@ impl Tunn {
         }
 
         if self.handshake.is_expired() {
-            return TunnResult::Err(WireGuardError::ConnectionExpired);
+            return TunnResult::Err(Error::ConnectionExpired);
         }
 
         // Clear cookie after COOKIE_EXPIRATION_TIME
@@ -392,7 +392,7 @@ impl Tunn {
             tracing::debug!("CONNECTION_EXPIRED(REJECT_AFTER_TIME * 3)");
             self.handshake.set_expired();
             self.clear_all(now);
-            return TunnResult::Err(WireGuardError::ConnectionExpired);
+            return TunnResult::Err(Error::ConnectionExpired);
         }
 
         if let Some((rekey_timeout, local_idx)) = self.handshake_rekey_timeout() {
@@ -405,7 +405,7 @@ impl Tunn {
                 tracing::debug!(%local_idx, "CONNECTION_EXPIRED(REKEY_ATTEMPT_TIME)");
                 self.handshake.set_expired();
                 self.clear_all(now);
-                return TunnResult::Err(WireGuardError::ConnectionExpired);
+                return TunnResult::Err(Error::ConnectionExpired);
             }
 
             if now >= rekey_timeout {
@@ -507,7 +507,7 @@ impl Tunn {
             // in place; there is no need to queue it or start a handshake.
             return match self.encapsulate_data_at(&[], dst, now) {
                 Ok(len) => TunnResult::WriteToNetwork(&mut dst[..len]),
-                Err(WireGuardError::NoCurrentSession) => TunnResult::Done,
+                Err(Error::NoCurrentSession) => TunnResult::Done,
                 Err(e) => TunnResult::Err(e),
             };
         }

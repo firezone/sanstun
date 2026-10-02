@@ -4,7 +4,7 @@
 use std::fmt::Display;
 
 #[derive(Debug)]
-pub enum WireGuardError {
+pub enum Error {
     DestinationBufferTooSmall,
     UnexpectedPacket,
     WrongIndex,
@@ -21,43 +21,43 @@ pub enum WireGuardError {
     UnderLoad,
 }
 
-impl Display for WireGuardError {
+impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            WireGuardError::DestinationBufferTooSmall => {
+            Error::DestinationBufferTooSmall => {
                 write!(f, "the destination buffer is too small")
             }
-            WireGuardError::UnexpectedPacket => write!(
+            Error::UnexpectedPacket => write!(
                 f,
                 "packet of this type was not expected in the current state"
             ),
-            WireGuardError::WrongIndex => write!(f, "index in packet did not match local state"),
-            WireGuardError::WrongKey => write!(
+            Error::WrongIndex => write!(f, "index in packet did not match local state"),
+            Error::WrongKey => write!(
                 f,
                 "decrypted public key from handshake initiation did not match expected key"
             ),
-            WireGuardError::InvalidTai64nTimestamp => write!(f, "timestamp is less than 12bytes"),
-            WireGuardError::WrongTai64nTimestamp => {
+            Error::InvalidTai64nTimestamp => write!(f, "timestamp is less than 12bytes"),
+            Error::WrongTai64nTimestamp => {
                 write!(f, "timestamp of packet is in the past; possible a replay?")
             }
-            WireGuardError::InvalidMac => {
+            Error::InvalidMac => {
                 write!(f, "MAC mismatch in packet")
             }
-            WireGuardError::InvalidAeadTag => write!(f, "failed to decrypt packet data"),
-            WireGuardError::InvalidCounter => {
+            Error::InvalidAeadTag => write!(f, "failed to decrypt packet data"),
+            Error::InvalidCounter => {
                 write!(f, "packet counter is too old")
             }
-            WireGuardError::DuplicateCounter => {
+            Error::DuplicateCounter => {
                 write!(f, "packet with same counter already processed")
             }
-            WireGuardError::InvalidPacket => {
+            Error::InvalidPacket => {
                 write!(f, "failed to parse packet (too short / invalid type / etc)")
             }
-            WireGuardError::NoCurrentSession => write!(f, "no active session"),
-            WireGuardError::ConnectionExpired => write!(f, "connection is expired"),
-            WireGuardError::UnderLoad => write!(f, "rate limit exceeded"),
+            Error::NoCurrentSession => write!(f, "no active session"),
+            Error::ConnectionExpired => write!(f, "connection is expired"),
+            Error::UnderLoad => write!(f, "rate limit exceeded"),
         }
     }
 }
 
-impl std::error::Error for WireGuardError {}
+impl std::error::Error for Error {}

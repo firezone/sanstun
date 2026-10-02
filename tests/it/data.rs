@@ -4,7 +4,7 @@
 use crate::harness::{
     ipv4_packet, ipv6_packet, Outcome as _, Peer::A, Peer::B, Sim, DATA_OVERHEAD, KEEPALIVE_SIZE,
 };
-use sanstun::WireGuardError;
+use sanstun::Error;
 
 #[test]
 fn ipv4_packets_round_trip() {
@@ -55,7 +55,7 @@ fn tampered_data_packet_is_rejected() {
 
     let error = sim.deliver(B, &datagram).expect_err();
 
-    assert!(matches!(error, WireGuardError::InvalidAeadTag));
+    assert!(matches!(error, Error::InvalidAeadTag));
     assert!(sim.take_inbox(B).is_empty());
 }
 
@@ -68,13 +68,13 @@ fn data_with_wrong_receiver_index_is_rejected() {
     let index = u32::from_le_bytes(datagram[4..8].try_into().unwrap());
     datagram[4..8].copy_from_slice(&(index + 8).to_le_bytes());
     let error = sim.deliver(B, &datagram).expect_err();
-    assert!(matches!(error, WireGuardError::WrongIndex));
+    assert!(matches!(error, Error::WrongIndex));
 
     // Index pointing at an empty session slot.
     let mut datagram = sim.encapsulate(A, &ipv4_packet(b"payload"));
     datagram[4..8].copy_from_slice(&(index + 6).to_le_bytes());
     let error = sim.deliver(B, &datagram).expect_err();
-    assert!(matches!(error, WireGuardError::NoCurrentSession));
+    assert!(matches!(error, Error::NoCurrentSession));
 }
 
 // The receiver validates that the decrypted payload is a plausible IP packet
@@ -87,7 +87,7 @@ fn non_ip_payload_is_rejected_after_decryption() {
 
     let error = sim.deliver(B, &datagram).expect_err();
 
-    assert!(matches!(error, WireGuardError::InvalidPacket));
+    assert!(matches!(error, Error::InvalidPacket));
 }
 
 // §5.4.6: encrypted packets are padded; the receiver must truncate the
@@ -116,5 +116,5 @@ fn ip_packet_claiming_more_than_its_size_is_rejected() {
 
     let error = sim.deliver(B, &datagram).expect_err();
 
-    assert!(matches!(error, WireGuardError::InvalidPacket));
+    assert!(matches!(error, Error::InvalidPacket));
 }

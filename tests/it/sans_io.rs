@@ -6,8 +6,8 @@ use crate::harness::{
     classify, ipv4_packet, secs, Kind, Outcome as _, Peer::A, Peer::B, Sim, KEEPALIVE_SIZE,
     KEEPALIVE_TIMEOUT, MAX_JITTER, REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_TIMEOUT,
 };
+use sanstun::Error;
 use sanstun::TunnResult;
-use sanstun::WireGuardError;
 use std::time::Duration;
 
 /// A handshake triggered by a timer is not sent immediately: it is scheduled
@@ -115,10 +115,7 @@ fn a_single_late_poll_observes_the_expiry() {
     let mut buf = [0u8; 256];
     let result = sim.tunn_mut(A).update_timers_at(&mut buf, late);
 
-    assert!(matches!(
-        result,
-        TunnResult::Err(WireGuardError::ConnectionExpired)
-    ));
+    assert!(matches!(result, TunnResult::Err(Error::ConnectionExpired)));
     assert!(sim.tunn(A).is_expired());
 }
 
@@ -170,7 +167,7 @@ fn encapsulate_data_at_has_no_side_effects_without_a_session() {
     let mut sim = Sim::new();
 
     let result = sim.try_encapsulate(A, &ipv4_packet(b"no session yet"));
-    assert!(matches!(result, Err(WireGuardError::NoCurrentSession)));
+    assert!(matches!(result, Err(Error::NoCurrentSession)));
 
     sim.advance(secs(10)); // Well past REKEY_TIMEOUT.
 

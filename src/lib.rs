@@ -10,7 +10,7 @@ mod rate_limiter;
 mod session;
 mod timers;
 
-pub use errors::WireGuardError;
+pub use errors::Error;
 pub use handshake::{parse_handshake_anon, HalfHandshake};
 pub use index::Index;
 pub use rate_limiter::RateLimiter;
@@ -47,14 +47,14 @@ const N_SESSIONS: u8 = 8;
 #[derive(Debug)]
 pub enum TunnResult<'a> {
     Done,
-    Err(WireGuardError),
+    Err(Error),
     WriteToNetwork(&'a mut [u8]),
     WriteToTunnelV4(&'a mut [u8], Ipv4Addr),
     WriteToTunnelV6(&'a mut [u8], Ipv6Addr),
 }
 
-impl<'a> From<WireGuardError> for TunnResult<'a> {
-    fn from(err: WireGuardError) -> TunnResult<'a> {
+impl<'a> From<Error> for TunnResult<'a> {
+    fn from(err: Error) -> TunnResult<'a> {
         TunnResult::Err(err)
     }
 }
@@ -124,9 +124,9 @@ pub enum Packet<'a> {
 
 impl Tunn {
     #[inline(always)]
-    pub fn parse_incoming_packet(src: &[u8]) -> Result<Packet<'_>, WireGuardError> {
+    pub fn parse_incoming_packet(src: &[u8]) -> Result<Packet<'_>, Error> {
         if src.len() < 4 {
-            return Err(WireGuardError::InvalidPacket);
+            return Err(Error::InvalidPacket);
         }
 
         // Checks the type, as well as the reserved zero fields
@@ -157,7 +157,7 @@ impl Tunn {
                 counter: u64::from_le_bytes(src[8..16].try_into().unwrap()),
                 encrypted_encapsulated_packet: &src[16..],
             }),
-            _ => return Err(WireGuardError::InvalidPacket),
+            _ => return Err(Error::InvalidPacket),
         })
     }
 
@@ -239,20 +239,20 @@ impl Tunn {
     /// there is currently a usable session.
     ///
     /// Returns `Ok(len)` when the encrypted WireGuard data message (`len` bytes) has been written
-    /// to the start of `dst`. Returns `Err(WireGuardError::NoCurrentSession)` when there is no
+    /// to the start of `dst`. Returns `Err(Error::NoCurrentSession)` when there is no
     /// usable session; in that case `dst` is left untouched and **no** handshake is initiated.
     pub fn encapsulate_data_at(
         &mut self,
         src: &[u8],
         dst: &mut [u8],
         now: Instant,
-    ) -> Result<usize, WireGuardError> {
+    ) -> Result<usize, Error> {
         let is_responder = self.timers.is_responder();
         let Some(session) = self.sessions[self.current]
             .as_mut()
             .filter(|s| s.should_use_at(now) || is_responder)
         else {
-            return Err(WireGuardError::NoCurrentSession);
+            return Err(Error::NoCurrentSession);
         };
 
         // Send the packet using an established session
@@ -313,7 +313,7 @@ impl Tunn {
         p: HandshakeInit,
         dst: &'a mut [u8],
         now: Instant,
-    ) -> Result<TunnResult<'a>, WireGuardError> {
+    ) -> Result<TunnResult<'a>, Error> {
         let remote_idx = Index::from_peer(p.sender_idx);
 
         tracing::debug!(%remote_idx, "Received handshake_initiation",);
@@ -340,7 +340,7 @@ impl Tunn {
         p: HandshakeResponse,
         dst: &'a mut [u8],
         now: Instant,
-    ) -> Result<TunnResult<'a>, WireGuardError> {
+    ) -> Result<TunnResult<'a>, Error> {
         tracing::debug!(
             local_idx = %Index::from_peer(p.receiver_idx),
             remote_idx = %Index::from_peer(p.sender_idx),
@@ -367,7 +367,7 @@ impl Tunn {
         &mut self,
         p: PacketCookieReply,
         now: Instant,
-    ) -> Result<TunnResult<'a>, WireGuardError> {
+    ) -> Result<TunnResult<'a>, Error> {
         let local_idx = Index::from_peer(p.receiver_idx);
 
         tracing::debug!(%local_idx, "Received cookie_reply");
@@ -410,7 +410,7 @@ impl Tunn {
         packet: PacketData,
         dst: &'a mut [u8],
         now: Instant,
-    ) -> Result<TunnResult<'a>, WireGuardError> {
+    ) -> Result<TunnResult<'a>, Error> {
         let remote_idx = Index::from_peer(packet.receiver_idx);
 
         // Get the (probably) right session
@@ -418,7 +418,7 @@ impl Tunn {
             let session = self.sessions[remote_idx].as_mut();
             let session = session.ok_or_else(|| {
                 tracing::trace!(%remote_idx, "No current session available");
-                WireGuardError::NoCurrentSession
+                Error::NoCurrentSession
             })?;
             session.receive_packet_data(packet, dst)?
         };
@@ -497,11 +497,11 @@ impl Tunn {
                     IpAddr::from(addr_bytes),
                 )
             }
-            _ => return TunnResult::Err(WireGuardError::InvalidPacket),
+            _ => return TunnResult::Err(Error::InvalidPacket),
         };
 
         if computed_len > packet.len() {
-            return TunnResult::Err(WireGuardError::InvalidPacket);
+            return TunnResult::Err(Error::InvalidPacket);
         }
 
         self.timer_tick(TimerName::TimeLastDataPacketReceived, now);

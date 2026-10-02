@@ -6,7 +6,7 @@ use crate::harness::{
     KEEPALIVE_TIMEOUT, MAX_JITTER, REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_ATTEMPT_TIME,
     REKEY_TIMEOUT, SHOULD_NOT_USE_AFTER_TIME, TICK,
 };
-use sanstun::WireGuardError;
+use sanstun::Error;
 
 /// §6.4: an unanswered handshake initiation is retransmitted after
 /// `REKEY_TIMEOUT + jitter`, where jitter is up to 333ms.
@@ -55,7 +55,7 @@ fn handshake_retries_cease_after_rekey_attempt_time() {
     assert!(sim
         .errors(A)
         .iter()
-        .any(|e| matches!(e, WireGuardError::ConnectionExpired)));
+        .any(|e| matches!(e, Error::ConnectionExpired)));
 }
 
 #[test]
@@ -239,7 +239,7 @@ fn responder_discards_the_session_after_reject_after_time() {
     assert!(!sim.is_established(B));
     assert!(matches!(
         sim.try_encapsulate(B, &ipv4_packet(b"too late")),
-        Err(WireGuardError::NoCurrentSession)
+        Err(Error::NoCurrentSession)
     ));
     assert!(
         sim.errors(B).is_empty(),
@@ -284,7 +284,7 @@ fn tunnel_expires_when_a_used_session_expires() {
         assert!(sim
             .errors(peer)
             .iter()
-            .any(|e| matches!(e, WireGuardError::ConnectionExpired)));
+            .any(|e| matches!(e, Error::ConnectionExpired)));
     }
     assert!(
         sim.sent_at(A, Kind::Init)
@@ -325,7 +325,7 @@ fn tunnel_is_wiped_after_three_times_reject_after_time() {
     assert!(sim
         .errors(B)
         .iter()
-        .any(|e| matches!(e, WireGuardError::ConnectionExpired)));
+        .any(|e| matches!(e, Error::ConnectionExpired)));
 }
 
 /// sanstun-specific: the initiator refuses to *send* on a session within
@@ -339,7 +339,7 @@ fn initiator_stops_sending_on_a_session_close_to_expiry() {
 
     assert!(matches!(
         sim.try_encapsulate(A, &ipv4_packet(b"risky")),
-        Err(WireGuardError::NoCurrentSession)
+        Err(Error::NoCurrentSession)
     ));
     assert!(
         sim.is_established(A),

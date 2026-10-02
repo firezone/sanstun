@@ -1,8 +1,6 @@
 use super::handshake::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, b2s_mac_24};
 use crate::handshake::{LABEL_COOKIE, LABEL_MAC1};
-use crate::{
-    HandshakeInit, HandshakeResponse, Packet, PublicKey, Tunn, TunnResult, WireGuardError,
-};
+use crate::{Error, HandshakeInit, HandshakeResponse, Packet, PublicKey, Tunn, TunnResult};
 
 use std::net::IpAddr;
 use std::time::Instant;
@@ -116,12 +114,12 @@ impl RateLimiter {
         cookie: Cookie,
         mac1: &[u8],
         dst: &'a mut [u8],
-    ) -> Result<&'a mut [u8], WireGuardError> {
+    ) -> Result<&'a mut [u8], Error> {
         let buf_len = dst.len();
         if buf_len < super::COOKIE_REPLY_SZ {
             tracing::warn!(%buf_len, msg_len = %super::COOKIE_REPLY_SZ, "Destination buffer too small for cookie reply");
 
-            return Err(WireGuardError::DestinationBufferTooSmall);
+            return Err(Error::DestinationBufferTooSmall);
         }
 
         let (message_type, rest) = dst.split_at_mut(4);
@@ -143,7 +141,7 @@ impl RateLimiter {
         encrypted_cookie[..16].copy_from_slice(&cookie);
         let tag = cipher
             .encrypt_in_place_detached(iv, mac1, &mut encrypted_cookie[..16])
-            .map_err(|_| WireGuardError::DestinationBufferTooSmall)?;
+            .map_err(|_| Error::DestinationBufferTooSmall)?;
 
         encrypted_cookie[16..].copy_from_slice(&tag);
 
@@ -169,7 +167,7 @@ impl RateLimiter {
 
             let computed_mac1 = b2s_keyed_mac_16(&self.mac1_key, msg);
             if !constant_time_eq(&computed_mac1[..16], mac1) {
-                return Err(TunnResult::Err(WireGuardError::InvalidMac));
+                return Err(TunnResult::Err(Error::InvalidMac));
             }
 
             // Advance the per-second window before checking it. Resetting it
@@ -179,7 +177,7 @@ impl RateLimiter {
 
             if self.is_under_load() {
                 let addr = match src_addr {
-                    None => return Err(TunnResult::Err(WireGuardError::UnderLoad)),
+                    None => return Err(TunnResult::Err(Error::UnderLoad)),
                     Some(addr) => addr,
                 };
 

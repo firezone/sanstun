@@ -2,7 +2,7 @@
 //! tolerates reordering but rejects duplicates and stale packets.
 
 use crate::harness::{ipv4_packet, Outcome as _, Peer::A, Peer::B, Sim, REPLAY_WINDOW};
-use sanstun::WireGuardError;
+use sanstun::Error;
 
 #[test]
 fn replayed_data_packet_is_rejected() {
@@ -12,7 +12,7 @@ fn replayed_data_packet_is_rejected() {
     sim.deliver(B, &datagram).expect_one_ip();
     let error = sim.deliver(B, &datagram).expect_err();
 
-    assert!(matches!(error, WireGuardError::DuplicateCounter));
+    assert!(matches!(error, Error::DuplicateCounter));
 }
 
 #[test]
@@ -27,7 +27,7 @@ fn reordered_packets_within_the_window_are_accepted() {
     }
 
     let error = sim.deliver(B, &datagrams[1]).expect_err();
-    assert!(matches!(error, WireGuardError::DuplicateCounter));
+    assert!(matches!(error, Error::DuplicateCounter));
 }
 
 #[test]
@@ -44,7 +44,7 @@ fn packets_behind_the_replay_window_are_rejected() {
     sim.deliver(B, &last).expect_one_ip();
     let error = sim.deliver(B, &first).expect_err();
 
-    assert!(matches!(error, WireGuardError::InvalidCounter));
+    assert!(matches!(error, Error::InvalidCounter));
 }
 
 /// A large jump in counters slides the window forward: everything at or
@@ -63,12 +63,12 @@ fn counter_jump_slides_the_window() {
     sim.deliver(B, &datagrams[3 * W]).expect_one_ip();
 
     let error = sim.deliver(B, &datagrams[W]).expect_err();
-    assert!(matches!(error, WireGuardError::InvalidCounter));
+    assert!(matches!(error, Error::InvalidCounter));
 
     // The oldest packet still inside the window decrypts despite the jump ...
     sim.deliver(B, &datagrams[2 * W + 1]).expect_one_ip();
 
     // ... but only once.
     let error = sim.deliver(B, &datagrams[2 * W + 1]).expect_err();
-    assert!(matches!(error, WireGuardError::DuplicateCounter));
+    assert!(matches!(error, Error::DuplicateCounter));
 }
