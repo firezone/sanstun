@@ -1,6 +1,6 @@
 use super::handshake::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, b2s_mac_24};
 use crate::handshake::{LABEL_COOKIE, LABEL_MAC1};
-use crate::{Error, HandshakeInit, HandshakeResponse, Packet, PublicKey, TunnResult, Tunnel};
+use crate::{Error, HandshakeInit, HandshakeResponse, Packet, PublicKey, Tunnel, TunnelResult};
 
 use std::net::IpAddr;
 use std::time::Instant;
@@ -155,7 +155,7 @@ impl RateLimiter {
         src: &'a [u8],
         dst: &'b mut [u8],
         now: Instant,
-    ) -> Result<Packet<'a>, TunnResult<'b>> {
+    ) -> Result<Packet<'a>, TunnelResult<'b>> {
         let packet = Tunnel::parse_incoming_packet(src)?;
 
         // Verify and rate limit handshake messages only
@@ -167,7 +167,7 @@ impl RateLimiter {
 
             let computed_mac1 = b2s_keyed_mac_16(&self.mac1_key, msg);
             if !constant_time_eq(&computed_mac1[..16], mac1) {
-                return Err(TunnResult::Err(Error::InvalidMac));
+                return Err(TunnelResult::Err(Error::InvalidMac));
             }
 
             // Advance the per-second window before checking it. Resetting it
@@ -177,7 +177,7 @@ impl RateLimiter {
 
             if self.is_under_load() {
                 let addr = match src_addr {
-                    None => return Err(TunnResult::Err(Error::UnderLoad)),
+                    None => return Err(TunnelResult::Err(Error::UnderLoad)),
                     Some(addr) => addr,
                 };
 
@@ -188,8 +188,8 @@ impl RateLimiter {
                 if !constant_time_eq(&computed_mac2[..16], mac2) {
                     let cookie_packet = self
                         .format_cookie_reply(sender_idx, cookie, mac1, dst)
-                        .map_err(TunnResult::Err)?;
-                    return Err(TunnResult::WriteToNetwork(cookie_packet));
+                        .map_err(TunnelResult::Err)?;
+                    return Err(TunnelResult::WriteToNetwork(cookie_packet));
                 }
             }
         }

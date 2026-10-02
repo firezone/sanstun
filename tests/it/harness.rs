@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use sanstun::Error;
 use sanstun::RateLimiter;
-use sanstun::{Index, Packet, TunnResult, Tunnel};
+use sanstun::{Index, Packet, Tunnel, TunnelResult};
 use sanstun::{PublicKey, StaticSecret};
 
 // Protocol constants from the WireGuard whitepaper (§6.1, table on p. 14).
@@ -424,12 +424,12 @@ impl Sim {
         let now = self.now;
         let mut buf = vec![0u8; BUF];
         let outgoing = match self.node_mut(peer).tunn.update_timers_at(&mut buf, now) {
-            TunnResult::Done => None,
-            TunnResult::Err(e) => {
+            TunnelResult::Done => None,
+            TunnelResult::Err(e) => {
                 self.node_mut(peer).errors.push(e);
                 None
             }
-            TunnResult::WriteToNetwork(packet) => Some(packet.to_vec()),
+            TunnelResult::WriteToNetwork(packet) => Some(packet.to_vec()),
             other => panic!("unexpected result from update_timers_at: {other:?}"),
         };
 
@@ -492,11 +492,11 @@ impl Sim {
 
         let mut buf = vec![0u8; BUF];
         match node.tunn.decapsulate_at(src, datagram, &mut buf, now) {
-            TunnResult::Done => {}
-            TunnResult::Err(e) => outs.push(Out::Err(e)),
-            TunnResult::WriteToTunnelV4(packet, _) => outs.push(Out::Ip(packet.to_vec())),
-            TunnResult::WriteToTunnelV6(packet, _) => outs.push(Out::Ip(packet.to_vec())),
-            TunnResult::WriteToNetwork(packet) => {
+            TunnelResult::Done => {}
+            TunnelResult::Err(e) => outs.push(Out::Err(e)),
+            TunnelResult::WriteToTunnelV4(packet, _) => outs.push(Out::Ip(packet.to_vec())),
+            TunnelResult::WriteToTunnelV6(packet, _) => outs.push(Out::Ip(packet.to_vec())),
+            TunnelResult::WriteToNetwork(packet) => {
                 outs.push(Out::Net(packet.to_vec()));
             }
         }
@@ -528,8 +528,8 @@ impl Sim {
             .tunn
             .format_handshake_initiation_at(&mut buf, force, now)
         {
-            TunnResult::WriteToNetwork(packet) => Some(packet.to_vec()),
-            TunnResult::Done => None,
+            TunnelResult::WriteToNetwork(packet) => Some(packet.to_vec()),
+            TunnelResult::Done => None,
             other => panic!("unexpected result from format_handshake_initiation_at: {other:?}"),
         }
     }
