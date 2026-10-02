@@ -299,7 +299,6 @@ pub(crate) struct Handshake {
     cookies: Cookies,
     /// The timestamp of the last handshake we received
     last_handshake_timestamp: Tai64N,
-    // TODO: make TimeStamper a singleton
     stamper: TimeStamper,
 }
 
@@ -466,7 +465,7 @@ impl Handshake {
         matches!(self.state, HandshakeState::InitSent(_))
     }
 
-    pub(crate) fn timer(&self) -> Option<(Instant, Index)> {
+    pub(crate) fn in_flight_initiation(&self) -> Option<(Instant, Index)> {
         match self.state {
             HandshakeState::InitSent(HandshakeInitSentState {
                 time_sent,
