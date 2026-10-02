@@ -54,6 +54,15 @@ jobs:
           echo "AR_aarch64_linux_android=$bin/llvm-ar" >> "$GITHUB_ENV"
       - run: cargo clippy --all-targets ${{ matrix.target && format('--target {0}', matrix.target) || '' }}
 
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: msrv
+        run: echo "version=$(cargo +stable metadata --no-deps --format-version 1 | jq -r '.packages[0].rust_version')" >> "$GITHUB_OUTPUT"
+      - run: rustup toolchain install ${{ steps.msrv.outputs.version }} --profile minimal
+      - run: cargo +${{ steps.msrv.outputs.version }} check --all-targets
+
   rustfmt:
     runs-on: ubuntu-latest
     steps:
