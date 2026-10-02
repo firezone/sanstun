@@ -123,15 +123,6 @@ struct WriteCookie {
     received_at: Instant,
 }
 
-/// Rejects the all-zero result of a DH with a low-order public key, as WireGuard's `mix_dh` does.
-fn contributory(shared: SharedSecret) -> Result<SharedSecret, Error> {
-    if !shared.was_contributory() {
-        return Err(Error::LowOrderPoint);
-    }
-
-    Ok(shared)
-}
-
 /// The responder's handshake state after decrypting the initiator's static public key.
 pub(crate) struct InitiatorStatic {
     chaining_key: [u8; KEY_LEN],
@@ -642,27 +633,21 @@ impl Handshake {
     }
 }
 
+/// Rejects the all-zero result of a DH with a low-order public key, as WireGuard's `mix_dh` does.
+fn contributory(shared: SharedSecret) -> Result<SharedSecret, Error> {
+    if !shared.was_contributory() {
+        return Err(Error::LowOrderPoint);
+    }
+
+    Ok(shared)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{Ingress, Packet, Received};
     use rand::SeedableRng as _;
     use std::net::{Ipv4Addr, SocketAddr};
-
-    fn handshake(own: u8, peer: u8, now: Instant) -> Handshake {
-        let static_private = StaticSecret::from([own; 32]);
-
-        Handshake::new(
-            static_private.clone(),
-            PublicKey::from(&static_private),
-            PublicKey::from(&StaticSecret::from([peer; 32])),
-            Index::new_local(own.into()),
-            None,
-            now,
-            Duration::from_secs(1_700_000_000),
-        )
-        .unwrap()
-    }
 
     #[test]
     fn handshake_initiation_with_low_order_ephemeral_is_rejected() {
@@ -711,5 +696,20 @@ mod tests {
         let received = initiator.receive_handshake_response(response, now);
 
         assert!(matches!(received, Err(Error::LowOrderPoint)));
+    }
+
+    fn handshake(own: u8, peer: u8, now: Instant) -> Handshake {
+        let static_private = StaticSecret::from([own; 32]);
+
+        Handshake::new(
+            static_private.clone(),
+            PublicKey::from(&static_private),
+            PublicKey::from(&StaticSecret::from([peer; 32])),
+            Index::new_local(own.into()),
+            None,
+            now,
+            Duration::from_secs(1_700_000_000),
+        )
+        .unwrap()
     }
 }
