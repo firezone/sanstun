@@ -493,8 +493,7 @@ impl Sim {
         match node.tunn.decapsulate_at(src, datagram, &mut buf, now) {
             Ok(TunnelResult::Done) => {}
             Err(e) => outs.push(Out::Err(e)),
-            Ok(TunnelResult::WriteToTunnelV4(packet, _)) => outs.push(Out::Ip(packet.to_vec())),
-            Ok(TunnelResult::WriteToTunnelV6(packet, _)) => outs.push(Out::Ip(packet.to_vec())),
+            Ok(TunnelResult::WriteToTunnel(packet)) => outs.push(Out::Ip(packet.to_vec())),
             Ok(TunnelResult::WriteToNetwork(packet)) => {
                 outs.push(Out::Net(packet.to_vec()));
             }
