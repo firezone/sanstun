@@ -1,0 +1,6 @@
+[settings]
+minimum_release_age = "7d"
+
+[tools]
+actionlint = "1.7.12"
+shellcheck = "0.11.0"
