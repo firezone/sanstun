@@ -67,8 +67,8 @@ impl RateLimiter {
         }
     }
 
-    /// Reset packet count (ideally should be called with a period of 1 second)
-    pub(crate) fn reset_count(&self, current_time: Instant) {
+    /// Reset packet count once `RESET_PERIOD` has passed since the last reset
+    fn reset_count(&self, current_time: Instant) {
         // The rate limiter is not very accurate, but at the scale we care about it doesn't matter much
         let mut last_reset_time = self.last_reset.lock();
         if current_time.duration_since(*last_reset_time).as_secs() >= RESET_PERIOD {

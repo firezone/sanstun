@@ -252,7 +252,7 @@ impl Tunnel {
             ),
             sessions: Default::default(),
             current: Default::default(),
-            timers: Timers::new(persistent_keepalive, rate_limiter.is_none(), now),
+            timers: Timers::new(persistent_keepalive, now),
 
             rate_limiter: rate_limiter.unwrap_or_else(|| {
                 Arc::new(RateLimiter::new(

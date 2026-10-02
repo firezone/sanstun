@@ -63,8 +63,6 @@ pub(crate) struct Timers {
     /// If `Some`, the new-handshake deadline is derived from it on demand.
     first_data_sent_without_reply: Option<Instant>,
     persistent_keepalive: usize,
-    /// Should this timer call reset rr function (if not a shared rr instance)
-    pub(super) should_reset_rr: bool,
     /// When we should sent a scheduled handshake.
     send_handshake_at: Option<Instant>,
 
@@ -74,14 +72,13 @@ pub(crate) struct Timers {
 }
 
 impl Timers {
-    pub(super) fn new(persistent_keepalive: Option<u16>, reset_rr: bool, now: Instant) -> Timers {
+    pub(super) fn new(persistent_keepalive: Option<u16>, now: Instant) -> Timers {
         Timers {
             is_initiator: false,
             timers: [now; TimerName::Top as usize],
             last_data_received_without_reply: Default::default(),
             first_data_sent_without_reply: Default::default(),
             persistent_keepalive: usize::from(persistent_keepalive.unwrap_or(0)),
-            should_reset_rr: reset_rr,
             send_handshake_at: None,
             rekey_attempt_time: REKEY_ATTEMPT_TIME,
             keepalive_timeout: KEEPALIVE_TIMEOUT,
@@ -362,10 +359,6 @@ impl Tunnel {
 
         let mut handshake_initiation_required = false;
         let mut keepalive_required = false;
-
-        if self.timers.should_reset_rr {
-            self.rate_limiter.reset_count(now);
-        }
 
         // Both peers derive a session's lifetime from the same handshake, so the remote
         // discards it at the same moment we do. A session that carried data was due a
