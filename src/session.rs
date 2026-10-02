@@ -70,6 +70,11 @@ impl Session {
         time <= self.established_at + SHOULD_NOT_USE_AFTER_TIME
     }
 
+    /// Whether `key` is this session's receiving key.
+    pub(crate) fn receives_with(&self, key: &Arc<Key>) -> bool {
+        Arc::ptr_eq(&self.receiver, key)
+    }
+
     /// Assigns the next counter to a data message, deferring writing and encrypting it.
     pub(super) fn prepare_packet_data(&mut self) -> PendingEncapsulate {
         let counter = self.sending_key_counter;
@@ -332,7 +337,7 @@ impl PendingDecapsulate {
             counter: self.counter,
             plaintext_len,
             buffer: dst,
-            _key: self.key,
+            key: self.key,
         }
     }
 
@@ -370,10 +375,13 @@ pub struct Decrypted<B> {
     pub(crate) counter: u64,
     pub(crate) plaintext_len: Result<usize, Error>,
     pub(crate) buffer: B,
-    /// Released when the [`Tunnel`](crate::Tunnel) accepts the message, so that decrypting a message
-    /// leaves the reference count of the key to the thread that owns the
+    /// Identifies the session the message may be committed to: its index alone is reused once
+    /// the session part wraps around.
+    ///
+    /// Released when the [`Tunnel`](crate::Tunnel) handles the message, so that decrypting a
+    /// message leaves the reference count of the key to the thread that owns the
     /// [`Tunnel`](crate::Tunnel).
-    pub(crate) _key: Arc<Key>,
+    pub(crate) key: Arc<Key>,
 }
 
 /// A session key on a cache line of its own, apart from the reference count of its [`Arc`].
