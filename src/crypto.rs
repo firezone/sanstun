@@ -2,7 +2,7 @@ use crate::errors::Error;
 use blake2::digest::{FixedOutput, KeyInit};
 use blake2::{Blake2s256, Blake2sMac, Digest};
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
-use typenum::{U16, U24};
+use typenum::U16;
 
 type HmacBlake2s = hmac::SimpleHmac<Blake2s256>;
 
@@ -45,12 +45,6 @@ pub(crate) fn b2s_keyed_mac_16_2(key: &[u8], data1: &[u8], data2: &[u8]) -> [u8;
     let mut hmac = Blake2sMac::<U16>::new_from_slice(key).unwrap();
     blake2::digest::Update::update(&mut hmac, data1);
     blake2::digest::Update::update(&mut hmac, data2);
-    hmac.finalize_fixed().into()
-}
-
-pub(crate) fn b2s_mac_24(key: &[u8], data1: &[u8]) -> [u8; 24] {
-    let mut hmac = Blake2sMac::<U24>::new_from_slice(key).unwrap();
-    blake2::digest::Update::update(&mut hmac, data1);
     hmac.finalize_fixed().into()
 }
 

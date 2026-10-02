@@ -1,4 +1,4 @@
-use crate::crypto::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, b2s_mac_24};
+use crate::crypto::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2};
 use crate::handshake::{LABEL_COOKIE, LABEL_MAC1, decrypt_initiator_static};
 use crate::{
     COOKIE_REPLY, COOKIE_REPLY_SZ, CookieReplyMessage, DATA, DATA_OVERHEAD_SZ, Error,
@@ -30,26 +30,14 @@ type Cookie = [u8; COOKIE_SIZE];
 /// [`Ingress::receive`] verifies the MACs of handshake messages and applies the cookie mechanism
 /// under load before any expensive work, and is the only way to obtain a [`Packet`] for
 /// [`Tunnel::decapsulate`](crate::Tunnel::decapsulate).
-///
-/// There are two places where WireGuard requires "randomness" for cookies
-/// * The 24 byte nonce in the cookie massage - here the only goal is to avoid nonce reuse
-/// * A secret value that changes every two minutes
-///
-/// Because the main goal of the cookie is simply for a party to prove ownership of an IP address
-/// we can relax the randomness definition a bit, in order to avoid locking, because using less
-/// resources is the main goal of any DoS prevention mechanism.
-/// In order to avoid locking and calls to rand we derive pseudo random values using the AEAD and
-/// some counters.
 pub struct Ingress {
     static_private: StaticSecret,
     static_public: PublicKey,
-    /// The key we use to derive the nonce
-    nonce_key: [u8; 32],
     /// The key we use to derive the cookie
     secret_key: [u8; 16],
     start_time: Instant,
-    /// A single 64 bit counter (should suffice for many years)
-    nonce_ctr: u64,
+    /// Draws the nonces of cookie replies
+    rng: StdRng,
     mac1_key: [u8; 32],
     cookie_key: Key,
     limit: u64,
@@ -73,10 +61,9 @@ impl Ingress {
         Ingress {
             static_private,
             static_public,
-            nonce_key: rng.random(),
             secret_key: rng.random(),
             start_time: now,
-            nonce_ctr: 0,
+            rng,
             mac1_key: b2s_hash(LABEL_MAC1, static_public.as_bytes()),
             cookie_key: b2s_hash(LABEL_COOKIE, static_public.as_bytes()).into(),
             limit,
@@ -226,10 +213,7 @@ impl Ingress {
     }
 
     fn nonce(&mut self) -> [u8; COOKIE_NONCE_SIZE] {
-        let ctr = self.nonce_ctr;
-        self.nonce_ctr += 1;
-
-        b2s_mac_24(&self.nonce_key, &ctr.to_le_bytes())
+        self.rng.random()
     }
 
     fn is_under_load(&mut self) -> bool {
