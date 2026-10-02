@@ -1,6 +1,6 @@
 use super::{
     index::Index,
-    timers::{REJECT_AFTER_TIME, SHOULD_NOT_USE_AFTER_TIME},
+    timers::{REJECT_AFTER_MESSAGES, REJECT_AFTER_TIME, SHOULD_NOT_USE_AFTER_TIME},
 };
 use crate::crypto::nonce;
 use crate::errors::Error;
@@ -75,8 +75,24 @@ impl Session {
         Arc::ptr_eq(&self.receiver, key)
     }
 
+    /// The number of messages sent with this session's sending key.
+    pub(crate) fn sent_messages(&self) -> u64 {
+        self.sending_key_counter
+    }
+
+    /// Whether the sending key may protect another message.
+    pub(crate) fn can_send(&self) -> bool {
+        self.sending_key_counter < REJECT_AFTER_MESSAGES
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_sent_messages(&mut self, sent: u64) {
+        self.sending_key_counter = sent;
+    }
+
     /// Assigns the next counter to a data message, deferring writing and encrypting it.
     pub(super) fn prepare_packet_data(&mut self) -> PendingEncapsulate {
+        debug_assert!(self.can_send(), "the sending key is exhausted");
         let counter = self.sending_key_counter;
         self.sending_key_counter += 1;
 

@@ -1,4 +1,5 @@
 use crate::errors::Error;
+use crate::timers::REJECT_AFTER_MESSAGES;
 
 // Receiving buffer constants
 const WORD_SIZE: u64 = 64;
@@ -59,11 +60,14 @@ impl ReceivingKeyCounterValidator {
     /// Returns true if the counter was not yet received, and is not too far back
     #[inline(always)]
     pub(crate) fn will_accept(&self, counter: u64) -> Result<(), Error> {
+        if counter >= REJECT_AFTER_MESSAGES {
+            return Err(Error::InvalidCounter);
+        }
         if counter >= self.next {
             // As long as the counter is growing no replay took place for sure
             return Ok(());
         }
-        if counter + N_BITS < self.next {
+        if self.next - counter > N_BITS {
             // Drop if too far back
             return Err(Error::InvalidCounter);
         }
@@ -78,7 +82,10 @@ impl ReceivingKeyCounterValidator {
     /// decryption something changed)
     #[inline(always)]
     pub(crate) fn mark_did_receive(&mut self, counter: u64) -> Result<(), Error> {
-        if counter + N_BITS < self.next {
+        if counter >= REJECT_AFTER_MESSAGES {
+            return Err(Error::InvalidCounter);
+        }
+        if self.next.saturating_sub(counter) > N_BITS {
             // Drop if too far back
             return Err(Error::InvalidCounter);
         }
@@ -124,5 +131,71 @@ impl ReceivingKeyCounterValidator {
         self.set_bit(counter);
         self.next = counter + 1;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counters_at_or_above_the_limit_are_rejected() {
+        let mut window = ReceivingKeyCounterValidator::default();
+
+        for counter in [REJECT_AFTER_MESSAGES, u64::MAX - N_BITS, u64::MAX] {
+            assert!(matches!(
+                window.will_accept(counter),
+                Err(Error::InvalidCounter)
+            ));
+            assert!(matches!(
+                window.mark_did_receive(counter),
+                Err(Error::InvalidCounter)
+            ));
+        }
+
+        assert_eq!(window.next, 0);
+        assert!(window.will_accept(0).is_ok());
+    }
+
+    #[test]
+    fn last_counter_below_the_limit_is_accepted_once() {
+        let mut window = ReceivingKeyCounterValidator::default();
+        let last = REJECT_AFTER_MESSAGES - 1;
+
+        assert!(window.will_accept(last).is_ok());
+        assert!(window.mark_did_receive(last).is_ok());
+        assert_eq!(window.next, REJECT_AFTER_MESSAGES);
+
+        assert!(matches!(
+            window.will_accept(last),
+            Err(Error::DuplicateCounter)
+        ));
+        assert!(matches!(
+            window.mark_did_receive(last),
+            Err(Error::DuplicateCounter)
+        ));
+        assert!(matches!(
+            window.will_accept(REJECT_AFTER_MESSAGES),
+            Err(Error::InvalidCounter)
+        ));
+    }
+
+    #[test]
+    fn window_near_the_limit_still_tracks_reordering() {
+        let mut window = ReceivingKeyCounterValidator::default();
+        let last = REJECT_AFTER_MESSAGES - 1;
+
+        window.mark_did_receive(last).unwrap();
+
+        let oldest = REJECT_AFTER_MESSAGES - N_BITS;
+        assert!(matches!(
+            window.will_accept(oldest - 1),
+            Err(Error::InvalidCounter)
+        ));
+        assert!(window.mark_did_receive(oldest).is_ok());
+        assert!(matches!(
+            window.mark_did_receive(oldest),
+            Err(Error::DuplicateCounter)
+        ));
     }
 }
