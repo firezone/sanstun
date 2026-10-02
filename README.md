@@ -7,7 +7,7 @@ This is a sans-IO, performance-orientation user-space implementation of the Wire
 - Fully sans-IO, including time and RNG seeds
 - No internal buffering
 - Multi-core friendly API: Encapsulating and decapsulating packets performs only the minimal book-keeping necessary.
-  The actual crypto operations can be deferred to different thread and parallelized when processing packets in batches.
+  The actual crypto operations can be deferred to other threads and thus parallelized when processing packets in batches.
 
 ## History
 
