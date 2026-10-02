@@ -242,7 +242,7 @@ impl Builder {
         };
         let rate_limiter = self
             .responder_under_load
-            .then(|| Arc::new(RateLimiter::new_at(&public_b, 0, start)));
+            .then(|| Arc::new(RateLimiter::new_at(&public_b, 0, [3; 32], start)));
         let b = Tunnel::new_at(
             secret_b,
             expected_by_b,

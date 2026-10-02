@@ -17,7 +17,7 @@ use crate::handshake::Handshake;
 use crate::timers::{TimerName, Timers};
 
 use rand::rngs::StdRng;
-use rand::SeedableRng;
+use rand::{RngExt, SeedableRng};
 
 use std::convert::{TryFrom, TryInto};
 use std::net::IpAddr;
@@ -206,7 +206,7 @@ impl Tunnel {
 
     /// Create a new tunnel using own private key and the peer public key
     ///
-    /// `rng_seed` must come from a cryptographically secure source because the ephemeral keys are derived from it.
+    /// `rng_seed` must come from a cryptographically secure source because key material is derived from it.
     #[expect(clippy::too_many_arguments, reason = "We don't care that much.")]
     pub fn new_at(
         static_private: StaticSecret,
@@ -221,6 +221,7 @@ impl Tunnel {
         unix: Duration,
     ) -> Self {
         let static_public = PublicKey::from(&static_private);
+        let mut rng = StdRng::from_seed(rng_seed);
 
         Tunnel {
             handshake: Handshake::new(
@@ -240,10 +241,11 @@ impl Tunnel {
                 Arc::new(RateLimiter::new_at(
                     &static_public,
                     PEER_HANDSHAKE_RATE_LIMIT,
+                    rng.random(),
                     now,
                 ))
             }),
-            rng: StdRng::from_seed(rng_seed),
+            rng,
         }
     }
 
