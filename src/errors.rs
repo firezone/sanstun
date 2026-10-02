@@ -13,7 +13,6 @@ pub enum Error {
     DuplicateCounter,
     InvalidPacket,
     NoCurrentSession,
-    ConnectionExpired,
     EmptyPlaintext,
 }
 
@@ -53,7 +52,6 @@ impl Display for Error {
                 write!(f, "failed to parse packet (too short / invalid type / etc)")
             }
             Error::NoCurrentSession => write!(f, "no active session"),
-            Error::ConnectionExpired => write!(f, "connection is expired"),
             Error::EmptyPlaintext => write!(
                 f,
                 "an empty data message is a keepalive; send it with `Tunnel::encapsulate_keepalive`"

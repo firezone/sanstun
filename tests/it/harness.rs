@@ -11,9 +11,7 @@ use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 use sanstun::Error;
-use sanstun::{
-    Committed, Decapsulated, Decrypted, Index, Packet, PendingDecapsulate, TimerAction, Tunnel,
-};
+use sanstun::{Committed, Decapsulated, Decrypted, Index, Packet, PendingDecapsulate, Tunnel};
 use sanstun::{Ingress, Received};
 use sanstun::{PublicKey, StaticSecret};
 
@@ -179,6 +177,7 @@ struct Node {
     addr: IpAddr,
     inbox: Vec<Vec<u8>>,
     errors: Vec<Error>,
+    expirations: usize,
     drop_outgoing: bool,
 }
 
@@ -293,6 +292,7 @@ impl Builder {
                     addr: "10.0.0.1".parse().unwrap(),
                     inbox: Vec::new(),
                     errors: Vec::new(),
+                    expirations: 0,
                     drop_outgoing: false,
                 },
                 Node {
@@ -301,6 +301,7 @@ impl Builder {
                     addr: "10.0.0.2".parse().unwrap(),
                     inbox: Vec::new(),
                     errors: Vec::new(),
+                    expirations: 0,
                     drop_outgoing: false,
                 },
             ],
@@ -376,6 +377,11 @@ impl Sim {
         &self.node(peer).errors
     }
 
+    /// How often `peer` emitted [`sanstun::Event::ConnectionExpired`].
+    pub fn expirations(&self, peer: Peer) -> usize {
+        self.node(peer).expirations
+    }
+
     pub fn take_inbox(&mut self, peer: Peer) -> Vec<Vec<u8>> {
         std::mem::take(&mut self.node_mut(peer).inbox)
     }
@@ -404,11 +410,11 @@ impl Sim {
     }
 
     /// Advance the virtual clock, driving both peers purely by the instants they
-    /// announce via `next_timer_update` and routing whatever they emit.
+    /// announce via `poll_timeout` and routing whatever they emit.
     ///
     /// Rather than polling on a fixed interval, we jump straight to the earliest
     /// instant either peer asked to be called back at. That asserts two things
-    /// about `next_timer_update` on every test that advances time.
+    /// about `poll_timeout` on every test that advances time.
     ///
     /// It is *complete*: a caller that only ever polls at the announced instants
     /// observes exactly the same behaviour as one polling once a second.
@@ -423,7 +429,7 @@ impl Sim {
         while self.now < end {
             let next = [Peer::A, Peer::B]
                 .into_iter()
-                .filter_map(|peer| self.tunn(peer).next_timer_update())
+                .filter_map(|peer| self.tunn(peer).poll_timeout())
                 .map(|(at, _reason)| at)
                 .min()
                 // Never move backwards: a deadline may have elapsed already.
@@ -452,23 +458,24 @@ impl Sim {
 
     fn poll(&mut self, peer: Peer) {
         let now = self.now;
-        let outgoing = match self.node_mut(peer).tunn.update_timers(now) {
-            Ok(None) => None,
-            Err(e) => {
-                self.node_mut(peer).errors.push(e);
-                None
-            }
-            Ok(Some(TimerAction::HandshakeInitiation(packet))) => Some(packet.to_vec()),
-            Ok(Some(TimerAction::KeepaliveDue(keepalive))) => Some(
-                self.node_mut(peer)
-                    .tunn
-                    .encapsulate_keepalive(keepalive, now)
-                    .expect("a keepalive is only due on a usable session")
-                    .to_vec(),
-            ),
-        };
+        let node = self.node_mut(peer);
+        let mut outgoing = Vec::new();
 
-        if let Some(datagram) = outgoing {
+        node.tunn.handle_timeout(now);
+        while let Some(event) = node.tunn.poll_event() {
+            match event {
+                sanstun::Event::HandshakeInitiation(packet) => outgoing.push(packet.to_vec()),
+                sanstun::Event::KeepaliveDue(keepalive) => outgoing.push(
+                    node.tunn
+                        .encapsulate_keepalive(keepalive, now)
+                        .expect("a keepalive is only due on a usable session")
+                        .to_vec(),
+                ),
+                sanstun::Event::ConnectionExpired => node.expirations += 1,
+            }
+        }
+
+        for datagram in outgoing {
             self.route(peer, datagram);
         }
     }

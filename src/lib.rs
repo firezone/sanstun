@@ -29,6 +29,7 @@ use crate::timers::{TimerName, Timers};
 use rand::SeedableRng;
 use rand::rngs::StdRng;
 
+use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 /// What the caller needs to do after [`Tunnel::decapsulate`].
@@ -44,13 +45,17 @@ pub enum Decapsulated {
     Data(PendingDecapsulate),
 }
 
-/// What the caller needs to do after [`Tunnel::update_timers`].
+/// What the caller needs to do, as returned by [`Tunnel::poll_event`].
 #[derive(Debug)]
-pub enum TimerAction {
+pub enum Event {
     /// Send this handshake initiation to the peer.
     HandshakeInitiation(HandshakeInitiationMessage),
     /// A keepalive is due: send it with [`Tunnel::encapsulate_keepalive`].
     KeepaliveDue(Keepalive),
+    /// The connection expired and all session state was wiped.
+    ///
+    /// Emitted once per expiry, see [`Tunnel::is_expired`].
+    ConnectionExpired,
 }
 
 /// A keepalive to send with [`Tunnel::encapsulate_keepalive`], e.g. when probing a path.
@@ -77,6 +82,7 @@ pub struct Tunnel {
     timers: timers::Timers,
     /// Source of the ephemeral keys and the handshake jitter
     rng: StdRng,
+    events: VecDeque<Event>,
 }
 
 impl Tunnel {
@@ -114,6 +120,7 @@ impl Tunnel {
             sessions: Sessions::default(),
             timers: Timers::new(persistent_keepalive, now),
             rng: StdRng::from_seed(rng_seed),
+            events: VecDeque::new(),
         }
     }
 

@@ -132,7 +132,7 @@ fn rate_limited_tunnel_recovers_once_load_subsides() {
 fn rate_limit_resets_without_driving_timers() {
     let mut sim = flooded();
 
-    // Advance time *without* calling `update_timers`, so the only thing that
+    // Advance time *without* calling `handle_timeout`, so the only thing that
     // can clear the window is the lazy reset on the next received handshake.
     sim.now += secs(2);
 
