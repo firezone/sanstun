@@ -61,6 +61,9 @@ jobs:
       - id: msrv
         run: echo "version=$(cargo +stable metadata --no-deps --format-version 1 | jq -r '.packages[0].rust_version')" >> "$GITHUB_OUTPUT"
       - run: rustup toolchain install ${{ steps.msrv.outputs.version }} --profile minimal
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ steps.msrv.outputs.version }}
       - run: cargo +${{ steps.msrv.outputs.version }} check --all-targets
 
   rustfmt:
