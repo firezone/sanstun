@@ -27,25 +27,25 @@ fn scheduled_handshake_honours_next_timer_update() {
     // Nothing is due before the deadline.
     assert!(matches!(
         tunn.update_timers_at(&mut buf, deadline - Duration::from_millis(1)),
-        TunnelResult::Done
+        Ok(TunnelResult::Done)
     ));
 
     // At the deadline, the handshake is only *scheduled* ...
     assert!(matches!(
         tunn.update_timers_at(&mut buf, deadline),
-        TunnelResult::Done
+        Ok(TunnelResult::Done)
     ));
     let (wake, _reason) = tunn.next_timer_update().expect("a scheduled handshake");
     assert!(wake >= deadline && wake <= deadline + MAX_JITTER);
 
     // ... and emitted exactly once when the announced instant is polled.
-    let TunnelResult::WriteToNetwork(packet) = tunn.update_timers_at(&mut buf, wake) else {
+    let Ok(TunnelResult::WriteToNetwork(packet)) = tunn.update_timers_at(&mut buf, wake) else {
         panic!("expected the scheduled handshake initiation");
     };
     assert_eq!(classify(packet), Kind::Init);
     assert!(matches!(
         tunn.update_timers_at(&mut buf, wake),
-        TunnelResult::Done
+        Ok(TunnelResult::Done)
     ));
 }
 
@@ -65,9 +65,9 @@ fn next_timer_update_predicts_the_passive_keepalive() {
     let mut buf = [0u8; 256];
     assert!(matches!(
         tunn.update_timers_at(&mut buf, wake - Duration::from_millis(1)),
-        TunnelResult::Done
+        Ok(TunnelResult::Done)
     ));
-    let TunnelResult::WriteToNetwork(packet) = tunn.update_timers_at(&mut buf, wake) else {
+    let Ok(TunnelResult::WriteToNetwork(packet)) = tunn.update_timers_at(&mut buf, wake) else {
         panic!("expected the keepalive");
     };
     assert_eq!(packet.len(), KEEPALIVE_SIZE);
@@ -115,10 +115,7 @@ fn a_single_late_poll_observes_the_expiry() {
     let mut buf = [0u8; 256];
     let result = sim.tunn_mut(A).update_timers_at(&mut buf, late);
 
-    assert!(matches!(
-        result,
-        TunnelResult::Err(Error::ConnectionExpired)
-    ));
+    assert!(matches!(result, Err(Error::ConnectionExpired)));
     assert!(sim.tunn(A).is_expired());
 }
 
@@ -150,7 +147,7 @@ fn different_seeds_produce_different_jitter() {
         let tunn = sim.tunn_mut(A);
         assert!(matches!(
             tunn.update_timers_at(&mut buf, retry_due),
-            sanstun::TunnelResult::Done
+            Ok(sanstun::TunnelResult::Done)
         ));
 
         tunn.next_timer_update()

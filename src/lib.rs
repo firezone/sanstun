@@ -44,16 +44,9 @@ const N_SESSIONS: u8 = 8;
 #[derive(Debug)]
 pub enum TunnelResult<'a> {
     Done,
-    Err(Error),
     WriteToNetwork(&'a mut [u8]),
     WriteToTunnelV4(&'a mut [u8], Ipv4Addr),
     WriteToTunnelV6(&'a mut [u8], Ipv6Addr),
-}
-
-impl<'a> From<Error> for TunnelResult<'a> {
-    fn from(err: Error) -> TunnelResult<'a> {
-        TunnelResult::Err(err)
-    }
 }
 
 /// Tunnel represents a point-to-point WireGuard connection
@@ -272,19 +265,17 @@ impl Tunnel {
         datagram: &[u8],
         dst: &'a mut [u8],
         now: Instant,
-    ) -> TunnelResult<'a> {
+    ) -> Result<TunnelResult<'a>, Error> {
         let mut cookie = [0u8; COOKIE_REPLY_SZ];
-        let packet = match self
+        let verified = self
             .rate_limiter
-            .verify_packet_at(src_addr, datagram, &mut cookie, now)
-        {
+            .verify_packet_at(src_addr, datagram, &mut cookie, now)?;
+        let packet = match verified {
             Ok(packet) => packet,
-            Err(TunnelResult::WriteToNetwork(cookie)) => {
+            Err(cookie) => {
                 dst[..cookie.len()].copy_from_slice(cookie);
-                return TunnelResult::WriteToNetwork(&mut dst[..cookie.len()]);
+                return Ok(TunnelResult::WriteToNetwork(&mut dst[..cookie.len()]));
             }
-            Err(TunnelResult::Err(e)) => return TunnelResult::Err(e),
-            _ => unreachable!(),
         };
 
         self.handle_verified_packet(packet, dst, now)
@@ -295,14 +286,13 @@ impl Tunnel {
         packet: Packet,
         dst: &'a mut [u8],
         now: Instant,
-    ) -> TunnelResult<'a> {
+    ) -> Result<TunnelResult<'a>, Error> {
         match packet {
             Packet::HandshakeInit(p) => self.handle_handshake_init(p, dst, now),
             Packet::HandshakeResponse(p) => self.handle_handshake_response(p, dst, now),
             Packet::PacketCookieReply(p) => self.handle_cookie_reply(p, now),
             Packet::PacketData(p) => self.handle_data(p, dst, now),
         }
-        .unwrap_or_else(TunnelResult::from)
     }
 
     fn handle_handshake_init<'a>(
@@ -424,7 +414,7 @@ impl Tunnel {
 
         self.timer_tick(TimerName::TimeLastPacketReceived, now);
 
-        Ok(self.validate_decapsulated_packet(decapsulated_packet, now))
+        self.validate_decapsulated_packet(decapsulated_packet, now)
     }
 
     /// Formats a new handshake initiation message and store it in dst. If force_resend is true will send
@@ -434,9 +424,9 @@ impl Tunnel {
         dst: &'a mut [u8],
         force_resend: bool,
         now: Instant,
-    ) -> TunnelResult<'a> {
+    ) -> Result<TunnelResult<'a>, Error> {
         if self.handshake.is_in_progress() && !force_resend {
-            return TunnelResult::Done;
+            return Ok(TunnelResult::Done);
         }
 
         if self.handshake.is_expired() {
@@ -445,18 +435,16 @@ impl Tunnel {
 
         let starting_new_handshake = !self.handshake.is_in_progress();
 
-        match self.handshake.format_handshake_initiation(dst, now) {
-            Ok((packet, local_idx)) => {
-                tracing::debug!(%local_idx, "Sending handshake_initiation");
+        let (packet, local_idx) = self.handshake.format_handshake_initiation(dst, now)?;
 
-                if starting_new_handshake {
-                    self.timer_tick(TimerName::TimeLastHandshakeStarted, now);
-                }
-                self.timer_tick(TimerName::TimeLastPacketSent, now);
-                TunnelResult::WriteToNetwork(packet)
-            }
-            Err(e) => TunnelResult::Err(e),
+        tracing::debug!(%local_idx, "Sending handshake_initiation");
+
+        if starting_new_handshake {
+            self.timer_tick(TimerName::TimeLastHandshakeStarted, now);
         }
+        self.timer_tick(TimerName::TimeLastPacketSent, now);
+
+        Ok(TunnelResult::WriteToNetwork(packet))
     }
 
     /// Check if an IP packet is v4 or v6, truncate to the length indicated by the length field
@@ -465,9 +453,9 @@ impl Tunnel {
         &mut self,
         packet: &'a mut [u8],
         now: Instant,
-    ) -> TunnelResult<'a> {
+    ) -> Result<TunnelResult<'a>, Error> {
         let (computed_len, src_ip_address) = match packet.len() {
-            0 => return TunnelResult::Done, // This is keepalive, and not an error
+            0 => return Ok(TunnelResult::Done), // This is keepalive, and not an error
             _ if packet[0] >> 4 == 4 && packet.len() >= IPV4_MIN_HEADER_SIZE => {
                 let len_bytes: [u8; IP_LEN_SZ] = packet[IPV4_LEN_OFF..IPV4_LEN_OFF + IP_LEN_SZ]
                     .try_into()
@@ -494,18 +482,18 @@ impl Tunnel {
                     IpAddr::from(addr_bytes),
                 )
             }
-            _ => return TunnelResult::Err(Error::InvalidPacket),
+            _ => return Err(Error::InvalidPacket),
         };
 
         if computed_len > packet.len() {
-            return TunnelResult::Err(Error::InvalidPacket);
+            return Err(Error::InvalidPacket);
         }
 
         self.timer_tick(TimerName::TimeLastDataPacketReceived, now);
 
-        match src_ip_address {
+        Ok(match src_ip_address {
             IpAddr::V4(addr) => TunnelResult::WriteToTunnelV4(&mut packet[..computed_len], addr),
             IpAddr::V6(addr) => TunnelResult::WriteToTunnelV6(&mut packet[..computed_len], addr),
-        }
+        })
     }
 }
