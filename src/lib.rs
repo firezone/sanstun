@@ -82,6 +82,8 @@ impl Tunnel {
     /// Create a new tunnel using own private key and the peer public key
     ///
     /// `rng_seed` must come from a cryptographically secure source because key material is derived from it.
+    ///
+    /// Returns `Err(Error::LowOrderPoint)` if `peer_static_public` is a low-order point.
     #[expect(clippy::too_many_arguments, reason = "We don't care that much.")]
     pub fn new(
         static_private: StaticSecret,
@@ -93,10 +95,10 @@ impl Tunnel {
         now: Instant,
         unix_instant: Instant,
         unix: Duration,
-    ) -> Self {
+    ) -> Result<Self, Error> {
         let static_public = PublicKey::from(&static_private);
 
-        Tunnel {
+        Ok(Tunnel {
             handshake: Handshake::new(
                 static_private,
                 static_public,
@@ -105,12 +107,12 @@ impl Tunnel {
                 preshared_key,
                 unix_instant,
                 unix,
-            ),
+            )?,
             sessions: Sessions::default(),
             timers: Timers::new(persistent_keepalive, now),
             rng: StdRng::from_seed(rng_seed),
             events: VecDeque::new(),
-        }
+        })
     }
 
     pub fn remote_static_public(&self) -> PublicKey {
