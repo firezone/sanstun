@@ -54,20 +54,14 @@ fn next_timer_update_predicts_the_passive_keepalive() {
     let (wake, _reason) = tunn.next_timer_update().expect("a pending keepalive");
     assert_eq!(wake, received_at + KEEPALIVE_TIMEOUT);
 
-    let mut buf = [0u8; 256];
     assert!(matches!(
         tunn.update_timers(wake - Duration::from_millis(1)),
         Ok(None)
     ));
-    assert!(matches!(
-        tunn.update_timers(wake),
-        Ok(Some(TimerAction::KeepaliveDue))
-    ));
-    let packet = tunn
-        .prepare_encapsulate(0, wake)
-        .unwrap()
-        .encrypt(&[], &mut buf)
-        .unwrap();
+    let Ok(Some(TimerAction::KeepaliveDue(keepalive))) = tunn.update_timers(wake) else {
+        panic!("expected the keepalive");
+    };
+    let packet = tunn.encapsulate_keepalive(keepalive, wake).unwrap();
     assert_eq!(packet.len(), KEEPALIVE_SIZE);
 
     // The passive keepalive has been answered, so it must not re-arm; the only

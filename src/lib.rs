@@ -52,9 +52,8 @@ pub enum Decapsulated {
     CookieReply(CookieReplyMessage),
     /// The peer's cookie is stored for the next handshake; nothing to send.
     CookieReceived,
-    /// A keepalive is due: send an empty data message, encrypted through
-    /// [`Tunnel::prepare_encapsulate`].
-    KeepaliveDue,
+    /// A keepalive is due: send it with [`Tunnel::encapsulate_keepalive`].
+    KeepaliveDue(Keepalive),
     /// A data message whose decryption is deferred to the [`PendingDecapsulate`].
     Data(PendingDecapsulate),
 }
@@ -64,10 +63,14 @@ pub enum Decapsulated {
 pub enum TimerAction {
     /// Send this handshake initiation to the peer.
     HandshakeInitiation(HandshakeInitiationMessage),
-    /// A keepalive is due: send an empty data message, encrypted through
-    /// [`Tunnel::prepare_encapsulate`].
-    KeepaliveDue,
+    /// A keepalive is due: send it with [`Tunnel::encapsulate_keepalive`].
+    KeepaliveDue(Keepalive),
 }
+
+/// A keepalive to send with [`Tunnel::encapsulate_keepalive`], e.g. when probing a path.
+#[derive(Debug)]
+#[must_use = "a keepalive is due; send it with `Tunnel::encapsulate_keepalive`"]
+pub struct Keepalive;
 
 macro_rules! owned_message {
     ($(#[$doc:meta])* $name:ident, $len:expr) => {
@@ -111,6 +114,11 @@ owned_message!(
     /// A cookie reply to send to the network.
     CookieReplyMessage,
     COOKIE_REPLY_SZ
+);
+owned_message!(
+    /// A keepalive, i.e. an encrypted empty data message, to send to the network.
+    KeepaliveMessage,
+    DATA_OVERHEAD_SZ
 );
 
 /// An encrypted data message to send to the network, in the buffer it was written into.
@@ -401,6 +409,22 @@ impl Tunnel {
         Ok(pending)
     }
 
+    /// Encrypts a keepalive on the session that data messages are sent on.
+    ///
+    /// Returns `Err(Error::NoCurrentSession)` when there is no usable session; in that case **no**
+    /// handshake is initiated.
+    pub fn encapsulate_keepalive(
+        &mut self,
+        _keepalive: Keepalive,
+        now: Instant,
+    ) -> Result<KeepaliveMessage, Error> {
+        let mut message = [0u8; DATA_OVERHEAD_SZ];
+        self.prepare_encapsulate(0, now)?
+            .encrypt(&[], &mut message)?;
+
+        Ok(KeepaliveMessage(message))
+    }
+
     /// The session that data messages are sent on, if one is usable.
     fn sending_session(&mut self, now: Instant) -> Option<&mut session::Session> {
         let is_responder = self.timers.is_responder();
@@ -536,7 +560,7 @@ impl Tunnel {
         self.set_current_session(local_idx);
 
         // The keepalive confirms the session to the responder.
-        Ok(Decapsulated::KeepaliveDue)
+        Ok(Decapsulated::KeepaliveDue(Keepalive))
     }
 
     fn handle_cookie_reply(

@@ -6,7 +6,8 @@ use crate::harness::{
     ipv4_packet, Outcome as _, Peer::A, Peer::B, Sim, DATA_OVERHEAD, REPLAY_WINDOW,
 };
 use sanstun::{
-    Decapsulated, Decrypted, Error, Packet, PendingDecapsulate, PendingEncapsulate, Tunnel,
+    Decapsulated, Decrypted, Error, Keepalive, Packet, PendingDecapsulate, PendingEncapsulate,
+    Tunnel,
 };
 use std::time::Instant;
 
@@ -200,11 +201,44 @@ fn handshake_response_leaves_the_keepalive_to_the_caller() {
     let result = sim
         .tunn_mut(A)
         .decapsulate(None, Packet::parse(&response).unwrap(), now);
-    assert!(matches!(result, Ok(Decapsulated::KeepaliveDue)));
+    let Ok(Decapsulated::KeepaliveDue(keepalive)) = result else {
+        panic!("expected a due keepalive, got {result:?}");
+    };
 
-    let keepalive = sim.encapsulate(A, &[]);
+    let keepalive = sim
+        .tunn_mut(A)
+        .encapsulate_keepalive(keepalive, now)
+        .unwrap();
     sim.deliver(B, &keepalive).expect_consumed();
     sim.assert_connectivity();
+}
+
+#[test]
+fn self_created_keepalive_is_decapsulated_as_a_keepalive() {
+    let mut sim = Sim::connected();
+    let now = sim.now;
+
+    let keepalive = sim
+        .tunn_mut(A)
+        .encapsulate_keepalive(Keepalive, now)
+        .unwrap();
+    assert_eq!(keepalive.len(), DATA_OVERHEAD);
+
+    let decrypted = prepare_decrypt(sim.tunn_mut(B), &keepalive, now)
+        .unwrap()
+        .decrypt(&keepalive, vec![0u8; BUF]);
+    assert_eq!(commit(sim.tunn_mut(B), decrypted, now).unwrap(), None);
+}
+
+#[test]
+fn keepalive_without_a_session_fails() {
+    let mut sim = Sim::new();
+    let now = sim.now;
+
+    assert!(matches!(
+        sim.tunn_mut(A).encapsulate_keepalive(Keepalive, now),
+        Err(Error::NoCurrentSession)
+    ));
 }
 
 #[test]

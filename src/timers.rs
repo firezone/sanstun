@@ -1,5 +1,5 @@
 use super::errors::Error;
-use crate::{TimerAction, Tunnel};
+use crate::{Keepalive, TimerAction, Tunnel};
 use std::iter;
 use std::ops::{Index, IndexMut};
 
@@ -492,7 +492,7 @@ impl Tunnel {
         // A keepalive is only ever sent on an established session; there is no need to queue it
         // or start a handshake.
         if keepalive_required && self.sending_session(now).is_some() {
-            return Ok(Some(TimerAction::KeepaliveDue));
+            return Ok(Some(TimerAction::KeepaliveDue(Keepalive)));
         }
 
         Ok(None)

@@ -429,7 +429,13 @@ impl Sim {
                 None
             }
             Ok(Some(TimerAction::HandshakeInitiation(packet))) => Some(packet.to_vec()),
-            Ok(Some(TimerAction::KeepaliveDue)) => Some(self.encapsulate(peer, &[])),
+            Ok(Some(TimerAction::KeepaliveDue(keepalive))) => Some(
+                self.node_mut(peer)
+                    .tunn
+                    .encapsulate_keepalive(keepalive, now)
+                    .expect("a keepalive is only due on a usable session")
+                    .to_vec(),
+            ),
         };
 
         if let Some(datagram) = outgoing {
@@ -489,7 +495,6 @@ impl Sim {
         let node = self.node_mut(to);
         let mut outs = Vec::new();
 
-        let mut buf = vec![0u8; BUF];
         let result =
             Packet::parse(datagram).and_then(|packet| node.tunn.decapsulate(src, packet, now));
         match result {
@@ -505,11 +510,10 @@ impl Sim {
                     Err(e) => outs.push(Out::Err(e)),
                 }
             }
-            Ok(Decapsulated::KeepaliveDue) => {
+            Ok(Decapsulated::KeepaliveDue(keepalive)) => {
                 let keepalive = node
                     .tunn
-                    .prepare_encapsulate(0, now)
-                    .and_then(|pending| pending.encrypt(&[], &mut buf))
+                    .encapsulate_keepalive(keepalive, now)
                     .expect("a keepalive is only due on a usable session");
                 outs.push(Out::Net(keepalive.to_vec()));
             }
