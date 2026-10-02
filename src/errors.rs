@@ -40,7 +40,7 @@ impl Display for Error {
             ),
             Error::InvalidTai64nTimestamp => write!(f, "timestamp is less than 12bytes"),
             Error::WrongTai64nTimestamp => {
-                write!(f, "timestamp of packet is in the past; possible a replay?")
+                write!(f, "timestamp of packet is in the past; possibly a replay?")
             }
             Error::InvalidMac => {
                 write!(f, "MAC mismatch in packet")

@@ -1,4 +1,4 @@
-//! Simple implementation of the client-side of the WireGuard protocol.
+//! A sans-IO implementation of the WireGuard protocol, acting as both initiator and responder.
 
 mod errors;
 mod handshake;
