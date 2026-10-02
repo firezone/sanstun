@@ -199,6 +199,9 @@ fn the_announced_session_expiry_is_actionable() {
 /// built from the same inputs must emit byte-identical handshakes.
 #[test]
 fn identical_seeds_produce_identical_handshakes() {
+    assert_eq!(handshake([3; 32]), handshake([3; 32]));
+    assert_ne!(handshake([3; 32]).0, handshake([5; 32]).0);
+
     fn handshake(seed_a: [u8; 32]) -> (Vec<u8>, Vec<u8>) {
         let mut sim = Sim::builder()
             .static_keys([1; 32], [2; 32])
@@ -210,7 +213,4 @@ fn identical_seeds_produce_identical_handshakes() {
 
         (init, response)
     }
-
-    assert_eq!(handshake([3; 32]), handshake([3; 32]));
-    assert_ne!(handshake([3; 32]).0, handshake([5; 32]).0);
 }
