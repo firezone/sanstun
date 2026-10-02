@@ -1,5 +1,5 @@
 use super::errors::Error;
-use crate::{Tunnel, TunnelResult};
+use crate::Tunnel;
 use std::iter;
 use std::ops::{Index, IndexMut};
 
@@ -324,7 +324,7 @@ impl Tunnel {
         &mut self,
         dst: &'a mut [u8],
         now: Instant,
-    ) -> Result<TunnelResult<'a>, Error> {
+    ) -> Result<Option<&'a mut [u8]>, Error> {
         self.timers[TimeLastUpdate] = now;
 
         if let Some(scheduled_handshake_at) = self.timers.send_handshake_at {
@@ -344,7 +344,7 @@ impl Tunnel {
             // We have a handshake scheduled but the deadline is not expired yet.
             // Don't do anything to avoid repeated printing of logs.
             // The below logic would still evaluate that we need to send another handshake.
-            return Ok(TunnelResult::Done);
+            return Ok(None);
         }
 
         let mut handshake_initiation_required = false;
@@ -500,20 +500,20 @@ impl Tunnel {
 
             tracing::debug!(?jitter, "Scheduling new handshake");
 
-            return Ok(TunnelResult::Done);
+            return Ok(None);
         }
 
         if keepalive_required {
             // A keepalive is only ever sent on an established session, so encrypt the empty packet
             // in place; there is no need to queue it or start a handshake.
             return match self.encapsulate_data_at(&[], dst, now) {
-                Ok(len) => Ok(TunnelResult::WriteToNetwork(&mut dst[..len])),
-                Err(Error::NoCurrentSession) => Ok(TunnelResult::Done),
+                Ok(len) => Ok(Some(&mut dst[..len])),
+                Err(Error::NoCurrentSession) => Ok(None),
                 Err(e) => Err(e),
             };
         }
 
-        Ok(TunnelResult::Done)
+        Ok(None)
     }
 
     /// Returns the [`Instant`] at which [`Tunnel::update_timers_at`] next needs to

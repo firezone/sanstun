@@ -424,13 +424,12 @@ impl Sim {
         let now = self.now;
         let mut buf = vec![0u8; BUF];
         let outgoing = match self.node_mut(peer).tunn.update_timers_at(&mut buf, now) {
-            Ok(TunnelResult::Done) => None,
+            Ok(None) => None,
             Err(e) => {
                 self.node_mut(peer).errors.push(e);
                 None
             }
-            Ok(TunnelResult::WriteToNetwork(packet)) => Some(packet.to_vec()),
-            other => panic!("unexpected result from update_timers_at: {other:?}"),
+            Ok(Some(packet)) => Some(packet.to_vec()),
         };
 
         if let Some(datagram) = outgoing {
@@ -528,9 +527,8 @@ impl Sim {
             .tunn
             .format_handshake_initiation_at(&mut buf, force, now)
         {
-            Ok(TunnelResult::WriteToNetwork(packet)) => Some(packet.to_vec()),
-            Ok(TunnelResult::Done) => None,
-            other => panic!("unexpected result from format_handshake_initiation_at: {other:?}"),
+            Ok(packet) => packet.map(|p| p.to_vec()),
+            Err(e) => panic!("unexpected error from format_handshake_initiation_at: {e:?}"),
         }
     }
 

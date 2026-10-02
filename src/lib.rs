@@ -419,14 +419,16 @@ impl Tunnel {
 
     /// Formats a new handshake initiation message and store it in dst. If force_resend is true will send
     /// a new handshake, even if a handshake is already in progress (for example when a handshake times out)
+    ///
+    /// Returns `Ok(None)` if no handshake initiation needs to be sent.
     pub fn format_handshake_initiation_at<'a>(
         &mut self,
         dst: &'a mut [u8],
         force_resend: bool,
         now: Instant,
-    ) -> Result<TunnelResult<'a>, Error> {
+    ) -> Result<Option<&'a mut [u8]>, Error> {
         if self.handshake.is_in_progress() && !force_resend {
-            return Ok(TunnelResult::Done);
+            return Ok(None);
         }
 
         if self.handshake.is_expired() {
@@ -444,7 +446,7 @@ impl Tunnel {
         }
         self.timer_tick(TimerName::TimeLastPacketSent, now);
 
-        Ok(TunnelResult::WriteToNetwork(packet))
+        Ok(Some(packet))
     }
 
     /// Check if an IP packet is v4 or v6, truncate to the length indicated by the length field
