@@ -4,7 +4,7 @@ use super::{
     PacketData,
 };
 use crate::errors::Error;
-use crate::Ciphertext;
+use crate::DataMessage;
 use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, CHACHA20_POLY1305};
 use std::sync::Arc;
 use std::time::Instant;
@@ -273,7 +273,11 @@ impl PendingEncapsulate {
     /// Writes the data message encrypting `plaintext` to the start of `dst`.
     ///
     /// The data message is 32 bytes longer than `plaintext`.
-    pub fn encrypt<'a>(self, plaintext: &[u8], dst: &'a mut [u8]) -> Result<Ciphertext<'a>, Error> {
+    pub fn encrypt<'a>(
+        self,
+        plaintext: &[u8],
+        dst: &'a mut [u8],
+    ) -> Result<DataMessage<'a>, Error> {
         let len = DATA_OFFSET + plaintext.len() + AEAD_SIZE;
         let buf_len = dst.len();
 
@@ -304,7 +308,7 @@ impl PendingEncapsulate {
             .expect("plaintext of a data message is always within the AEAD's limits");
         tag.copy_from_slice(computed_tag.as_ref());
 
-        Ok(Ciphertext(message))
+        Ok(DataMessage(message))
     }
 }
 

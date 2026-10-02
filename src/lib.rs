@@ -113,17 +113,17 @@ owned_message!(
     COOKIE_REPLY_SZ
 );
 
-/// A datagram to send to the network.
+/// An encrypted data message to send to the network, in the buffer it was written into.
 #[derive(Debug)]
-pub struct Ciphertext<'a>(&'a mut [u8]);
+pub struct DataMessage<'a>(&'a mut [u8]);
 
-impl<'a> Ciphertext<'a> {
+impl<'a> DataMessage<'a> {
     pub fn into_inner(self) -> &'a mut [u8] {
         self.0
     }
 }
 
-impl Deref for Ciphertext<'_> {
+impl Deref for DataMessage<'_> {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
@@ -131,7 +131,7 @@ impl Deref for Ciphertext<'_> {
     }
 }
 
-impl DerefMut for Ciphertext<'_> {
+impl DerefMut for DataMessage<'_> {
     fn deref_mut(&mut self) -> &mut [u8] {
         self.0
     }
