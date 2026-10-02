@@ -120,14 +120,21 @@ impl<'a> Macs<'a> {
 
 /// A handshake initiation whose initiator's static public key we decrypted.
 #[derive(Debug)]
-#[non_exhaustive]
 pub struct HandshakeInit<'a> {
-    pub sender_idx: u32,
-    pub encrypted_timestamp: &'a [u8],
+    sender_idx: u32,
+    encrypted_timestamp: &'a [u8],
     initiator: InitiatorStatic,
 }
 
-impl HandshakeInit<'_> {
+impl<'a> HandshakeInit<'a> {
+    pub fn sender_idx(&self) -> u32 {
+        self.sender_idx
+    }
+
+    pub fn encrypted_timestamp(&self) -> &'a [u8] {
+        self.encrypted_timestamp
+    }
+
     /// The initiator's static public key, e.g. to look up the [`Tunnel`] it belongs to.
     pub fn peer_static_public(&self) -> PublicKey {
         self.initiator.peer_static_public
@@ -135,27 +142,66 @@ impl HandshakeInit<'_> {
 }
 
 #[derive(Debug)]
-#[non_exhaustive]
 pub struct HandshakeResponse<'a> {
-    pub sender_idx: u32,
-    pub receiver_idx: u32,
-    pub unencrypted_ephemeral: &'a [u8; 32],
-    pub encrypted_nothing: &'a [u8],
+    sender_idx: u32,
+    receiver_idx: u32,
+    unencrypted_ephemeral: &'a [u8; 32],
+    encrypted_nothing: &'a [u8],
+}
+
+impl<'a> HandshakeResponse<'a> {
+    pub fn sender_idx(&self) -> u32 {
+        self.sender_idx
+    }
+
+    pub fn receiver_idx(&self) -> u32 {
+        self.receiver_idx
+    }
+
+    pub fn unencrypted_ephemeral(&self) -> &'a [u8; 32] {
+        self.unencrypted_ephemeral
+    }
+
+    pub fn encrypted_nothing(&self) -> &'a [u8] {
+        self.encrypted_nothing
+    }
 }
 
 #[derive(Debug)]
-#[non_exhaustive]
 pub struct PacketCookieReply<'a> {
-    pub receiver_idx: u32,
-    pub nonce: &'a [u8],
-    pub encrypted_cookie: &'a [u8],
+    receiver_idx: u32,
+    nonce: &'a [u8],
+    encrypted_cookie: &'a [u8],
+}
+
+impl<'a> PacketCookieReply<'a> {
+    pub fn receiver_idx(&self) -> u32 {
+        self.receiver_idx
+    }
+
+    pub fn nonce(&self) -> &'a [u8] {
+        self.nonce
+    }
+
+    pub fn encrypted_cookie(&self) -> &'a [u8] {
+        self.encrypted_cookie
+    }
 }
 
 #[derive(Debug)]
-#[non_exhaustive]
 pub struct PacketData {
-    pub receiver_idx: u32,
-    pub counter: u64,
+    receiver_idx: u32,
+    counter: u64,
+}
+
+impl PacketData {
+    pub fn receiver_idx(&self) -> u32 {
+        self.receiver_idx
+    }
+
+    pub fn counter(&self) -> u64 {
+        self.counter
+    }
 }
 
 /// A message received from the network.
