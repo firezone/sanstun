@@ -8,6 +8,7 @@ use crate::harness::{
     Peer::B, Sim, classify, secs,
 };
 use sanstun::{Error, Received};
+use std::time::Duration;
 
 #[test]
 fn responder_under_load_replies_with_a_cookie_instead_of_a_handshake() {
@@ -115,21 +116,7 @@ fn expired_cookie_forces_a_new_cookie_round_trip() {
 /// handshake messages per second and recovers once the flood stops.
 #[test]
 fn rate_limited_tunnel_recovers_once_load_subsides() {
-    let mut sim = Sim::new();
-
-    for _ in 0..10 {
-        let init = sim.force_handshake_initiation(A);
-        sim.deliver(B, &init).expect_one_net();
-        sim.now += std::time::Duration::from_millis(10);
-    }
-
-    let init = sim.force_handshake_initiation(A);
-    let reply = sim.deliver(B, &init).expect_one_net();
-    assert_eq!(
-        classify(&reply),
-        Kind::CookieReply,
-        "11th handshake within a second"
-    );
+    let mut sim = flooded();
 
     sim.advance(secs(2)); // The rate limit resets its counter every second.
 
@@ -143,21 +130,7 @@ fn rate_limited_tunnel_recovers_once_load_subsides() {
 /// an idle tunnel avoid waking up once a second just to reset the counter.
 #[test]
 fn rate_limit_resets_without_driving_timers() {
-    let mut sim = Sim::new();
-
-    for _ in 0..10 {
-        let init = sim.force_handshake_initiation(A);
-        sim.deliver(B, &init).expect_one_net();
-        sim.now += std::time::Duration::from_millis(10);
-    }
-
-    let init = sim.force_handshake_initiation(A);
-    let reply = sim.deliver(B, &init).expect_one_net();
-    assert_eq!(
-        classify(&reply),
-        Kind::CookieReply,
-        "11th handshake within a second"
-    );
+    let mut sim = flooded();
 
     // Advance time *without* calling `update_timers`, so the only thing that
     // can clear the window is the lazy reset on the next received handshake.
@@ -170,4 +143,41 @@ fn rate_limit_resets_without_driving_timers() {
         Kind::Response,
         "window reset on receive, no timer needed"
     );
+}
+
+#[test]
+fn cookie_reply_out_of_the_blue_is_rejected() {
+    let mut sim = Sim::new();
+
+    // A valid-looking cookie reply (type 3, 64 bytes) without a preceding
+    // handshake from us must not be accepted.
+    let mut cookie_reply = vec![0u8; COOKIE_REPLY_SIZE];
+    cookie_reply[0] = 3;
+
+    let error = sim.deliver(B, &cookie_reply).expect_err();
+
+    assert!(matches!(error, Error::UnexpectedPacket));
+}
+
+/// A pair whose responder has just answered the 11th handshake initiation
+/// within a second with a cookie reply.
+#[track_caller]
+fn flooded() -> Sim {
+    let mut sim = Sim::new();
+
+    for _ in 0..10 {
+        let init = sim.force_handshake_initiation(A);
+        sim.deliver(B, &init).expect_one_net();
+        sim.now += Duration::from_millis(10);
+    }
+
+    let init = sim.force_handshake_initiation(A);
+    let reply = sim.deliver(B, &init).expect_one_net();
+    assert_eq!(
+        classify(&reply),
+        Kind::CookieReply,
+        "11th handshake within a second"
+    );
+
+    sim
 }

@@ -6,11 +6,8 @@ use crate::harness::{
     KEEPALIVE_SIZE, KEEPALIVE_TIMEOUT, Kind, MAX_JITTER, Outcome as _, Peer::A, Peer::B,
     REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_TIMEOUT, Sim, classify, ipv4_packet, secs,
 };
-use sanstun::{
-    Decapsulated, Error, Index, Ingress, PublicKey, Received, StaticSecret, TimerAction, Tunnel,
-};
-use std::net::Ipv4Addr;
-use std::time::{Duration, Instant};
+use sanstun::{Error, TimerAction};
+use std::time::Duration;
 
 /// A handshake triggered by a timer is not sent immediately: it is scheduled
 /// with a random jitter of up to 333ms, announced via `next_timer_update` and
@@ -155,7 +152,7 @@ fn different_seeds_produce_different_jitter() {
 /// `encapsulate_data` is advertised as side-effect free when no session
 /// exists: no packet is queued and no handshake is started.
 #[test]
-fn encapsulate_data_at_has_no_side_effects_without_a_session() {
+fn encapsulate_data_has_no_side_effects_without_a_session() {
     let mut sim = Sim::new();
 
     let result = sim.try_encapsulate(A, &ipv4_packet(b"no session yet"));
@@ -202,57 +199,18 @@ fn the_announced_session_expiry_is_actionable() {
 /// built from the same inputs must emit byte-identical handshakes.
 #[test]
 fn identical_seeds_produce_identical_handshakes() {
-    fn handshake(seed_a: [u8; 32], now: Instant) -> (Vec<u8>, Vec<u8>) {
-        let unix = Duration::from_secs(1_700_000_000);
-        let secret_a = StaticSecret::from([1; 32]);
-        let secret_b = StaticSecret::from([2; 32]);
-        let mut ingress_b = Ingress::new(secret_b.clone(), 10, [5; 32], now);
-        let public_a = PublicKey::from(&secret_a);
-        let public_b = PublicKey::from(&secret_b);
+    assert_eq!(handshake([3; 32]), handshake([3; 32]));
+    assert_ne!(handshake([3; 32]).0, handshake([5; 32]).0);
 
-        let mut a = Tunnel::new(
-            secret_a,
-            public_b,
-            None,
-            None,
-            Index::new_local(1),
-            seed_a,
-            now,
-            now,
-            unix,
-        );
-        let mut b = Tunnel::new(
-            secret_b,
-            public_a,
-            None,
-            None,
-            Index::new_local(2),
-            [4; 32],
-            now,
-            now,
-            unix,
-        );
+    fn handshake(seed_a: [u8; 32]) -> (Vec<u8>, Vec<u8>) {
+        let mut sim = Sim::builder()
+            .static_keys([1; 32], [2; 32])
+            .seeds(seed_a, [4; 32])
+            .build();
 
-        let init = a
-            .format_handshake_initiation(false, now)
-            .expect("a handshake initiation")
-            .to_vec();
+        let init = sim.initiate_handshake(A);
+        let response = sim.deliver(B, &init).expect_one_net();
 
-        let Ok(Received::Packet(init_packet)) =
-            ingress_b.receive(Ipv4Addr::LOCALHOST.into(), &init, now)
-        else {
-            panic!("expected a handshake initiation to pass");
-        };
-        let Decapsulated::HandshakeResponse(response) = b.decapsulate(init_packet, now).unwrap()
-        else {
-            panic!("expected a handshake response");
-        };
-
-        (init, response.to_vec())
+        (init, response)
     }
-
-    let now = Instant::now();
-
-    assert_eq!(handshake([3; 32], now), handshake([3; 32], now));
-    assert_ne!(handshake([3; 32], now).0, handshake([5; 32], now).0);
 }

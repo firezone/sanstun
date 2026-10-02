@@ -11,7 +11,9 @@ use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 use sanstun::Error;
-use sanstun::{Committed, Decapsulated, Index, Packet, TimerAction, Tunnel};
+use sanstun::{
+    Committed, Decapsulated, Decrypted, Index, Packet, PendingDecapsulate, TimerAction, Tunnel,
+};
 use sanstun::{Ingress, Received};
 use sanstun::{PublicKey, StaticSecret};
 
@@ -52,7 +54,7 @@ const HANDSHAKE_RATE_LIMIT: u64 = 10;
 /// instant, sending it at the next).
 pub const TICK: Duration = Duration::from_millis(100);
 
-const BUF: usize = 4096;
+pub const BUF: usize = 4096;
 
 pub fn secs(n: u64) -> Duration {
     Duration::from_secs(n)
@@ -102,6 +104,13 @@ pub fn receiver_index(datagram: &[u8]) -> u32 {
     assert!(matches!(classify(datagram), Kind::Data | Kind::Keepalive));
 
     u32::from_le_bytes(datagram[4..8].try_into().unwrap())
+}
+
+/// The counter of a data message, which doubles as its nonce (§5.4.6).
+pub fn counter(datagram: &[u8]) -> u64 {
+    assert!(matches!(classify(datagram), Kind::Data | Kind::Keepalive));
+
+    u64::from_le_bytes(datagram[8..16].try_into().unwrap())
 }
 
 /// A datagram observed on the simulated wire.
@@ -179,6 +188,7 @@ pub struct Builder {
     persistent_keepalive_b: Option<u16>,
     seed_a: [u8; 32],
     seed_b: [u8; 32],
+    static_keys: Option<([u8; 32], [u8; 32])>,
     responder_under_load: bool,
     responder_expects_different_key: bool,
 }
@@ -205,6 +215,12 @@ impl Builder {
         self
     }
 
+    /// Use fixed static private keys instead of random ones.
+    pub fn static_keys(mut self, secret_a: [u8; 32], secret_b: [u8; 32]) -> Self {
+        self.static_keys = Some((secret_a, secret_b));
+        self
+    }
+
     /// Give the responder an [`Ingress`] that considers it permanently under
     /// load, forcing the cookie mechanism (§5.3) on every handshake.
     pub fn responder_under_load(mut self) -> Self {
@@ -223,9 +239,11 @@ impl Builder {
         let start = Instant::now();
         let unix = Duration::from_secs(1_700_000_000);
 
-        let secret_a = StaticSecret::random();
+        let (secret_a, secret_b) = match self.static_keys {
+            Some((a, b)) => (StaticSecret::from(a), StaticSecret::from(b)),
+            None => (StaticSecret::random(), StaticSecret::random()),
+        };
         let public_a = PublicKey::from(&secret_a);
-        let secret_b = StaticSecret::random();
         let public_b = PublicKey::from(&secret_b);
 
         let limit_b = if self.responder_under_load {
@@ -308,6 +326,7 @@ impl Sim {
             persistent_keepalive_b: None,
             seed_a: [1; 32],
             seed_b: [2; 32],
+            static_keys: None,
             responder_under_load: false,
             responder_expects_different_key: false,
         }
@@ -376,6 +395,14 @@ impl Sim {
 
     // --- Driving the tunnels ---
 
+    /// Advance time without polling either peer, as when the host suspends.
+    ///
+    /// Every deadline inside the window goes unserviced; the next poll meets
+    /// them all at once.
+    pub fn suspend(&mut self, duration: Duration) {
+        self.now += duration;
+    }
+
     /// Advance the virtual clock, driving both peers purely by the instants they
     /// announce via `next_timer_update` and routing whatever they emit.
     ///
@@ -389,14 +416,6 @@ impl Sim {
     /// Every instant it announces is also *actionable*: polling at one clears
     /// it. A deadline that survived being polled would be handed straight back
     /// here and stall the loop, which the assertion below reports.
-    /// Advance time without polling either peer, as when the host suspends.
-    ///
-    /// Every deadline inside the window goes unserviced; the next poll meets
-    /// them all at once.
-    pub fn suspend(&mut self, duration: Duration) {
-        self.now += duration;
-    }
-
     pub fn advance(&mut self, duration: Duration) {
         let end = self.now + duration;
         let mut polls_at_now = 0;
@@ -528,18 +547,15 @@ impl Sim {
             Ok(Decapsulated::HandshakeResponse(packet)) => outs.push(Out::Net(packet.to_vec())),
             Ok(Decapsulated::Data(pending)) => {
                 let decrypted = pending.decrypt(datagram, vec![0u8; BUF]);
-                match node.tunn.commit_decrypted(decrypted, now) {
-                    Ok(Committed::Keepalive) => {}
-                    Ok(Committed::Data { mut buffer, len }) => {
-                        buffer.truncate(len);
-                        outs.push(Out::Ip(buffer));
-                    }
+                match self.commit(to, decrypted) {
+                    Ok(None) => {}
+                    Ok(Some(ip_packet)) => outs.push(Out::Ip(ip_packet)),
                     Err(e) => outs.push(Out::Err(e)),
                 }
             }
             Ok(Decapsulated::KeepaliveDue(keepalive)) => {
-                let keepalive = node
-                    .tunn
+                let keepalive = self
+                    .tunn_mut(to)
                     .encapsulate_keepalive(keepalive, now)
                     .expect("a keepalive is only due on a usable session");
                 outs.push(Out::Net(keepalive.to_vec()));
@@ -547,6 +563,35 @@ impl Sim {
         }
 
         outs
+    }
+
+    /// Feed a data message into `to`, stopping before its decryption.
+    #[track_caller]
+    pub fn prepare_decrypt(
+        &mut self,
+        to: Peer,
+        datagram: &[u8],
+    ) -> Result<PendingDecapsulate, Error> {
+        let now = self.now;
+        let packet = self.receive(to, datagram);
+        match self.tunn_mut(to).decapsulate(packet, now)? {
+            Decapsulated::Data(pending) => Ok(pending),
+            other => panic!("expected a data message, got {other:?}"),
+        }
+    }
+
+    /// Complete a decryption on `to`, yielding the IP packet, or `None` for a
+    /// keepalive.
+    pub fn commit<B: AsRef<[u8]>>(
+        &mut self,
+        to: Peer,
+        decrypted: Decrypted<B>,
+    ) -> Result<Option<Vec<u8>>, Error> {
+        let now = self.now;
+        match self.tunn_mut(to).commit_decrypted(decrypted, now)? {
+            Committed::Data { buffer, len } => Ok(Some(buffer.as_ref()[..len].to_vec())),
+            Committed::Keepalive => Ok(None),
+        }
     }
 
     // --- Handshakes ---

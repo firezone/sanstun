@@ -3,15 +3,9 @@
 //! order and on any thread.
 
 use crate::harness::{
-    DATA_OVERHEAD, Outcome as _, Peer, Peer::A, Peer::B, REPLAY_WINDOW, Sim, ipv4_packet,
+    BUF, DATA_OVERHEAD, Outcome as _, Peer::A, Peer::B, REPLAY_WINDOW, Sim, counter, ipv4_packet,
 };
-use sanstun::{
-    Committed, Decapsulated, Decrypted, Error, Keepalive, PendingDecapsulate, PendingEncapsulate,
-    Tunnel,
-};
-use std::time::Instant;
-
-const BUF: usize = 4096;
+use sanstun::{Committed, Decrypted, Error, PendingDecapsulate, PendingEncapsulate};
 
 #[test]
 fn encrypt_runs_on_another_thread() {
@@ -95,19 +89,15 @@ fn decrypt_runs_on_another_thread() {
     let mut sim = Sim::connected();
     let ip_packet = ipv4_packet(b"decrypted elsewhere");
     let datagram = sim.encapsulate(A, &ip_packet);
-    let now = sim.now;
 
-    let pending = prepare_decrypt(&mut sim, B, &datagram, now).unwrap();
+    let pending = sim.prepare_decrypt(B, &datagram).unwrap();
     let decrypted = std::thread::scope(|s| {
         s.spawn(|| pending.decrypt(&datagram, vec![0u8; BUF]))
             .join()
             .unwrap()
     });
 
-    assert_eq!(
-        commit(sim.tunn_mut(B), decrypted, now).unwrap(),
-        Some(ip_packet)
-    );
+    assert_eq!(sim.commit(B, decrypted).unwrap(), Some(ip_packet));
 }
 
 #[test]
@@ -115,19 +105,17 @@ fn duplicate_within_one_batch_is_accepted_only_once() {
     let mut sim = Sim::connected();
     let ip_packet = ipv4_packet(b"twice");
     let datagram = sim.encapsulate(A, &ip_packet);
-    let now = sim.now;
 
     let mut first_buf = vec![0u8; BUF];
     let mut second_buf = vec![0u8; BUF];
-    let first = prepare_decrypt(&mut sim, B, &datagram, now).unwrap();
-    let second = prepare_decrypt(&mut sim, B, &datagram, now).unwrap();
-    let tunn = sim.tunn_mut(B);
+    let first = sim.prepare_decrypt(B, &datagram).unwrap();
+    let second = sim.prepare_decrypt(B, &datagram).unwrap();
     let first = first.decrypt(&datagram, &mut first_buf[..]);
     let second = second.decrypt(&datagram, &mut second_buf[..]);
 
-    assert_eq!(commit(tunn, first, now).unwrap(), Some(ip_packet));
+    assert_eq!(sim.commit(B, first).unwrap(), Some(ip_packet));
     assert!(matches!(
-        commit(tunn, second, now),
+        sim.commit(B, second),
         Err(Error::DuplicateCounter)
     ));
 }
@@ -141,13 +129,13 @@ fn tampered_packet_does_not_advance_the_replay_window() {
         .collect::<Vec<_>>();
     let mut tampered = datagrams.last().unwrap().clone();
     *tampered.last_mut().unwrap() ^= 1;
-    let now = sim.now;
 
     let mut buf = vec![0u8; BUF];
-    let decrypted = prepare_decrypt(&mut sim, B, &tampered, now)
+    let decrypted = sim
+        .prepare_decrypt(B, &tampered)
         .unwrap()
         .decrypt(&tampered, &mut buf);
-    let result = commit(sim.tunn_mut(B), decrypted, now);
+    let result = sim.commit(B, decrypted);
 
     assert!(matches!(result, Err(Error::InvalidAeadTag)));
     assert_eq!(sim.deliver(B, &datagrams[0]).expect_one_ip(), ip_packet);
@@ -157,15 +145,15 @@ fn tampered_packet_does_not_advance_the_replay_window() {
 fn decrypt_into_a_short_buffer_fails() {
     let mut sim = Sim::connected();
     let datagram = sim.encapsulate(A, &ipv4_packet(b"too big"));
-    let now = sim.now;
 
     let mut buf = vec![0u8; datagram.len() - 17];
-    let decrypted = prepare_decrypt(&mut sim, B, &datagram, now)
+    let decrypted = sim
+        .prepare_decrypt(B, &datagram)
         .unwrap()
         .decrypt(&datagram, &mut buf);
 
     assert!(matches!(
-        commit(sim.tunn_mut(B), decrypted, now),
+        sim.commit(B, decrypted),
         Err(Error::DestinationBufferTooSmall { .. })
     ));
 }
@@ -180,7 +168,8 @@ fn decrypted_message_owns_its_buffer() {
     let now = sim.now;
 
     let buf: Box<[u8]> = vec![0u8; BUF].into_boxed_slice();
-    let decrypted = prepare_decrypt(&mut sim, B, &datagram, now)
+    let decrypted = sim
+        .prepare_decrypt(B, &datagram)
         .unwrap()
         .decrypt(&datagram, buf);
     let Committed::Data { buffer, len } = sim.tunn_mut(B).commit_decrypted(decrypted, now).unwrap()
@@ -194,90 +183,10 @@ fn decrypted_message_owns_its_buffer() {
 }
 
 #[test]
-fn handshake_response_leaves_the_keepalive_to_the_caller() {
-    let mut sim = Sim::new();
-    let init = sim.initiate_handshake(A);
-    let response = sim.deliver(B, &init).expect_one_net();
-    let now = sim.now;
-
-    let packet = sim.receive(A, &response);
-    let result = sim.tunn_mut(A).decapsulate(packet, now);
-    let Ok(Decapsulated::KeepaliveDue(keepalive)) = result else {
-        panic!("expected a due keepalive, got {result:?}");
-    };
-
-    let keepalive = sim
-        .tunn_mut(A)
-        .encapsulate_keepalive(keepalive, now)
-        .unwrap();
-    sim.deliver(B, &keepalive).expect_consumed();
-    sim.assert_connectivity();
-}
-
-#[test]
-fn self_created_keepalive_is_decapsulated_as_a_keepalive() {
-    let mut sim = Sim::connected();
-    let now = sim.now;
-
-    let keepalive = sim
-        .tunn_mut(A)
-        .encapsulate_keepalive(Keepalive, now)
-        .unwrap();
-    assert_eq!(keepalive.len(), DATA_OVERHEAD);
-
-    let decrypted = prepare_decrypt(&mut sim, B, &keepalive, now)
-        .unwrap()
-        .decrypt(&keepalive, vec![0u8; BUF]);
-    assert!(matches!(
-        sim.tunn_mut(B).commit_decrypted(decrypted, now),
-        Ok(Committed::Keepalive)
-    ));
-}
-
-#[test]
-fn keepalive_without_a_session_fails() {
-    let mut sim = Sim::new();
-    let now = sim.now;
-
-    assert!(matches!(
-        sim.tunn_mut(A).encapsulate_keepalive(Keepalive, now),
-        Err(Error::NoCurrentSession)
-    ));
-}
-
-#[test]
 fn deferred_work_can_move_to_another_thread() {
     fn assert_send<T: Send>() {}
 
     assert_send::<PendingEncapsulate>();
     assert_send::<PendingDecapsulate>();
     assert_send::<Decrypted<Vec<u8>>>();
-}
-
-fn prepare_decrypt(
-    sim: &mut Sim,
-    to: Peer,
-    datagram: &[u8],
-    now: Instant,
-) -> Result<PendingDecapsulate, Error> {
-    let packet = sim.receive(to, datagram);
-    match sim.tunn_mut(to).decapsulate(packet, now)? {
-        Decapsulated::Data(pending) => Ok(pending),
-        other => panic!("expected a data message, got {other:?}"),
-    }
-}
-
-fn commit<B: AsRef<[u8]>>(
-    tunn: &mut Tunnel,
-    decrypted: Decrypted<B>,
-    now: Instant,
-) -> Result<Option<Vec<u8>>, Error> {
-    match tunn.commit_decrypted(decrypted, now)? {
-        Committed::Data { buffer, len } => Ok(Some(buffer.as_ref()[..len].to_vec())),
-        Committed::Keepalive => Ok(None),
-    }
-}
-
-fn counter(datagram: &[u8]) -> u64 {
-    u64::from_le_bytes(datagram[8..16].try_into().unwrap())
 }
