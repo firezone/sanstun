@@ -5,25 +5,13 @@ use std::ops::Deref;
 macro_rules! owned_message {
     ($(#[$doc:meta])* $name:ident, $len:expr) => {
         $(#[$doc])*
-        #[derive(Debug, Clone)]
+        #[derive(Debug)]
         pub struct $name(pub(crate) [u8; $len]);
-
-        impl $name {
-            pub fn into_inner(self) -> [u8; $len] {
-                self.0
-            }
-        }
 
         impl Deref for $name {
             type Target = [u8];
 
             fn deref(&self) -> &[u8] {
-                &self.0
-            }
-        }
-
-        impl AsRef<[u8]> for $name {
-            fn as_ref(&self) -> &[u8] {
                 &self.0
             }
         }

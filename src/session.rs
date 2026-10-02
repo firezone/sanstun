@@ -10,7 +10,7 @@ use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, CHACHA20_POLY1305};
 use std::sync::Arc;
 use std::time::Instant;
 
-pub struct Session {
+pub(crate) struct Session {
     established_at: Instant,
     pub(crate) receiving_index: Index,
     sending_index: Index,
@@ -228,7 +228,7 @@ impl Session {
         &self,
         packet: PacketData,
     ) -> Result<PendingDecapsulate, Error> {
-        if packet.receiver_idx != self.receiving_index {
+        if Index::from_peer(packet.receiver_idx) != self.receiving_index {
             return Err(Error::WrongIndex);
         }
         // Don't reuse counters, in case this is a replay attack we want to quickly check the counter without running expensive decryption

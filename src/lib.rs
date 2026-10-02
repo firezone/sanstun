@@ -26,7 +26,7 @@ use rand::{RngExt, SeedableRng};
 
 use std::convert::{TryFrom, TryInto};
 use std::net::IpAddr;
-use std::ops::{Deref, DerefMut};
+use std::ops::Deref;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -72,22 +72,10 @@ pub struct Keepalive;
 #[derive(Debug)]
 pub struct DataMessage<'a>(&'a mut [u8]);
 
-impl<'a> DataMessage<'a> {
-    pub fn into_inner(self) -> &'a mut [u8] {
-        self.0
-    }
-}
-
 impl Deref for DataMessage<'_> {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
-        self.0
-    }
-}
-
-impl DerefMut for DataMessage<'_> {
-    fn deref_mut(&mut self) -> &mut [u8] {
         self.0
     }
 }
@@ -410,7 +398,7 @@ impl Tunnel {
         Ok(Committed::Data { buffer, len })
     }
 
-    pub(crate) fn handle_verified_packet(
+    fn handle_verified_packet(
         &mut self,
         packet: Packet,
         now: Instant,
