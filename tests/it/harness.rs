@@ -491,19 +491,13 @@ impl Sim {
     /// Feed a single datagram into `to`, bypassing the network (and thus the
     /// log and any link faults). Replies are returned, not routed.
     pub fn deliver(&mut self, to: Peer, datagram: &[u8]) -> Vec<Out> {
-        let src = Some(self.node(to.other()).addr);
+        let src = self.node(to.other()).addr;
         self.deliver_from(to, datagram, src)
-    }
-
-    /// Like [`Sim::deliver`] but without a source address, as if the transport
-    /// could not provide one.
-    pub fn deliver_anonymous(&mut self, to: Peer, datagram: &[u8]) -> Vec<Out> {
-        self.deliver_from(to, datagram, None)
     }
 
     /// Run a datagram through the [`Ingress`] of `to`, as if sent by its peer.
     pub fn try_receive<'a>(&mut self, to: Peer, datagram: &'a [u8]) -> Result<Received<'a>, Error> {
-        let src = Some(self.node(to.other()).addr);
+        let src = self.node(to.other()).addr;
         let now = self.now;
         self.node_mut(to).ingress.receive(src, datagram, now)
     }
@@ -517,7 +511,7 @@ impl Sim {
         }
     }
 
-    fn deliver_from(&mut self, to: Peer, datagram: &[u8], src: Option<IpAddr>) -> Vec<Out> {
+    fn deliver_from(&mut self, to: Peer, datagram: &[u8], src: IpAddr) -> Vec<Out> {
         let now = self.now;
         let node = self.node_mut(to);
         let mut outs = Vec::new();

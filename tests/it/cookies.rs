@@ -78,18 +78,6 @@ fn handshake_completes_under_load_via_cookie_retry() {
     sim.assert_connectivity();
 }
 
-/// §5.3: mac2 is keyed on the initiator's transport address, so a responder
-/// under load cannot make progress without knowing the packet's source.
-#[test]
-fn handshake_without_source_address_fails_under_load() {
-    let mut sim = Sim::builder().responder_under_load().build();
-
-    let init = sim.initiate_handshake(A);
-    let error = sim.deliver_anonymous(B, &init).expect_err();
-
-    assert!(matches!(error, Error::UnderLoad));
-}
-
 /// A cookie stays valid for two minutes; within that window new handshakes
 /// keep using it and are accepted straight away.
 #[test]

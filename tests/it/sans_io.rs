@@ -9,6 +9,7 @@ use crate::harness::{
 use sanstun::{
     Decapsulated, Error, Index, Ingress, PublicKey, Received, StaticSecret, TimerAction, Tunnel,
 };
+use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
 /// A handshake triggered by a timer is not sent immediately: it is scheduled
@@ -237,7 +238,9 @@ fn identical_seeds_produce_identical_handshakes() {
             .expect("a handshake initiation")
             .to_vec();
 
-        let Ok(Received::Packet(init_packet)) = ingress_b.receive(None, &init, now) else {
+        let Ok(Received::Packet(init_packet)) =
+            ingress_b.receive(Ipv4Addr::LOCALHOST.into(), &init, now)
+        else {
             panic!("expected a handshake initiation to pass");
         };
         let Decapsulated::HandshakeResponse(response) = b.decapsulate(init_packet, now).unwrap()

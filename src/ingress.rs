@@ -76,11 +76,10 @@ impl Ingress {
     ///
     /// This is the only entry point for inbound datagrams and enforces WireGuard's cookie mechanism.
     ///
-    /// `src_addr` is the source address of the datagram; without it, handshake messages fail
-    /// with [`Error::UnderLoad`] under load.
+    /// `src_addr` is the source address of the datagram, which cookies are bound to.
     pub fn receive<'a>(
         &mut self,
-        src_addr: Option<IpAddr>,
+        src_addr: IpAddr,
         datagram: &'a [u8],
         now: Instant,
     ) -> Result<Received<'a>, Error> {
@@ -147,7 +146,7 @@ impl Ingress {
     /// and it lacks a valid mac2.
     fn verify_macs(
         &mut self,
-        src_addr: Option<IpAddr>,
+        src_addr: IpAddr,
         sender_idx: u32,
         message: &[u8],
         now: Instant,
@@ -168,13 +167,7 @@ impl Ingress {
             return Ok(None);
         }
 
-        let addr = match src_addr {
-            None => return Err(Error::UnderLoad),
-            Some(addr) => addr,
-        };
-
-        // Only given an address can we validate mac2
-        let cookie = self.current_cookie(addr, now);
+        let cookie = self.current_cookie(src_addr, now);
         let computed_mac2 = b2s_keyed_mac_16_2(&cookie, msg, mac1);
 
         if !constant_time_eq(&computed_mac2[..16], mac2) {
