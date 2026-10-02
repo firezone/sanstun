@@ -1,5 +1,5 @@
 use super::errors::Error;
-use crate::{Ciphertext, Tunnel};
+use crate::{Tunnel, TunnelResult};
 use std::iter;
 use std::ops::{Index, IndexMut};
 
@@ -315,14 +315,16 @@ impl Tunnel {
         &mut self,
         dst: &'a mut [u8],
         now: Instant,
-    ) -> Result<Option<Ciphertext<'a>>, Error> {
+    ) -> Result<TunnelResult<'a>, Error> {
         self.timers[TimeLastUpdate] = now;
 
         if let Some(scheduled_handshake_at) = self.timers.send_handshake_at {
             // If we have scheduled a handshake and the deadline expired, send it immediately.
             if now >= scheduled_handshake_at {
                 self.timers.send_handshake_at = None;
-                return self.format_handshake_initiation(dst, true, now);
+                let initiation = self.format_handshake_initiation(dst, true, now)?;
+
+                return Ok(initiation.map_or(TunnelResult::Done, TunnelResult::WriteToNetwork));
             }
 
             debug_assert!(
@@ -335,7 +337,7 @@ impl Tunnel {
             // We have a handshake scheduled but the deadline is not expired yet.
             // Don't do anything to avoid repeated printing of logs.
             // The below logic would still evaluate that we need to send another handshake.
-            return Ok(None);
+            return Ok(TunnelResult::Done);
         }
 
         let mut handshake_initiation_required = false;
@@ -488,20 +490,16 @@ impl Tunnel {
 
             tracing::debug!(?jitter, "Scheduling new handshake");
 
-            return Ok(None);
+            return Ok(TunnelResult::Done);
         }
 
-        if keepalive_required {
-            // A keepalive is only ever sent on an established session, so seal the empty packet
-            // right away; there is no need to queue it or start a handshake.
-            return match self.encapsulate_data(0, now) {
-                Ok(seal) => seal.seal_into(&[], dst).map(Some),
-                Err(Error::NoCurrentSession) => Ok(None),
-                Err(e) => Err(e),
-            };
+        // A keepalive is only ever sent on an established session; there is no need to queue it
+        // or start a handshake.
+        if keepalive_required && self.sending_session(now).is_some() {
+            return Ok(TunnelResult::KeepaliveDue);
         }
 
-        Ok(None)
+        Ok(TunnelResult::Done)
     }
 
     /// Returns the [`Instant`] at which [`Tunnel::update_timers`] next needs to

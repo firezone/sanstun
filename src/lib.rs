@@ -42,10 +42,16 @@ const IP_LEN_SZ: usize = 2;
 /// We use a `u8` to align with the number of bits reserved in [`Index`] for the sessions.
 const N_SESSIONS: u8 = 8;
 
+/// What the caller needs to do after [`Tunnel::decapsulate`] or [`Tunnel::update_timers`].
 #[derive(Debug)]
 pub enum TunnelResult<'a> {
+    /// Nothing to do.
     Done,
+    /// Send this datagram to the peer.
     WriteToNetwork(Ciphertext<'a>),
+    /// A keepalive is due: send an empty data message, sealed through
+    /// [`Tunnel::encapsulate_data`].
+    KeepaliveDue,
 }
 
 /// A datagram to send to the network.
@@ -285,10 +291,8 @@ impl Tunnel {
     /// `Err(Error::NoCurrentSession)` when there is no usable session; in that case **no**
     /// handshake is initiated.
     pub fn encapsulate_data(&mut self, len: usize, now: Instant) -> Result<PendingSeal, Error> {
-        let is_responder = self.timers.is_responder();
-        let seal = self.sessions[self.current]
-            .as_mut()
-            .filter(|s| s.should_use_at(now) || is_responder)
+        let seal = self
+            .sending_session(now)
             .ok_or(Error::NoCurrentSession)?
             .prepare_packet_data();
 
@@ -299,6 +303,15 @@ impl Tunnel {
         }
 
         Ok(seal)
+    }
+
+    /// The session that data messages are sent on, if one is usable.
+    fn sending_session(&mut self, now: Instant) -> Option<&mut session::Session> {
+        let is_responder = self.timers.is_responder();
+
+        self.sessions[self.current]
+            .as_mut()
+            .filter(|s| s.should_use_at(now) || is_responder)
     }
 
     /// Prepares the decryption of a data message, deferring it to the returned [`PendingOpen`].
@@ -384,7 +397,7 @@ impl Tunnel {
     ) -> Result<TunnelResult<'a>, Error> {
         match packet {
             Packet::HandshakeInit(p) => self.handle_handshake_init(p, dst, now),
-            Packet::HandshakeResponse(p) => self.handle_handshake_response(p, dst, now),
+            Packet::HandshakeResponse(p) => self.handle_handshake_response(p, now),
             Packet::PacketCookieReply(p) => self.handle_cookie_reply(p, now),
             Packet::PacketData(_) => Err(Error::UnexpectedPacket),
         }
@@ -420,7 +433,6 @@ impl Tunnel {
     fn handle_handshake_response<'a>(
         &mut self,
         p: HandshakeResponse,
-        dst: &'a mut [u8],
         now: Instant,
     ) -> Result<TunnelResult<'a>, Error> {
         tracing::debug!(
@@ -429,9 +441,8 @@ impl Tunnel {
             "Received handshake_response"
         );
 
-        let mut session = self.handshake.receive_handshake_response(p, now)?;
+        let session = self.handshake.receive_handshake_response(p, now)?;
 
-        let keepalive_packet = session.prepare_packet_data().seal_into(&[], dst)?;
         // Store new session in ring buffer
         let local_idx = session.local_index();
         self.sessions[local_idx] = Some(session);
@@ -440,9 +451,8 @@ impl Tunnel {
         self.timer_tick_session_established(true, now); // New session established, we are the initiator
         self.set_current_session(local_idx);
 
-        tracing::debug!(%local_idx, "Sending keepalive");
-
-        Ok(TunnelResult::WriteToNetwork(keepalive_packet)) // Send a keepalive as a response
+        // The keepalive confirms the session to the responder.
+        Ok(TunnelResult::KeepaliveDue)
     }
 
     fn handle_cookie_reply<'a>(

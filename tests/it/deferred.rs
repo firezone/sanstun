@@ -5,7 +5,7 @@
 use crate::harness::{
     ipv4_packet, Outcome as _, Peer::A, Peer::B, Sim, DATA_OVERHEAD, REPLAY_WINDOW,
 };
-use sanstun::{Error, Opened, Packet, PendingOpen, PendingSeal, Tunnel};
+use sanstun::{Error, Opened, Packet, PendingOpen, PendingSeal, Tunnel, TunnelResult};
 use std::time::Instant;
 
 const BUF: usize = 4096;
@@ -177,6 +177,22 @@ fn decapsulate_at_leaves_data_messages_to_decapsulate_data() {
     let result = sim.tunn_mut(B).decapsulate(None, &datagram, &mut buf, now);
 
     assert!(matches!(result, Err(Error::UnexpectedPacket)));
+}
+
+#[test]
+fn handshake_response_leaves_the_keepalive_to_the_caller() {
+    let mut sim = Sim::new();
+    let init = sim.initiate_handshake(A);
+    let response = sim.deliver(B, &init).expect_one_net();
+    let now = sim.now;
+
+    let mut buf = vec![0u8; BUF];
+    let result = sim.tunn_mut(A).decapsulate(None, &response, &mut buf, now);
+    assert!(matches!(result, Ok(TunnelResult::KeepaliveDue)));
+
+    let keepalive = sim.encapsulate(A, &[]);
+    sim.deliver(B, &keepalive).expect_consumed();
+    sim.assert_connectivity();
 }
 
 #[test]

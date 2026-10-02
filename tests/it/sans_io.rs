@@ -26,20 +26,26 @@ fn scheduled_handshake_honours_next_timer_update() {
     // Nothing is due before the deadline.
     assert!(matches!(
         tunn.update_timers(&mut buf, deadline - Duration::from_millis(1)),
-        Ok(None)
+        Ok(TunnelResult::Done)
     ));
 
     // At the deadline, the handshake is only *scheduled* ...
-    assert!(matches!(tunn.update_timers(&mut buf, deadline), Ok(None)));
+    assert!(matches!(
+        tunn.update_timers(&mut buf, deadline),
+        Ok(TunnelResult::Done)
+    ));
     let (wake, _reason) = tunn.next_timer_update().expect("a scheduled handshake");
     assert!(wake >= deadline && wake <= deadline + MAX_JITTER);
 
     // ... and emitted exactly once when the announced instant is polled.
-    let Ok(Some(packet)) = tunn.update_timers(&mut buf, wake) else {
+    let Ok(TunnelResult::WriteToNetwork(packet)) = tunn.update_timers(&mut buf, wake) else {
         panic!("expected the scheduled handshake initiation");
     };
     assert_eq!(classify(&packet), Kind::Init);
-    assert!(matches!(tunn.update_timers(&mut buf, wake), Ok(None)));
+    assert!(matches!(
+        tunn.update_timers(&mut buf, wake),
+        Ok(TunnelResult::Done)
+    ));
 }
 
 #[test]
@@ -58,11 +64,17 @@ fn next_timer_update_predicts_the_passive_keepalive() {
     let mut buf = [0u8; 256];
     assert!(matches!(
         tunn.update_timers(&mut buf, wake - Duration::from_millis(1)),
-        Ok(None)
+        Ok(TunnelResult::Done)
     ));
-    let Ok(Some(packet)) = tunn.update_timers(&mut buf, wake) else {
-        panic!("expected the keepalive");
-    };
+    assert!(matches!(
+        tunn.update_timers(&mut buf, wake),
+        Ok(TunnelResult::KeepaliveDue)
+    ));
+    let packet = tunn
+        .encapsulate_data(0, wake)
+        .unwrap()
+        .seal_into(&[], &mut buf)
+        .unwrap();
     assert_eq!(packet.len(), KEEPALIVE_SIZE);
 
     // The passive keepalive has been answered, so it must not re-arm; the only
@@ -140,7 +152,10 @@ fn different_seeds_produce_different_jitter() {
         let retry_due = sim.now + REKEY_TIMEOUT;
         let mut buf = [0u8; 256];
         let tunn = sim.tunn_mut(A);
-        assert!(matches!(tunn.update_timers(&mut buf, retry_due), Ok(None)));
+        assert!(matches!(
+            tunn.update_timers(&mut buf, retry_due),
+            Ok(TunnelResult::Done)
+        ));
 
         tunn.next_timer_update()
             .expect("a scheduled retry")

@@ -424,12 +424,13 @@ impl Sim {
         let now = self.now;
         let mut buf = vec![0u8; BUF];
         let outgoing = match self.node_mut(peer).tunn.update_timers(&mut buf, now) {
-            Ok(None) => None,
+            Ok(TunnelResult::Done) => None,
             Err(e) => {
                 self.node_mut(peer).errors.push(e);
                 None
             }
-            Ok(Some(packet)) => Some(packet.to_vec()),
+            Ok(TunnelResult::WriteToNetwork(packet)) => Some(packet.to_vec()),
+            Ok(TunnelResult::KeepaliveDue) => Some(self.encapsulate(peer, &[])),
         };
 
         if let Some(datagram) = outgoing {
@@ -509,6 +510,14 @@ impl Sim {
             Err(e) => outs.push(Out::Err(e)),
             Ok(TunnelResult::WriteToNetwork(packet)) => {
                 outs.push(Out::Net(packet.to_vec()));
+            }
+            Ok(TunnelResult::KeepaliveDue) => {
+                let keepalive = node
+                    .tunn
+                    .encapsulate_data(0, now)
+                    .and_then(|seal| seal.seal_into(&[], &mut buf))
+                    .expect("a keepalive is only due on a usable session");
+                outs.push(Out::Net(keepalive.to_vec()));
             }
         }
 
