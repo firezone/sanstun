@@ -463,7 +463,7 @@ impl Tunnel {
         }
     }
 
-    /// Returns the next [`Event`] queued by [`Tunnel::handle_timeout`].
+    /// Returns the next [`Event`] queued by [`Tunnel::handle_timeout`] or [`Tunnel::decapsulate`].
     pub fn poll_event(&mut self) -> Option<Event> {
         self.events.pop_front()
     }

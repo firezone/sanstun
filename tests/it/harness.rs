@@ -11,7 +11,7 @@ use std::net::IpAddr;
 use std::time::{Duration, Instant};
 
 use sanstun::Error;
-use sanstun::{Committed, Decapsulated, Decrypted, Index, Packet, PendingDecapsulate, Tunnel};
+use sanstun::{Committed, Decrypted, Index, Packet, PendingDecapsulate, Tunnel};
 use sanstun::{Ingress, Received};
 use sanstun::{PublicKey, StaticSecret};
 
@@ -458,24 +458,9 @@ impl Sim {
 
     fn poll(&mut self, peer: Peer) {
         let now = self.now;
-        let node = self.node_mut(peer);
-        let mut outgoing = Vec::new();
+        self.tunn_mut(peer).handle_timeout(now);
 
-        node.tunn.handle_timeout(now);
-        while let Some(event) = node.tunn.poll_event() {
-            match event {
-                sanstun::Event::HandshakeInitiation(packet) => outgoing.push(packet.to_vec()),
-                sanstun::Event::KeepaliveDue(keepalive) => outgoing.push(
-                    node.tunn
-                        .encapsulate_keepalive(keepalive, now)
-                        .expect("a keepalive is only due on a usable session")
-                        .to_vec(),
-                ),
-                sanstun::Event::ConnectionExpired => node.expirations += 1,
-            }
-        }
-
-        for datagram in outgoing {
+        for datagram in self.drain_events(peer) {
             self.route(peer, datagram);
         }
     }
@@ -549,10 +534,9 @@ impl Sim {
         };
 
         match node.tunn.decapsulate(packet, now) {
-            Ok(Decapsulated::CookieReceived) => {}
+            Ok(None) => {}
             Err(e) => outs.push(Out::Err(e)),
-            Ok(Decapsulated::HandshakeResponse(packet)) => outs.push(Out::Net(packet.to_vec())),
-            Ok(Decapsulated::Data(pending)) => {
+            Ok(Some(pending)) => {
                 let decrypted = pending.decrypt(datagram, vec![0u8; BUF]);
                 match self.commit(to, decrypted) {
                     Ok(None) => {}
@@ -560,16 +544,33 @@ impl Sim {
                     Err(e) => outs.push(Out::Err(e)),
                 }
             }
-            Ok(Decapsulated::KeepaliveDue(keepalive)) => {
-                let keepalive = self
-                    .tunn_mut(to)
-                    .encapsulate_keepalive(keepalive, now)
-                    .expect("a keepalive is only due on a usable session");
-                outs.push(Out::Net(keepalive.to_vec()));
+        }
+        outs.extend(self.drain_events(to).into_iter().map(Out::Net));
+
+        outs
+    }
+
+    /// Drain the events of `peer`, returning the datagrams it needs to send.
+    fn drain_events(&mut self, peer: Peer) -> Vec<Vec<u8>> {
+        let now = self.now;
+        let node = self.node_mut(peer);
+        let mut outgoing = Vec::new();
+
+        while let Some(event) = node.tunn.poll_event() {
+            match event {
+                sanstun::Event::HandshakeInitiation(packet) => outgoing.push(packet.to_vec()),
+                sanstun::Event::HandshakeResponse(packet) => outgoing.push(packet.to_vec()),
+                sanstun::Event::KeepaliveDue(keepalive) => outgoing.push(
+                    node.tunn
+                        .encapsulate_keepalive(keepalive, now)
+                        .expect("a keepalive is only due on a usable session")
+                        .to_vec(),
+                ),
+                sanstun::Event::ConnectionExpired => node.expirations += 1,
             }
         }
 
-        outs
+        outgoing
     }
 
     /// Feed a data message into `to`, stopping before its decryption.
@@ -581,10 +582,9 @@ impl Sim {
     ) -> Result<PendingDecapsulate, Error> {
         let now = self.now;
         let packet = self.receive(to, datagram);
-        match self.tunn_mut(to).decapsulate(packet, now)? {
-            Decapsulated::Data(pending) => Ok(pending),
-            other => panic!("expected a data message, got {other:?}"),
-        }
+        let pending = self.tunn_mut(to).decapsulate(packet, now)?;
+
+        Ok(pending.expect("a data message"))
     }
 
     /// Complete a decryption on `to`, yielding the IP packet, or `None` for a

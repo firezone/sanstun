@@ -32,24 +32,13 @@ use rand::rngs::StdRng;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-/// What the caller needs to do after [`Tunnel::decapsulate`].
-#[derive(Debug)]
-pub enum Decapsulated {
-    /// Send this handshake response to the peer, which sent a valid handshake initiation.
-    HandshakeResponse(HandshakeResponseMessage),
-    /// The peer's cookie is stored for the next handshake; nothing to send.
-    CookieReceived,
-    /// A keepalive is due: send it with [`Tunnel::encapsulate_keepalive`].
-    KeepaliveDue(Keepalive),
-    /// A data message whose decryption is deferred to the [`PendingDecapsulate`].
-    Data(PendingDecapsulate),
-}
-
 /// What the caller needs to do, as returned by [`Tunnel::poll_event`].
 #[derive(Debug)]
 pub enum Event {
     /// Send this handshake initiation to the peer.
     HandshakeInitiation(HandshakeInitiationMessage),
+    /// Send this handshake response to the peer, which sent a valid handshake initiation.
+    HandshakeResponse(HandshakeResponseMessage),
     /// A keepalive is due: send it with [`Tunnel::encapsulate_keepalive`].
     KeepaliveDue(Keepalive),
     /// The connection expired and all session state was wiped.
@@ -202,18 +191,25 @@ impl Tunnel {
 
     /// Handles a message received from the network, as returned by [`Ingress::receive`].
     ///
-    /// Handshake messages and cookie replies are processed right away. The decryption of a data
-    /// message is deferred to the returned [`PendingDecapsulate`]: its session is selected and its
-    /// counter checked against the replay window, without updating any state or reading the
-    /// ciphertext. Hand the [`Decrypted`] message back to [`Tunnel::commit_decrypted`] to complete
-    /// the decapsulation.
-    pub fn decapsulate(&mut self, packet: Packet<'_>, now: Instant) -> Result<Decapsulated, Error> {
+    /// Handshake messages and cookie replies are processed right away and return `None`; drain
+    /// [`Tunnel::poll_event`] afterwards for any message to send in reply. The decryption of a
+    /// data message is deferred to the returned [`PendingDecapsulate`]: its session is selected
+    /// and its counter checked against the replay window, without updating any state or reading
+    /// the ciphertext. Hand the [`Decrypted`] message back to [`Tunnel::commit_decrypted`] to
+    /// complete the decapsulation.
+    pub fn decapsulate(
+        &mut self,
+        packet: Packet<'_>,
+        now: Instant,
+    ) -> Result<Option<PendingDecapsulate>, Error> {
         match packet {
-            Packet::HandshakeInit(p) => self.handle_handshake_init(p, now),
-            Packet::HandshakeResponse(p) => self.handle_handshake_response(p, now),
-            Packet::PacketCookieReply(p) => self.handle_cookie_reply(p, now),
-            Packet::PacketData(p) => self.handle_data(p).map(Decapsulated::Data),
+            Packet::HandshakeInit(p) => self.handle_handshake_init(p, now)?,
+            Packet::HandshakeResponse(p) => self.handle_handshake_response(p, now)?,
+            Packet::PacketCookieReply(p) => self.handle_cookie_reply(p, now)?,
+            Packet::PacketData(p) => return self.handle_data(p).map(Some),
         }
+
+        Ok(None)
     }
 
     /// Completes the decapsulation of a decrypted data message.
@@ -254,11 +250,7 @@ impl Tunnel {
         Ok(Committed::Data { buffer, len })
     }
 
-    fn handle_handshake_init(
-        &mut self,
-        p: HandshakeInit,
-        now: Instant,
-    ) -> Result<Decapsulated, Error> {
+    fn handle_handshake_init(&mut self, p: HandshakeInit, now: Instant) -> Result<(), Error> {
         let remote_idx = Index::from_peer(p.sender_idx);
 
         tracing::debug!(%remote_idx, "Received handshake_initiation",);
@@ -276,16 +268,17 @@ impl Tunnel {
 
         tracing::debug!(%local_idx, %remote_idx, "Sending handshake_response");
 
-        Ok(Decapsulated::HandshakeResponse(HandshakeResponseMessage(
-            packet,
-        )))
+        self.events
+            .push_back(Event::HandshakeResponse(HandshakeResponseMessage(packet)));
+
+        Ok(())
     }
 
     fn handle_handshake_response(
         &mut self,
         p: HandshakeResponse,
         now: Instant,
-    ) -> Result<Decapsulated, Error> {
+    ) -> Result<(), Error> {
         tracing::debug!(
             local_idx = %Index::from_peer(p.receiver_idx),
             remote_idx = %Index::from_peer(p.sender_idx),
@@ -302,14 +295,12 @@ impl Tunnel {
         self.sessions.set_current(local_idx);
 
         // The keepalive confirms the session to the responder.
-        Ok(Decapsulated::KeepaliveDue(Keepalive))
+        self.events.push_back(Event::KeepaliveDue(Keepalive));
+
+        Ok(())
     }
 
-    fn handle_cookie_reply(
-        &mut self,
-        p: PacketCookieReply,
-        now: Instant,
-    ) -> Result<Decapsulated, Error> {
+    fn handle_cookie_reply(&mut self, p: PacketCookieReply, now: Instant) -> Result<(), Error> {
         let local_idx = Index::from_peer(p.receiver_idx);
 
         tracing::debug!(%local_idx, "Received cookie_reply");
@@ -319,7 +310,7 @@ impl Tunnel {
 
         tracing::debug!(%local_idx, "Did set cookie");
 
-        Ok(Decapsulated::CookieReceived)
+        Ok(())
     }
 
     fn handle_data(&self, packet: PacketData) -> Result<PendingDecapsulate, Error> {
