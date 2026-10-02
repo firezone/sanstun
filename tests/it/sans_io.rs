@@ -6,7 +6,10 @@ use crate::harness::{
     KEEPALIVE_SIZE, KEEPALIVE_TIMEOUT, Kind, MAX_JITTER, Outcome as _, Peer::A, Peer::B,
     REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_TIMEOUT, Sim, classify, ipv4_packet, secs,
 };
-use sanstun::{Decapsulated, Error, Index, Packet, PublicKey, StaticSecret, TimerAction, Tunnel};
+use sanstun::{
+    Decapsulated, Error, Index, Ingress, PublicKey, Received, StaticSecret, TimerAction, Tunnel,
+};
+use std::net::Ipv4Addr;
 use std::time::{Duration, Instant};
 
 /// A handshake triggered by a timer is not sent immediately: it is scheduled
@@ -203,6 +206,7 @@ fn identical_seeds_produce_identical_handshakes() {
         let unix = Duration::from_secs(1_700_000_000);
         let secret_a = StaticSecret::from([1; 32]);
         let secret_b = StaticSecret::from([2; 32]);
+        let mut ingress_b = Ingress::new(secret_b.clone(), 10, [5; 32], now);
         let public_a = PublicKey::from(&secret_a);
         let public_b = PublicKey::from(&secret_b);
 
@@ -212,7 +216,6 @@ fn identical_seeds_produce_identical_handshakes() {
             None,
             None,
             Index::new_local(1),
-            None,
             seed_a,
             now,
             now,
@@ -224,7 +227,6 @@ fn identical_seeds_produce_identical_handshakes() {
             None,
             None,
             Index::new_local(2),
-            None,
             [4; 32],
             now,
             now,
@@ -236,9 +238,12 @@ fn identical_seeds_produce_identical_handshakes() {
             .expect("a handshake initiation")
             .to_vec();
 
-        let Decapsulated::HandshakeResponse(response) = b
-            .decapsulate(None, Packet::parse(&init).unwrap(), now)
-            .unwrap()
+        let Ok(Received::Packet(init_packet)) =
+            ingress_b.receive(Ipv4Addr::LOCALHOST.into(), &init, now)
+        else {
+            panic!("expected a handshake initiation to pass");
+        };
+        let Decapsulated::HandshakeResponse(response) = b.decapsulate(init_packet, now).unwrap()
         else {
             panic!("expected a handshake response");
         };

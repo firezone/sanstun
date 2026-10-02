@@ -4,47 +4,37 @@ mod crypto;
 mod errors;
 mod handshake;
 mod index;
+mod ingress;
 mod message;
-mod rate_limiter;
 mod replay;
 mod session;
 mod tai64n;
 mod timers;
 
 pub use errors::Error;
-pub use handshake::{HalfHandshake, parse_handshake_anon};
 pub use index::Index;
+pub use ingress::{Ingress, Received};
 pub use message::{
     CookieReplyMessage, HandshakeInitiationMessage, HandshakeResponseMessage, KeepaliveMessage,
 };
-pub use rate_limiter::RateLimiter;
 pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
 pub use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::handshake::Handshake;
+use crate::handshake::{Handshake, InitiatorStatic};
 use crate::session::Sessions;
 use crate::timers::{TimerName, Timers};
 
+use rand::SeedableRng;
 use rand::rngs::StdRng;
-use rand::{RngExt, SeedableRng};
 
-use std::convert::{TryFrom, TryInto};
-use std::net::IpAddr;
 use std::ops::Deref;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-/// The default value to use for rate limiting, when no other rate limiter is defined
-const PEER_HANDSHAKE_RATE_LIMIT: u64 = 10;
 
 /// What the caller needs to do after [`Tunnel::decapsulate`].
 #[derive(Debug)]
 pub enum Decapsulated {
     /// Send this handshake response to the peer, which sent a valid handshake initiation.
     HandshakeResponse(HandshakeResponseMessage),
-    /// Send this cookie reply to the peer: we are under load and its handshake message needs
-    /// a valid cookie.
-    CookieReply(CookieReplyMessage),
     /// The peer's cookie is stored for the next handshake; nothing to send.
     CookieReceived,
     /// A keepalive is due: send it with [`Tunnel::encapsulate_keepalive`].
@@ -96,7 +86,6 @@ pub struct Tunnel {
     sessions: Sessions,
     /// Keeps tabs on the expiring timers
     timers: timers::Timers,
-    rate_limiter: Arc<RateLimiter>,
     /// Source of the ephemeral keys and the handshake jitter
     rng: StdRng,
 }
@@ -129,86 +118,89 @@ impl<'a> Macs<'a> {
     }
 }
 
-#[derive(Debug)]
+/// A handshake initiation whose initiator's static public key we decrypted.
 pub struct HandshakeInit<'a> {
     sender_idx: u32,
-    unencrypted_ephemeral: &'a [u8; 32],
-    encrypted_static: &'a [u8],
     encrypted_timestamp: &'a [u8],
-    macs: Macs<'a>,
+    initiator: InitiatorStatic,
+}
+
+impl std::fmt::Debug for HandshakeInit<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HandshakeInit")
+            .field("sender_idx", &self.sender_idx)
+            .field("peer_static_public", &self.peer_static_public())
+            .finish_non_exhaustive()
+    }
+}
+
+impl HandshakeInit<'_> {
+    pub fn sender_idx(&self) -> u32 {
+        self.sender_idx
+    }
+
+    /// The initiator's static public key, e.g. to look up the [`Tunnel`] it belongs to.
+    pub fn peer_static_public(&self) -> PublicKey {
+        self.initiator.peer_static_public
+    }
 }
 
 #[derive(Debug)]
 pub struct HandshakeResponse<'a> {
     sender_idx: u32,
-    pub receiver_idx: u32,
+    receiver_idx: u32,
     unencrypted_ephemeral: &'a [u8; 32],
     encrypted_nothing: &'a [u8],
-    macs: Macs<'a>,
+}
+
+impl HandshakeResponse<'_> {
+    pub fn sender_idx(&self) -> u32 {
+        self.sender_idx
+    }
+
+    pub fn receiver_idx(&self) -> u32 {
+        self.receiver_idx
+    }
 }
 
 #[derive(Debug)]
 pub struct PacketCookieReply<'a> {
-    pub receiver_idx: u32,
+    receiver_idx: u32,
     nonce: &'a [u8],
     encrypted_cookie: &'a [u8],
 }
 
+impl PacketCookieReply<'_> {
+    pub fn receiver_idx(&self) -> u32 {
+        self.receiver_idx
+    }
+}
+
 #[derive(Debug)]
 pub struct PacketData {
-    pub receiver_idx: u32,
+    receiver_idx: u32,
     counter: u64,
 }
 
-/// Describes a packet from network
+impl PacketData {
+    pub fn receiver_idx(&self) -> u32 {
+        self.receiver_idx
+    }
+
+    pub fn counter(&self) -> u64 {
+        self.counter
+    }
+}
+
+/// A message received from the network.
+///
+/// It can only be obtained from [`Ingress::receive`], which verifies it.
 #[derive(Debug)]
 pub enum Packet<'a> {
     HandshakeInit(HandshakeInit<'a>),
     HandshakeResponse(HandshakeResponse<'a>),
     PacketCookieReply(PacketCookieReply<'a>),
     PacketData(PacketData),
-}
-
-impl<'a> Packet<'a> {
-    /// Parses a datagram received from the network.
-    #[inline(always)]
-    pub fn parse(src: &'a [u8]) -> Result<Self, Error> {
-        if src.len() < 4 {
-            return Err(Error::InvalidPacket);
-        }
-
-        // Checks the type, as well as the reserved zero fields
-        let packet_type = u32::from_le_bytes(src[0..4].try_into().unwrap());
-
-        Ok(match (packet_type, src.len()) {
-            (HANDSHAKE_INIT, HANDSHAKE_INIT_SZ) => Packet::HandshakeInit(HandshakeInit {
-                sender_idx: u32::from_le_bytes(src[4..8].try_into().unwrap()),
-                unencrypted_ephemeral: <&[u8; 32] as TryFrom<&[u8]>>::try_from(&src[8..40])
-                    .expect("length already checked above"),
-                encrypted_static: &src[40..88],
-                encrypted_timestamp: &src[88..116],
-                macs: Macs::new(src),
-            }),
-            (HANDSHAKE_RESP, HANDSHAKE_RESP_SZ) => Packet::HandshakeResponse(HandshakeResponse {
-                sender_idx: u32::from_le_bytes(src[4..8].try_into().unwrap()),
-                receiver_idx: u32::from_le_bytes(src[8..12].try_into().unwrap()),
-                unencrypted_ephemeral: <&[u8; 32] as TryFrom<&[u8]>>::try_from(&src[12..44])
-                    .expect("length already checked above"),
-                encrypted_nothing: &src[44..60],
-                macs: Macs::new(src),
-            }),
-            (COOKIE_REPLY, COOKIE_REPLY_SZ) => Packet::PacketCookieReply(PacketCookieReply {
-                receiver_idx: u32::from_le_bytes(src[4..8].try_into().unwrap()),
-                nonce: &src[8..32],
-                encrypted_cookie: &src[32..64],
-            }),
-            (DATA, DATA_OVERHEAD_SZ..=usize::MAX) => Packet::PacketData(PacketData {
-                receiver_idx: u32::from_le_bytes(src[4..8].try_into().unwrap()),
-                counter: u64::from_le_bytes(src[8..16].try_into().unwrap()),
-            }),
-            _ => return Err(Error::InvalidPacket),
-        })
-    }
 }
 
 impl Tunnel {
@@ -226,14 +218,12 @@ impl Tunnel {
         preshared_key: Option<StaticSecret>,
         persistent_keepalive: Option<u16>,
         index: Index,
-        rate_limiter: Option<Arc<RateLimiter>>,
         rng_seed: [u8; 32],
         now: Instant,
         unix_instant: Instant,
         unix: Duration,
     ) -> Self {
         let static_public = PublicKey::from(&static_private);
-        let mut rng = StdRng::from_seed(rng_seed);
 
         Tunnel {
             handshake: Handshake::new(
@@ -247,16 +237,7 @@ impl Tunnel {
             ),
             sessions: Sessions::default(),
             timers: Timers::new(persistent_keepalive, now),
-
-            rate_limiter: rate_limiter.unwrap_or_else(|| {
-                Arc::new(RateLimiter::new(
-                    &static_public,
-                    PEER_HANDSHAKE_RATE_LIMIT,
-                    rng.random(),
-                    now,
-                ))
-            }),
-            rng,
+            rng: StdRng::from_seed(rng_seed),
         }
     }
 
@@ -336,23 +317,14 @@ impl Tunnel {
             .filter(|s| s.should_use_at(now) || is_responder)
     }
 
-    /// Handles a message received from the network.
+    /// Handles a message received from the network, as returned by [`Ingress::receive`].
     ///
     /// Handshake messages and cookie replies are processed right away. The decryption of a data
     /// message is deferred to the returned [`PendingDecapsulate`]: its session is selected and its
     /// counter checked against the replay window, without updating any state or reading the
     /// ciphertext. Hand the [`Decrypted`] message back to [`Tunnel::commit_decrypted`] to complete
     /// the decapsulation.
-    pub fn decapsulate(
-        &mut self,
-        src_addr: Option<IpAddr>,
-        packet: Packet<'_>,
-        now: Instant,
-    ) -> Result<Decapsulated, Error> {
-        if let Some(cookie) = self.rate_limiter.verify_packet(src_addr, &packet, now)? {
-            return Ok(Decapsulated::CookieReply(CookieReplyMessage(cookie)));
-        }
-
+    pub fn decapsulate(&mut self, packet: Packet<'_>, now: Instant) -> Result<Decapsulated, Error> {
         match packet {
             Packet::HandshakeInit(p) => self.handle_handshake_init(p, now),
             Packet::HandshakeResponse(p) => self.handle_handshake_response(p, now),

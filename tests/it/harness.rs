@@ -8,12 +8,11 @@
 
 use std::collections::VecDeque;
 use std::net::IpAddr;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use sanstun::Error;
-use sanstun::RateLimiter;
 use sanstun::{Committed, Decapsulated, Index, Packet, TimerAction, Tunnel};
+use sanstun::{Ingress, Received};
 use sanstun::{PublicKey, StaticSecret};
 
 // Protocol constants from the WireGuard whitepaper (§6.1, table on p. 14).
@@ -44,6 +43,9 @@ pub const COOKIE_REPLY_SIZE: usize = 64;
 /// sanstun's anti-replay window: 128 words of 64 bits each
 /// (implementation-specific; the paper's reference window is 2000 packets).
 pub const REPLAY_WINDOW: u64 = 8192;
+
+/// Handshake messages per second a peer accepts before it considers itself under load.
+const HANDSHAKE_RATE_LIMIT: u64 = 10;
 
 /// Slack the timing assertions allow on either side of a deadline, covering the
 /// few polls a peer may take to act on one (scheduling a handshake at one
@@ -81,22 +83,25 @@ pub enum Kind {
     Keepalive,
 }
 
+/// The kind of a datagram by its message type and size (§5.4).
 pub fn classify(datagram: &[u8]) -> Kind {
-    match Packet::parse(datagram).expect("only valid packets should be routed") {
-        Packet::HandshakeInit(_) => Kind::Init,
-        Packet::HandshakeResponse(_) => Kind::Response,
-        Packet::PacketCookieReply(_) => Kind::CookieReply,
-        Packet::PacketData(_) if datagram.len() == KEEPALIVE_SIZE => Kind::Keepalive,
-        Packet::PacketData(_) => Kind::Data,
+    let message_type = u32::from_le_bytes(datagram[..4].try_into().unwrap());
+
+    match (message_type, datagram.len()) {
+        (1, HANDSHAKE_INIT_SIZE) => Kind::Init,
+        (2, HANDSHAKE_RESPONSE_SIZE) => Kind::Response,
+        (3, COOKIE_REPLY_SIZE) => Kind::CookieReply,
+        (4, KEEPALIVE_SIZE) => Kind::Keepalive,
+        (4, len) if len > DATA_OVERHEAD => Kind::Data,
+        other => panic!("only valid packets should be routed, got {other:?}"),
     }
 }
 
 /// The receiver index of a data message, identifying the session it uses.
 pub fn receiver_index(datagram: &[u8]) -> u32 {
-    match Packet::parse(datagram).unwrap() {
-        Packet::PacketData(p) => p.receiver_idx,
-        other => panic!("not a data packet: {other:?}"),
-    }
+    assert!(matches!(classify(datagram), Kind::Data | Kind::Keepalive));
+
+    u32::from_le_bytes(datagram[4..8].try_into().unwrap())
 }
 
 /// A datagram observed on the simulated wire.
@@ -161,6 +166,7 @@ impl Outcome for Vec<Out> {
 
 struct Node {
     tunn: Tunnel,
+    ingress: Ingress,
     addr: IpAddr,
     inbox: Vec<Vec<u8>>,
     errors: Vec<Error>,
@@ -199,7 +205,7 @@ impl Builder {
         self
     }
 
-    /// Give the responder a rate limiter that considers it permanently under
+    /// Give the responder an [`Ingress`] that considers it permanently under
     /// load, forcing the cookie mechanism (§5.3) on every handshake.
     pub fn responder_under_load(mut self) -> Self {
         self.responder_under_load = true;
@@ -222,13 +228,20 @@ impl Builder {
         let secret_b = StaticSecret::random();
         let public_b = PublicKey::from(&secret_b);
 
+        let limit_b = if self.responder_under_load {
+            0
+        } else {
+            HANDSHAKE_RATE_LIMIT
+        };
+        let ingress_a = Ingress::new(secret_a.clone(), HANDSHAKE_RATE_LIMIT, [3; 32], start);
+        let ingress_b = Ingress::new(secret_b.clone(), limit_b, [4; 32], start);
+
         let a = Tunnel::new(
             secret_a,
             public_b,
             self.psk_a.map(StaticSecret::from),
             None,
             Index::new_local(1),
-            None,
             self.seed_a,
             start,
             start,
@@ -240,16 +253,12 @@ impl Builder {
         } else {
             public_a
         };
-        let rate_limiter = self
-            .responder_under_load
-            .then(|| Arc::new(RateLimiter::new(&public_b, 0, [3; 32], start)));
         let b = Tunnel::new(
             secret_b,
             expected_by_b,
             self.psk_b.map(StaticSecret::from),
             self.persistent_keepalive_b,
             Index::new_local(2),
-            rate_limiter,
             self.seed_b,
             start,
             start,
@@ -262,6 +271,7 @@ impl Builder {
             nodes: [
                 Node {
                     tunn: a,
+                    ingress: ingress_a,
                     addr: "10.0.0.1".parse().unwrap(),
                     inbox: Vec::new(),
                     errors: Vec::new(),
@@ -269,6 +279,7 @@ impl Builder {
                 },
                 Node {
                     tunn: b,
+                    ingress: ingress_b,
                     addr: "10.0.0.2".parse().unwrap(),
                     inbox: Vec::new(),
                     errors: Vec::new(),
@@ -480,28 +491,41 @@ impl Sim {
     /// Feed a single datagram into `to`, bypassing the network (and thus the
     /// log and any link faults). Replies are returned, not routed.
     pub fn deliver(&mut self, to: Peer, datagram: &[u8]) -> Vec<Out> {
-        let src = Some(self.node(to.other()).addr);
+        let src = self.node(to.other()).addr;
         self.deliver_from(to, datagram, src)
     }
 
-    /// Like [`Sim::deliver`] but without a source address, as if the transport
-    /// could not provide one.
-    pub fn deliver_anonymous(&mut self, to: Peer, datagram: &[u8]) -> Vec<Out> {
-        self.deliver_from(to, datagram, None)
+    /// Run a datagram through the [`Ingress`] of `to`, as if sent by its peer.
+    pub fn try_receive<'a>(&mut self, to: Peer, datagram: &'a [u8]) -> Result<Received<'a>, Error> {
+        let src = self.node(to.other()).addr;
+        let now = self.now;
+        self.node_mut(to).ingress.receive(src, datagram, now)
     }
 
-    fn deliver_from(&mut self, to: Peer, datagram: &[u8], src: Option<IpAddr>) -> Vec<Out> {
+    /// Like [`Sim::try_receive`], panicking unless the datagram passes.
+    #[track_caller]
+    pub fn receive<'a>(&mut self, to: Peer, datagram: &'a [u8]) -> Packet<'a> {
+        match self.try_receive(to, datagram) {
+            Ok(Received::Packet(packet)) => packet,
+            other => panic!("expected a packet, got {other:?}"),
+        }
+    }
+
+    fn deliver_from(&mut self, to: Peer, datagram: &[u8], src: IpAddr) -> Vec<Out> {
         let now = self.now;
         let node = self.node_mut(to);
         let mut outs = Vec::new();
 
-        let result =
-            Packet::parse(datagram).and_then(|packet| node.tunn.decapsulate(src, packet, now));
-        match result {
+        let packet = match node.ingress.receive(src, datagram, now) {
+            Ok(Received::Packet(packet)) => packet,
+            Ok(Received::CookieReply(reply)) => return vec![Out::Net(reply.to_vec())],
+            Err(e) => return vec![Out::Err(e)],
+        };
+
+        match node.tunn.decapsulate(packet, now) {
             Ok(Decapsulated::CookieReceived) => {}
             Err(e) => outs.push(Out::Err(e)),
             Ok(Decapsulated::HandshakeResponse(packet)) => outs.push(Out::Net(packet.to_vec())),
-            Ok(Decapsulated::CookieReply(packet)) => outs.push(Out::Net(packet.to_vec())),
             Ok(Decapsulated::Data(pending)) => {
                 let decrypted = pending.decrypt(datagram, vec![0u8; BUF]);
                 match node.tunn.commit_decrypted(decrypted, now) {

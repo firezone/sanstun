@@ -3,11 +3,11 @@
 //! order and on any thread.
 
 use crate::harness::{
-    DATA_OVERHEAD, Outcome as _, Peer::A, Peer::B, REPLAY_WINDOW, Sim, ipv4_packet,
+    DATA_OVERHEAD, Outcome as _, Peer, Peer::A, Peer::B, REPLAY_WINDOW, Sim, ipv4_packet,
 };
 use sanstun::{
-    Committed, Decapsulated, Decrypted, Error, Keepalive, Packet, PendingDecapsulate,
-    PendingEncapsulate, Tunnel,
+    Committed, Decapsulated, Decrypted, Error, Keepalive, PendingDecapsulate, PendingEncapsulate,
+    Tunnel,
 };
 use std::time::Instant;
 
@@ -97,7 +97,7 @@ fn decrypt_runs_on_another_thread() {
     let datagram = sim.encapsulate(A, &ip_packet);
     let now = sim.now;
 
-    let pending = prepare_decrypt(sim.tunn_mut(B), &datagram, now).unwrap();
+    let pending = prepare_decrypt(&mut sim, B, &datagram, now).unwrap();
     let decrypted = std::thread::scope(|s| {
         s.spawn(|| pending.decrypt(&datagram, vec![0u8; BUF]))
             .join()
@@ -116,12 +116,12 @@ fn duplicate_within_one_batch_is_accepted_only_once() {
     let ip_packet = ipv4_packet(b"twice");
     let datagram = sim.encapsulate(A, &ip_packet);
     let now = sim.now;
-    let tunn = sim.tunn_mut(B);
 
     let mut first_buf = vec![0u8; BUF];
     let mut second_buf = vec![0u8; BUF];
-    let first = prepare_decrypt(tunn, &datagram, now).unwrap();
-    let second = prepare_decrypt(tunn, &datagram, now).unwrap();
+    let first = prepare_decrypt(&mut sim, B, &datagram, now).unwrap();
+    let second = prepare_decrypt(&mut sim, B, &datagram, now).unwrap();
+    let tunn = sim.tunn_mut(B);
     let first = first.decrypt(&datagram, &mut first_buf[..]);
     let second = second.decrypt(&datagram, &mut second_buf[..]);
 
@@ -144,7 +144,7 @@ fn tampered_packet_does_not_advance_the_replay_window() {
     let now = sim.now;
 
     let mut buf = vec![0u8; BUF];
-    let decrypted = prepare_decrypt(sim.tunn_mut(B), &tampered, now)
+    let decrypted = prepare_decrypt(&mut sim, B, &tampered, now)
         .unwrap()
         .decrypt(&tampered, &mut buf);
     let result = commit(sim.tunn_mut(B), decrypted, now);
@@ -160,7 +160,7 @@ fn decrypt_into_a_short_buffer_fails() {
     let now = sim.now;
 
     let mut buf = vec![0u8; datagram.len() - 17];
-    let decrypted = prepare_decrypt(sim.tunn_mut(B), &datagram, now)
+    let decrypted = prepare_decrypt(&mut sim, B, &datagram, now)
         .unwrap()
         .decrypt(&datagram, &mut buf);
 
@@ -180,7 +180,7 @@ fn decrypted_message_owns_its_buffer() {
     let now = sim.now;
 
     let buf: Box<[u8]> = vec![0u8; BUF].into_boxed_slice();
-    let decrypted = prepare_decrypt(sim.tunn_mut(B), &datagram, now)
+    let decrypted = prepare_decrypt(&mut sim, B, &datagram, now)
         .unwrap()
         .decrypt(&datagram, buf);
     let Committed::Data { buffer, len } = sim.tunn_mut(B).commit_decrypted(decrypted, now).unwrap()
@@ -200,9 +200,8 @@ fn handshake_response_leaves_the_keepalive_to_the_caller() {
     let response = sim.deliver(B, &init).expect_one_net();
     let now = sim.now;
 
-    let result = sim
-        .tunn_mut(A)
-        .decapsulate(None, Packet::parse(&response).unwrap(), now);
+    let packet = sim.receive(A, &response);
+    let result = sim.tunn_mut(A).decapsulate(packet, now);
     let Ok(Decapsulated::KeepaliveDue(keepalive)) = result else {
         panic!("expected a due keepalive, got {result:?}");
     };
@@ -226,7 +225,7 @@ fn self_created_keepalive_is_decapsulated_as_a_keepalive() {
         .unwrap();
     assert_eq!(keepalive.len(), DATA_OVERHEAD);
 
-    let decrypted = prepare_decrypt(sim.tunn_mut(B), &keepalive, now)
+    let decrypted = prepare_decrypt(&mut sim, B, &keepalive, now)
         .unwrap()
         .decrypt(&keepalive, vec![0u8; BUF]);
     assert!(matches!(
@@ -256,11 +255,13 @@ fn deferred_work_can_move_to_another_thread() {
 }
 
 fn prepare_decrypt(
-    tunn: &mut Tunnel,
+    sim: &mut Sim,
+    to: Peer,
     datagram: &[u8],
     now: Instant,
 ) -> Result<PendingDecapsulate, Error> {
-    match tunn.decapsulate(None, Packet::parse(datagram)?, now)? {
+    let packet = sim.receive(to, datagram);
+    match sim.tunn_mut(to).decapsulate(packet, now)? {
         Decapsulated::Data(pending) => Ok(pending),
         other => panic!("expected a data message, got {other:?}"),
     }
