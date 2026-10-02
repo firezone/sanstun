@@ -2,7 +2,7 @@
 //! tolerates reordering but rejects duplicates and stale packets.
 
 use crate::harness::{ipv4_packet, Outcome as _, Peer::A, Peer::B, Sim, REPLAY_WINDOW};
-use sanstun::errors::WireGuardError;
+use sanstun::WireGuardError;
 
 #[test]
 fn replayed_data_packet_is_rejected() {

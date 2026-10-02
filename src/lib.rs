@@ -3,19 +3,20 @@
 
 //! Simple implementation of the client-side of the WireGuard protocol.
 
-pub mod errors;
-pub mod handshake;
-pub mod rate_limiter;
-
+mod errors;
+mod handshake;
 mod index;
+mod rate_limiter;
 mod session;
 mod timers;
 
+pub use errors::WireGuardError;
+pub use handshake::{parse_handshake_anon, HalfHandshake};
 pub use index::Index;
+pub use rate_limiter::RateLimiter;
+pub use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::errors::WireGuardError;
 use crate::handshake::Handshake;
-use crate::rate_limiter::RateLimiter;
 use crate::timers::{TimerName, Timers};
 
 use std::convert::{TryFrom, TryInto};
@@ -167,9 +168,9 @@ impl Tunn {
     /// Create a new tunnel using own private key and the peer public key
     #[expect(clippy::too_many_arguments, reason = "We don't care that much.")]
     pub fn new_at(
-        static_private: x25519::StaticSecret,
-        peer_static_public: x25519::PublicKey,
-        preshared_key: Option<x25519::StaticSecret>,
+        static_private: StaticSecret,
+        peer_static_public: PublicKey,
+        preshared_key: Option<StaticSecret>,
         persistent_keepalive: Option<u16>,
         index: Index,
         rate_limiter: Option<Arc<RateLimiter>>,
@@ -178,7 +179,7 @@ impl Tunn {
         unix_instant: Instant,
         unix: Duration,
     ) -> Self {
-        let static_public = x25519::PublicKey::from(&static_private);
+        let static_public = PublicKey::from(&static_private);
 
         Tunn {
             handshake: Handshake::new(
@@ -204,11 +205,11 @@ impl Tunn {
         }
     }
 
-    pub fn remote_static_public(&self) -> x25519::PublicKey {
+    pub fn remote_static_public(&self) -> PublicKey {
         self.handshake.remote_static_public()
     }
 
-    pub fn preshared_key(&self) -> &x25519::StaticSecret {
+    pub fn preshared_key(&self) -> &StaticSecret {
         self.handshake.preshared_key()
     }
 
@@ -510,9 +511,4 @@ impl Tunn {
             IpAddr::V6(addr) => TunnResult::WriteToTunnelV6(&mut packet[..computed_len], addr),
         }
     }
-}
-
-/// Re-export of the x25519 types
-pub mod x25519 {
-    pub use x25519_dalek::{PublicKey, StaticSecret};
 }

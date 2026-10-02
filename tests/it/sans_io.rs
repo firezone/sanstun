@@ -6,8 +6,8 @@ use crate::harness::{
     classify, ipv4_packet, secs, Kind, Outcome as _, Peer::A, Peer::B, Sim, KEEPALIVE_SIZE,
     KEEPALIVE_TIMEOUT, MAX_JITTER, REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_TIMEOUT,
 };
-use sanstun::errors::WireGuardError;
 use sanstun::TunnResult;
+use sanstun::WireGuardError;
 use std::time::Duration;
 
 /// A handshake triggered by a timer is not sent immediately: it is scheduled

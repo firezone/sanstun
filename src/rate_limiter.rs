@@ -1,6 +1,8 @@
 use super::handshake::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, b2s_mac_24};
 use crate::handshake::{LABEL_COOKIE, LABEL_MAC1};
-use crate::{HandshakeInit, HandshakeResponse, Packet, Tunn, TunnResult, WireGuardError};
+use crate::{
+    HandshakeInit, HandshakeResponse, Packet, PublicKey, Tunn, TunnResult, WireGuardError,
+};
 
 use std::net::IpAddr;
 use std::time::Instant;
@@ -49,7 +51,7 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
-    pub fn new_at(public_key: &crate::x25519::PublicKey, limit: u64, now: Instant) -> Self {
+    pub fn new_at(public_key: &PublicKey, limit: u64, now: Instant) -> Self {
         let mut secret_key = [0u8; 16];
         rand::rng().fill_bytes(&mut secret_key);
         RateLimiter {

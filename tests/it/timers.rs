@@ -6,7 +6,7 @@ use crate::harness::{
     KEEPALIVE_TIMEOUT, MAX_JITTER, REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_ATTEMPT_TIME,
     REKEY_TIMEOUT, SHOULD_NOT_USE_AFTER_TIME, TICK,
 };
-use sanstun::errors::WireGuardError;
+use sanstun::WireGuardError;
 
 /// §6.4: an unanswered handshake initiation is retransmitted after
 /// `REKEY_TIMEOUT + jitter`, where jitter is up to 333ms.

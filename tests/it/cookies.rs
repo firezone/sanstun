@@ -7,7 +7,7 @@ use crate::harness::{
     classify, secs, Kind, Outcome as _, Peer::A, Peer::B, Sim, COOKIE_EXPIRATION_TIME,
     COOKIE_REPLY_SIZE,
 };
-use sanstun::errors::WireGuardError;
+use sanstun::WireGuardError;
 
 #[test]
 fn responder_under_load_replies_with_a_cookie_instead_of_a_handshake() {
