@@ -20,6 +20,7 @@ pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
 pub use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::handshake::Handshake;
+use crate::session::Sessions;
 use crate::timers::{TimerName, Timers};
 
 use rand::rngs::StdRng;
@@ -33,11 +34,6 @@ use std::time::{Duration, Instant};
 
 /// The default value to use for rate limiting, when no other rate limiter is defined
 const PEER_HANDSHAKE_RATE_LIMIT: u64 = 10;
-
-/// number of sessions in the ring, better keep a PoT
-///
-/// We use a `u8` to align with the number of bits reserved in [`Index`] for the sessions.
-const N_SESSIONS: u8 = 8;
 
 /// What the caller needs to do after [`Tunnel::decapsulate`].
 #[derive(Debug)]
@@ -95,10 +91,7 @@ pub enum Committed<B> {
 pub struct Tunnel {
     /// The handshake currently in progress
     handshake: handshake::Handshake,
-    /// The N_SESSIONS most recent sessions, index is session id modulo N_SESSIONS
-    sessions: [Option<session::Session>; N_SESSIONS as usize],
-    /// Index of most recently used session
-    current: Index,
+    sessions: Sessions,
     /// Keeps tabs on the expiring timers
     timers: timers::Timers,
     rate_limiter: Arc<RateLimiter>,
@@ -250,8 +243,7 @@ impl Tunnel {
                 unix_instant,
                 unix,
             ),
-            sessions: Default::default(),
-            current: Default::default(),
+            sessions: Sessions::default(),
             timers: Timers::new(persistent_keepalive, now),
 
             rate_limiter: rate_limiter.unwrap_or_else(|| {
@@ -337,8 +329,8 @@ impl Tunnel {
     fn sending_session(&mut self, now: Instant) -> Option<&mut session::Session> {
         let is_responder = self.timers.is_responder();
 
-        self.sessions[self.current]
-            .as_mut()
+        self.sessions
+            .current_mut()
             .filter(|s| s.should_use_at(now) || is_responder)
     }
 
@@ -384,16 +376,13 @@ impl Tunnel {
             _key: _,
         } = decrypted;
 
-        let Some(session) = self.sessions[remote_idx]
-            .as_mut()
-            .filter(|s| s.receiving_index == remote_idx)
-        else {
+        let Some(session) = self.sessions.get_mut(remote_idx) else {
             tracing::trace!(%remote_idx, "Session was replaced during decryption");
             return Err(Error::NoCurrentSession);
         };
         let len = session.finish_receive_packet_data(counter, plaintext_len)?;
 
-        self.set_current_session(remote_idx);
+        self.sessions.set_current(remote_idx);
         self.timers.tick(TimerName::TimeLastPacketReceived, now);
 
         if len == 0 {
@@ -418,8 +407,7 @@ impl Tunnel {
                 .receive_handshake_initialization(p, &mut self.rng, now)?;
 
         // Store new session in ring buffer
-        let local_idx = session.local_index();
-        self.sessions[local_idx] = Some(session);
+        let local_idx = self.sessions.insert(session);
 
         self.timers.tick(TimerName::TimeLastPacketReceived, now);
         self.timers.tick(TimerName::TimeLastPacketSent, now);
@@ -446,12 +434,11 @@ impl Tunnel {
         let session = self.handshake.receive_handshake_response(p, now)?;
 
         // Store new session in ring buffer
-        let local_idx = session.local_index();
-        self.sessions[local_idx] = Some(session);
+        let local_idx = self.sessions.insert(session);
 
         self.timers.tick(TimerName::TimeLastPacketReceived, now);
         self.timers.session_established(true, now); // New session established, we are the initiator
-        self.set_current_session(local_idx);
+        self.sessions.set_current(local_idx);
 
         // The keepalive confirms the session to the responder.
         Ok(Decapsulated::KeepaliveDue(Keepalive))
@@ -477,36 +464,12 @@ impl Tunnel {
     fn handle_data(&self, packet: PacketData) -> Result<PendingDecapsulate, Error> {
         let remote_idx = Index::from_peer(packet.receiver_idx);
 
-        let session = self.sessions[remote_idx].as_ref().ok_or_else(|| {
+        let session = self.sessions.in_slot_of(remote_idx).ok_or_else(|| {
             tracing::trace!(%remote_idx, "No current session available");
             Error::NoCurrentSession
         })?;
 
         session.prepare_receive_packet_data(packet)
-    }
-
-    /// Update the index of the currently used session, if needed
-    fn set_current_session(&mut self, new_idx: Index) {
-        let cur_idx = self.current;
-        if cur_idx == new_idx {
-            // There is nothing to do, already using this session, this is the common case
-            return;
-        }
-
-        let Some(new) = self.sessions[new_idx].as_ref() else {
-            debug_assert!(false, "new session should always exist");
-            return;
-        };
-        if self.sessions[cur_idx]
-            .as_ref()
-            .is_some_and(|current| current.established_at() > new.established_at())
-        {
-            // The current session is "newer" than the new one, don't update.
-            return;
-        }
-
-        self.current = new_idx;
-        tracing::debug!(idx = %new_idx, "New session");
     }
 
     /// Formats a new handshake initiation message. If force_resend is true will send

@@ -1,7 +1,5 @@
 use std::fmt;
 
-use super::{N_SESSIONS, session::Session};
-
 /// A unique identifier for an instance of [`Tunnel`](super::Tunnel).
 ///
 /// The top 24 bits are used as a unique, global identifier.
@@ -38,8 +36,8 @@ impl Index {
         (self.0 >> 8) as usize
     }
 
-    #[cfg(test)]
-    fn session(&self) -> usize {
+    /// The rotating session part of the index.
+    pub(crate) fn session(&self) -> usize {
         self.0 as u8 as usize
     }
 }
@@ -52,20 +50,6 @@ impl fmt::Display for Index {
         let session = idx as u8;
 
         write!(f, "({global}|{session})")
-    }
-}
-
-impl std::ops::Index<Index> for [Option<Session>; N_SESSIONS as usize] {
-    type Output = Option<Session>;
-
-    fn index(&self, index: Index) -> &Self::Output {
-        &self[(index.0 as usize) % N_SESSIONS as usize]
-    }
-}
-
-impl std::ops::IndexMut<Index> for [Option<Session>; N_SESSIONS as usize] {
-    fn index_mut(&mut self, index: Index) -> &mut Self::Output {
-        &mut self[(index.0 as usize) % N_SESSIONS as usize]
     }
 }
 
