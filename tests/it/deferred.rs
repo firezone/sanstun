@@ -4,8 +4,10 @@
 
 use crate::harness::{
     BUF, DATA_OVERHEAD, Outcome as _, Peer::A, Peer::B, REPLAY_WINDOW, Sim, counter, ipv4_packet,
+    receiver_index,
 };
 use sanstun::{Committed, Decrypted, Error, PendingDecapsulate, PendingEncapsulate};
+use std::time::Duration;
 
 #[test]
 fn encrypt_runs_on_another_thread() {
@@ -139,6 +141,34 @@ fn tampered_packet_does_not_advance_the_replay_window() {
 
     assert!(matches!(result, Err(Error::InvalidAeadTag)));
     assert_eq!(sim.deliver(B, &datagrams[0]).expect_one_ip(), ip_packet);
+}
+
+#[test]
+fn decrypted_message_is_not_committed_to_a_later_session_with_the_same_index() {
+    let mut sim = Sim::connected();
+    let ip_packet = ipv4_packet(b"stale");
+    for _ in 0..3 {
+        sim.encapsulate(A, &ip_packet);
+    }
+    let datagram = sim.encapsulate(A, &ip_packet);
+    let decrypted = sim
+        .prepare_decrypt(B, &datagram)
+        .unwrap()
+        .decrypt(&datagram, vec![0u8; BUF]);
+
+    // The session part of an index wraps after 256 handshakes.
+    for _ in 0..256 {
+        sim.suspend(Duration::from_millis(200));
+        sim.establish();
+    }
+    let fresh = sim.encapsulate(A, &ip_packet);
+    assert_eq!(receiver_index(&fresh), receiver_index(&datagram));
+
+    assert!(matches!(
+        sim.commit(B, decrypted),
+        Err(Error::NoCurrentSession)
+    ));
+    assert_eq!(sim.deliver(B, &fresh).expect_one_ip(), ip_packet);
 }
 
 #[test]
