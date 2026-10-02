@@ -4,7 +4,7 @@
 use crate::harness::{
     ipv4_packet, ipv6_packet, Outcome as _, Peer::A, Peer::B, Sim, DATA_OVERHEAD, KEEPALIVE_SIZE,
 };
-use sanstun::Error;
+use sanstun::{Error, Keepalive};
 
 #[test]
 fn ipv4_packets_round_trip() {
@@ -39,7 +39,11 @@ fn data_messages_have_32_bytes_of_overhead() {
 fn keepalives_are_consumed_silently() {
     let mut sim = Sim::connected();
 
-    let keepalive = sim.encapsulate(A, &[]);
+    let now = sim.now;
+    let keepalive = sim
+        .tunn_mut(A)
+        .encapsulate_keepalive(Keepalive, now)
+        .unwrap();
     assert_eq!(keepalive.len(), KEEPALIVE_SIZE);
 
     sim.deliver(B, &keepalive).expect_consumed();
@@ -77,44 +81,17 @@ fn data_with_wrong_receiver_index_is_rejected() {
     assert!(matches!(error, Error::NoCurrentSession));
 }
 
-// The receiver validates that the decrypted payload is a plausible IP packet
-// before handing it to the tunnel interface.
+// §5.4.6: encrypted packets may be padded; the caller parses the IP packet and
+// truncates the padding, so the whole decrypted payload is returned.
 #[test]
-fn non_ip_payload_is_rejected_after_decryption() {
+fn decrypted_payload_is_returned_with_its_padding() {
     let mut sim = Sim::connected();
 
-    let datagram = sim.encapsulate(A, b"?");
-
-    let error = sim.deliver(B, &datagram).expect_err();
-
-    assert!(matches!(error, Error::InvalidPacket));
-}
-
-// §5.4.6: encrypted packets are padded; the receiver must truncate the
-// plaintext to the length declared in the IP header.
-#[test]
-fn decrypted_packets_are_truncated_to_their_ip_length_field() {
-    let mut sim = Sim::connected();
-    let ip_packet = ipv4_packet(b"payload");
-
-    let mut padded = ip_packet.clone();
+    let mut padded = ipv4_packet(b"payload");
     padded.extend_from_slice(&[0u8; 13]);
     let datagram = sim.encapsulate(A, &padded);
 
     let received = sim.deliver(B, &datagram).expect_one_ip();
 
-    assert_eq!(received, ip_packet);
-}
-
-#[test]
-fn ip_packet_claiming_more_than_its_size_is_rejected() {
-    let mut sim = Sim::connected();
-
-    let mut ip_packet = ipv4_packet(b"payload");
-    ip_packet.truncate(ip_packet.len() - 2); // Now shorter than its length field claims.
-    let datagram = sim.encapsulate(A, &ip_packet);
-
-    let error = sim.deliver(B, &datagram).expect_err();
-
-    assert!(matches!(error, Error::InvalidPacket));
+    assert_eq!(received, padded);
 }

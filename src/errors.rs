@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 #[derive(Debug)]
 pub enum Error {
-    DestinationBufferTooSmall,
+    DestinationBufferTooSmall { required: usize, available: usize },
     UnexpectedPacket,
     WrongIndex,
     WrongKey,
@@ -16,14 +16,19 @@ pub enum Error {
     NoCurrentSession,
     ConnectionExpired,
     UnderLoad,
+    EmptyPlaintext,
 }
 
 impl Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::DestinationBufferTooSmall => {
-                write!(f, "the destination buffer is too small")
-            }
+            Error::DestinationBufferTooSmall {
+                required,
+                available,
+            } => write!(
+                f,
+                "the destination buffer is too small (required: {required}, available: {available})"
+            ),
             Error::UnexpectedPacket => write!(
                 f,
                 "packet of this type was not expected in the current state"
@@ -53,6 +58,10 @@ impl Display for Error {
             Error::NoCurrentSession => write!(f, "no active session"),
             Error::ConnectionExpired => write!(f, "connection is expired"),
             Error::UnderLoad => write!(f, "rate limit exceeded"),
+            Error::EmptyPlaintext => write!(
+                f,
+                "an empty data message is a keepalive; send it with `Tunnel::encapsulate_keepalive`"
+            ),
         }
     }
 }

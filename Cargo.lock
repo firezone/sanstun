@@ -884,6 +884,7 @@ dependencies = [
  "chacha20poly1305",
  "constant_time_eq",
  "criterion",
+ "crossbeam-utils",
  "etherparse",
  "hmac",
  "parking_lot",

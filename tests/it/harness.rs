@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use sanstun::Error;
 use sanstun::RateLimiter;
-use sanstun::{Index, Packet, Tunnel, TunnelResult};
+use sanstun::{Committed, Decapsulated, Index, Packet, TimerAction, Tunnel};
 use sanstun::{PublicKey, StaticSecret};
 
 // Protocol constants from the WireGuard whitepaper (§6.1, table on p. 14).
@@ -82,7 +82,7 @@ pub enum Kind {
 }
 
 pub fn classify(datagram: &[u8]) -> Kind {
-    match Tunnel::parse_incoming_packet(datagram).expect("only valid packets should be routed") {
+    match Packet::parse(datagram).expect("only valid packets should be routed") {
         Packet::HandshakeInit(_) => Kind::Init,
         Packet::HandshakeResponse(_) => Kind::Response,
         Packet::PacketCookieReply(_) => Kind::CookieReply,
@@ -93,7 +93,7 @@ pub fn classify(datagram: &[u8]) -> Kind {
 
 /// The receiver index of a data message, identifying the session it uses.
 pub fn receiver_index(datagram: &[u8]) -> u32 {
-    match Tunnel::parse_incoming_packet(datagram).unwrap() {
+    match Packet::parse(datagram).unwrap() {
         Packet::PacketData(p) => p.receiver_idx,
         other => panic!("not a data packet: {other:?}"),
     }
@@ -422,14 +422,20 @@ impl Sim {
 
     fn poll(&mut self, peer: Peer) {
         let now = self.now;
-        let mut buf = vec![0u8; BUF];
-        let outgoing = match self.node_mut(peer).tunn.update_timers(&mut buf, now) {
+        let outgoing = match self.node_mut(peer).tunn.update_timers(now) {
             Ok(None) => None,
             Err(e) => {
                 self.node_mut(peer).errors.push(e);
                 None
             }
-            Ok(Some(packet)) => Some(packet.to_vec()),
+            Ok(Some(TimerAction::HandshakeInitiation(packet))) => Some(packet.to_vec()),
+            Ok(Some(TimerAction::KeepaliveDue(keepalive))) => Some(
+                self.node_mut(peer)
+                    .tunn
+                    .encapsulate_keepalive(keepalive, now)
+                    .expect("a keepalive is only due on a usable session")
+                    .to_vec(),
+            ),
         };
 
         if let Some(datagram) = outgoing {
@@ -489,13 +495,30 @@ impl Sim {
         let node = self.node_mut(to);
         let mut outs = Vec::new();
 
-        let mut buf = vec![0u8; BUF];
-        match node.tunn.decapsulate(src, datagram, &mut buf, now) {
-            Ok(TunnelResult::Done) => {}
+        let result =
+            Packet::parse(datagram).and_then(|packet| node.tunn.decapsulate(src, packet, now));
+        match result {
+            Ok(Decapsulated::CookieReceived) => {}
             Err(e) => outs.push(Out::Err(e)),
-            Ok(TunnelResult::WriteToTunnel(packet)) => outs.push(Out::Ip(packet.to_vec())),
-            Ok(TunnelResult::WriteToNetwork(packet)) => {
-                outs.push(Out::Net(packet.to_vec()));
+            Ok(Decapsulated::HandshakeResponse(packet)) => outs.push(Out::Net(packet.to_vec())),
+            Ok(Decapsulated::CookieReply(packet)) => outs.push(Out::Net(packet.to_vec())),
+            Ok(Decapsulated::Data(pending)) => {
+                let decrypted = pending.decrypt(datagram, vec![0u8; BUF]);
+                match node.tunn.commit_decrypted(decrypted, now) {
+                    Ok(Committed::Keepalive) => {}
+                    Ok(Committed::Data { mut buffer, len }) => {
+                        buffer.truncate(len);
+                        outs.push(Out::Ip(buffer));
+                    }
+                    Err(e) => outs.push(Out::Err(e)),
+                }
+            }
+            Ok(Decapsulated::KeepaliveDue(keepalive)) => {
+                let keepalive = node
+                    .tunn
+                    .encapsulate_keepalive(keepalive, now)
+                    .expect("a keepalive is only due on a usable session");
+                outs.push(Out::Net(keepalive.to_vec()));
             }
         }
 
@@ -520,15 +543,10 @@ impl Sim {
 
     fn handshake_initiation(&mut self, peer: Peer, force: bool) -> Option<Vec<u8>> {
         let now = self.now;
-        let mut buf = vec![0u8; BUF];
-        match self
-            .node_mut(peer)
+        self.node_mut(peer)
             .tunn
-            .format_handshake_initiation(&mut buf, force, now)
-        {
-            Ok(packet) => packet.map(|p| p.to_vec()),
-            Err(e) => panic!("unexpected error from format_handshake_initiation: {e:?}"),
-        }
+            .format_handshake_initiation(force, now)
+            .map(|p| p.to_vec())
     }
 
     /// Complete a full handshake initiated by `A`.
@@ -562,7 +580,8 @@ impl Sim {
         let packet = self
             .node_mut(from)
             .tunn
-            .encapsulate_data(ip_packet, &mut buf, now)?;
+            .encapsulate_data(now)?
+            .encrypt(ip_packet, &mut buf)?;
         Ok(packet.to_vec())
     }
 

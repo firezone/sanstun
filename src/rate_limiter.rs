@@ -1,6 +1,6 @@
 use super::handshake::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, b2s_mac_24};
 use crate::handshake::{LABEL_COOKIE, LABEL_MAC1};
-use crate::{Error, HandshakeInit, HandshakeResponse, Packet, PublicKey, Tunnel};
+use crate::{Error, HandshakeInit, HandshakeResponse, Macs, Packet, PublicKey};
 
 use std::net::IpAddr;
 use std::time::Instant;
@@ -104,19 +104,13 @@ impl RateLimiter {
         self.count.fetch_add(1, Ordering::SeqCst) >= self.limit
     }
 
-    pub(crate) fn format_cookie_reply<'a>(
+    pub(crate) fn format_cookie_reply(
         &self,
         idx: u32,
         cookie: Cookie,
         mac1: &[u8],
-        dst: &'a mut [u8],
-    ) -> Result<&'a mut [u8], Error> {
-        let buf_len = dst.len();
-        if buf_len < super::COOKIE_REPLY_SZ {
-            tracing::warn!(%buf_len, msg_len = %super::COOKIE_REPLY_SZ, "Destination buffer too small for cookie reply");
-
-            return Err(Error::DestinationBufferTooSmall);
-        }
+    ) -> [u8; super::COOKIE_REPLY_SZ] {
+        let mut dst = [0u8; super::COOKIE_REPLY_SZ];
 
         let (message_type, rest) = dst.split_at_mut(4);
         let (receiver_index, rest) = rest.split_at_mut(4);
@@ -137,31 +131,31 @@ impl RateLimiter {
         encrypted_cookie[..16].copy_from_slice(&cookie);
         let tag = cipher
             .encrypt_in_place_detached(iv, mac1, &mut encrypted_cookie[..16])
-            .map_err(|_| Error::DestinationBufferTooSmall)?;
+            .expect("a cookie is always within the AEAD's limits");
 
         encrypted_cookie[16..].copy_from_slice(&tag);
 
-        Ok(&mut dst[..super::COOKIE_REPLY_SZ])
+        dst
     }
 
     /// Verify the MAC fields on the datagram, and apply rate limiting if needed
     ///
-    /// Returns `Ok(Err(cookie_reply))` when the peer must be sent a cookie reply instead.
-    pub(crate) fn verify_packet<'a, 'b>(
+    /// Returns `Ok(Some(cookie_reply))` when the peer must be sent a cookie reply instead.
+    pub(crate) fn verify_packet(
         &self,
         src_addr: Option<IpAddr>,
-        src: &'a [u8],
-        dst: &'b mut [u8],
+        packet: &Packet<'_>,
         now: Instant,
-    ) -> Result<Result<Packet<'a>, &'b mut [u8]>, Error> {
-        let packet = Tunnel::parse_incoming_packet(src)?;
-
+    ) -> Result<Option<[u8; super::COOKIE_REPLY_SZ]>, Error> {
         // Verify and rate limit handshake messages only
-        if let Packet::HandshakeInit(HandshakeInit { sender_idx, .. })
-        | Packet::HandshakeResponse(HandshakeResponse { sender_idx, .. }) = packet
+        if let Packet::HandshakeInit(HandshakeInit {
+            sender_idx, macs, ..
+        })
+        | Packet::HandshakeResponse(HandshakeResponse {
+            sender_idx, macs, ..
+        }) = packet
         {
-            let (msg, macs) = src.split_at(src.len() - 32);
-            let (mac1, mac2) = macs.split_at(16);
+            let Macs { msg, mac1, mac2 } = *macs;
 
             let computed_mac1 = b2s_keyed_mac_16(&self.mac1_key, msg);
             if !constant_time_eq(&computed_mac1[..16], mac1) {
@@ -184,12 +178,11 @@ impl RateLimiter {
                 let computed_mac2 = b2s_keyed_mac_16_2(&cookie, msg, mac1);
 
                 if !constant_time_eq(&computed_mac2[..16], mac2) {
-                    let cookie_packet = self.format_cookie_reply(sender_idx, cookie, mac1, dst)?;
-                    return Ok(Err(cookie_packet));
+                    return Ok(Some(self.format_cookie_reply(*sender_idx, cookie, mac1)));
                 }
             }
         }
 
-        Ok(Ok(packet))
+        Ok(None)
     }
 }

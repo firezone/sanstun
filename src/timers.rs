@@ -1,5 +1,5 @@
 use super::errors::Error;
-use crate::{Ciphertext, Tunnel};
+use crate::{Keepalive, TimerAction, Tunnel};
 use std::iter;
 use std::ops::{Index, IndexMut};
 
@@ -311,18 +311,16 @@ impl Tunnel {
         Some((time_sent + self.timers.rekey_timeout, local_index))
     }
 
-    pub fn update_timers<'a>(
-        &mut self,
-        dst: &'a mut [u8],
-        now: Instant,
-    ) -> Result<Option<Ciphertext<'a>>, Error> {
+    pub fn update_timers(&mut self, now: Instant) -> Result<Option<TimerAction>, Error> {
         self.timers[TimeLastUpdate] = now;
 
         if let Some(scheduled_handshake_at) = self.timers.send_handshake_at {
             // If we have scheduled a handshake and the deadline expired, send it immediately.
             if now >= scheduled_handshake_at {
                 self.timers.send_handshake_at = None;
-                return self.format_handshake_initiation(dst, true, now);
+                return Ok(self
+                    .format_handshake_initiation(true, now)
+                    .map(TimerAction::HandshakeInitiation));
             }
 
             debug_assert!(
@@ -491,14 +489,10 @@ impl Tunnel {
             return Ok(None);
         }
 
-        if keepalive_required {
-            // A keepalive is only ever sent on an established session, so encrypt the empty packet
-            // in place; there is no need to queue it or start a handshake.
-            return match self.encapsulate_data(&[], dst, now) {
-                Ok(packet) => Ok(Some(packet)),
-                Err(Error::NoCurrentSession) => Ok(None),
-                Err(e) => Err(e),
-            };
+        // A keepalive is only ever sent on an established session; there is no need to queue it
+        // or start a handshake.
+        if keepalive_required && self.sending_session(now).is_some() {
+            return Ok(Some(TimerAction::KeepaliveDue(Keepalive)));
         }
 
         Ok(None)
