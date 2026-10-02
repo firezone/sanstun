@@ -1,6 +1,6 @@
 use super::handshake::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, b2s_mac_24};
 use crate::handshake::{LABEL_COOKIE, LABEL_MAC1};
-use crate::{Error, HandshakeInit, HandshakeResponse, Packet, PublicKey, Tunn, TunnResult};
+use crate::{Error, HandshakeInit, HandshakeResponse, Packet, PublicKey, TunnResult, Tunnel};
 
 use std::net::IpAddr;
 use std::time::Instant;
@@ -156,7 +156,7 @@ impl RateLimiter {
         dst: &'b mut [u8],
         now: Instant,
     ) -> Result<Packet<'a>, TunnResult<'b>> {
-        let packet = Tunn::parse_incoming_packet(src)?;
+        let packet = Tunnel::parse_incoming_packet(src)?;
 
         // Verify and rate limit handshake messages only
         if let Packet::HandshakeInit(HandshakeInit { sender_idx, .. })

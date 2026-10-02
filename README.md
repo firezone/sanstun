@@ -6,9 +6,9 @@ The last commit that is still API-compatible with upstream is [`0702986`](https:
 
 Compared to upstream, this fork:
 
-- is sans-IO: every time-dependent function takes the current `Instant` and randomness comes from a caller-provided seed, so `Tunn` never reads the clock and behaves deterministically.
-- reports the exact instant it next needs to be polled via `Tunn::next_timer_update`, so callers can sleep until then instead of ticking `update_timers` every second.
-- encrypts data in place with `Tunn::encapsulate_data_at`, which has no side effects without a session: there is no internal packet queue and the caller decides when to handshake.
+- is sans-IO: every time-dependent function takes the current `Instant` and randomness comes from a caller-provided seed, so `Tunnel` never reads the clock and behaves deterministically.
+- reports the exact instant it next needs to be polled via `Tunnel::next_timer_update`, so callers can sleep until then instead of ticking `update_timers` every second.
+- encrypts data in place with `Tunnel::encapsulate_data_at`, which has no side effects without a session: there is no internal packet queue and the caller decides when to handshake.
 - fixes many bugs in the timer and handshake state machine, such as duplicate or spurious handshake initiations, responders initiating rekeys, sending on sessions about to expire and deadlines that never fire.
 - returns errors instead of panicking when a destination buffer is too small.
 - holds the preshared key in a zeroizing `StaticSecret` and tolerates up to 8192 reordered packets, in line with the Linux kernel implementation.

@@ -60,7 +60,7 @@ impl<'a> From<Error> for TunnResult<'a> {
 }
 
 /// Tunnel represents a point-to-point WireGuard connection
-pub struct Tunn {
+pub struct Tunnel {
     /// The handshake currently in progress
     handshake: handshake::Handshake,
     /// The N_SESSIONS most recent sessions, index is session id modulo N_SESSIONS
@@ -122,7 +122,7 @@ pub enum Packet<'a> {
     PacketData(PacketData<'a>),
 }
 
-impl Tunn {
+impl Tunnel {
     #[inline(always)]
     pub fn parse_incoming_packet(src: &[u8]) -> Result<Packet<'_>, Error> {
         if src.len() < 4 {
@@ -181,7 +181,7 @@ impl Tunn {
     ) -> Self {
         let static_public = PublicKey::from(&static_private);
 
-        Tunn {
+        Tunnel {
             handshake: Handshake::new(
                 static_private,
                 static_public,

@@ -2,7 +2,7 @@ use std::fmt;
 
 use super::{session::Session, N_SESSIONS};
 
-/// A unique identifier for an instance of [`Tunn`](super::Tunn).
+/// A unique identifier for an instance of [`Tunnel`](super::Tunnel).
 ///
 /// The top 24 bits are used as a unique, global identifier.
 /// The lower 8 bits are used as a rotating session index with a given peer.

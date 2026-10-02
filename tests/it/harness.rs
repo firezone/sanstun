@@ -1,4 +1,4 @@
-//! A deterministic test harness that drives two [`Tunn`] instances against
+//! A deterministic test harness that drives two [`Tunnel`] instances against
 //! each other over an in-memory network with a virtual clock.
 //!
 //! Time only moves when a test says so ([`Sim::advance`]), packets only flow
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use sanstun::Error;
 use sanstun::RateLimiter;
-use sanstun::{Index, Packet, Tunn, TunnResult};
+use sanstun::{Index, Packet, TunnResult, Tunnel};
 use sanstun::{PublicKey, StaticSecret};
 
 // Protocol constants from the WireGuard whitepaper (§6.1, table on p. 14).
@@ -82,7 +82,7 @@ pub enum Kind {
 }
 
 pub fn classify(datagram: &[u8]) -> Kind {
-    match Tunn::parse_incoming_packet(datagram).expect("only valid packets should be routed") {
+    match Tunnel::parse_incoming_packet(datagram).expect("only valid packets should be routed") {
         Packet::HandshakeInit(_) => Kind::Init,
         Packet::HandshakeResponse(_) => Kind::Response,
         Packet::PacketCookieReply(_) => Kind::CookieReply,
@@ -93,7 +93,7 @@ pub fn classify(datagram: &[u8]) -> Kind {
 
 /// The receiver index of a data message, identifying the session it uses.
 pub fn receiver_index(datagram: &[u8]) -> u32 {
-    match Tunn::parse_incoming_packet(datagram).unwrap() {
+    match Tunnel::parse_incoming_packet(datagram).unwrap() {
         Packet::PacketData(p) => p.receiver_idx,
         other => panic!("not a data packet: {other:?}"),
     }
@@ -160,7 +160,7 @@ impl Outcome for Vec<Out> {
 }
 
 struct Node {
-    tunn: Tunn,
+    tunn: Tunnel,
     addr: IpAddr,
     inbox: Vec<Vec<u8>>,
     errors: Vec<Error>,
@@ -222,7 +222,7 @@ impl Builder {
         let secret_b = StaticSecret::random();
         let public_b = PublicKey::from(&secret_b);
 
-        let a = Tunn::new_at(
+        let a = Tunnel::new_at(
             secret_a,
             public_b,
             self.psk_a.map(StaticSecret::from),
@@ -243,7 +243,7 @@ impl Builder {
         let rate_limiter = self
             .responder_under_load
             .then(|| Arc::new(RateLimiter::new_at(&public_b, 0, start)));
-        let b = Tunn::new_at(
+        let b = Tunnel::new_at(
             secret_b,
             expected_by_b,
             self.psk_b.map(StaticSecret::from),
@@ -280,7 +280,7 @@ impl Builder {
     }
 }
 
-/// Two [`Tunn`] instances (`A`, the conventional initiator, and `B`, the
+/// Two [`Tunnel`] instances (`A`, the conventional initiator, and `B`, the
 /// responder) connected by a simulated network.
 pub struct Sim {
     start: Instant,
@@ -323,11 +323,11 @@ impl Sim {
         &mut self.nodes[peer as usize]
     }
 
-    pub fn tunn(&self, peer: Peer) -> &Tunn {
+    pub fn tunn(&self, peer: Peer) -> &Tunnel {
         &self.node(peer).tunn
     }
 
-    pub fn tunn_mut(&mut self, peer: Peer) -> &mut Tunn {
+    pub fn tunn_mut(&mut self, peer: Peer) -> &mut Tunnel {
         &mut self.node_mut(peer).tunn
     }
 

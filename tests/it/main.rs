@@ -1,7 +1,7 @@
 //! Behavioural integration tests for sanstun's sans-IO WireGuard
-//! implementation ([`sanstun::Tunn`]).
+//! implementation ([`sanstun::Tunnel`]).
 //!
-//! All tests drive two `Tunn` instances against each other through the public
+//! All tests drive two `Tunnel` instances against each other through the public
 //! API only, on a virtual clock (see [`harness`]). They are grounded in the
 //! WireGuard whitepaper (<https://www.wireguard.com/papers/wireguard.pdf>):
 //!

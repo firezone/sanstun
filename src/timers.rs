@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
 use super::errors::Error;
-use crate::{Tunn, TunnResult};
+use crate::{TunnResult, Tunnel};
 use std::iter;
 use std::ops::{Index, IndexMut};
 
@@ -225,7 +225,7 @@ impl IndexMut<TimerName> for Timers {
     }
 }
 
-impl Tunn {
+impl Tunnel {
     pub(super) fn timer_tick(&mut self, timer_name: TimerName, now: Instant) {
         match timer_name {
             TimeLastPacketReceived => {
@@ -515,13 +515,13 @@ impl Tunn {
         TunnResult::Done
     }
 
-    /// Returns the [`Instant`] at which [`Tunn::update_timers_at`] next needs to
+    /// Returns the [`Instant`] at which [`Tunnel::update_timers_at`] next needs to
     /// be called, together with a human-readable reason for debugging.
     ///
     /// Calling it earlier than the given [`Instant`] is safe but unlikely to
     /// have any effect. Driving the state machine by repeatedly polling at the
     /// returned [`Instant`] is sufficient: there is no need to call
-    /// [`Tunn::update_timers_at`] on a fixed interval.
+    /// [`Tunnel::update_timers_at`] on a fixed interval.
     pub fn next_timer_update(&self) -> Option<(Instant, &'static str)> {
         let (next, reason) = self.next_timer_update_internal()?;
         let last_update = self.timers[TimeLastUpdate];
