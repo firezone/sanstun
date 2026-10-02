@@ -353,11 +353,30 @@ impl Tunnel {
             .filter(|s| s.should_use_at(now) || is_responder)
     }
 
+    /// Handles a message received from the network.
+    ///
+    /// Handshake messages and cookie replies are processed right away. The decryption of a data
+    /// message is deferred to the returned [`PendingDecapsulate`]: its session is selected and its
+    /// counter checked against the replay window, without updating any state or reading the
+    /// ciphertext. Hand the [`Decrypted`] message back to [`Tunnel::commit_decrypted`] to complete
+    /// the decapsulation.
+    pub fn decapsulate(
+        &mut self,
+        src_addr: Option<IpAddr>,
+        packet: Packet<'_>,
+        now: Instant,
+    ) -> Result<Decapsulated, Error> {
+        if let Some(cookie) = self.rate_limiter.verify_packet(src_addr, &packet, now)? {
+            return Ok(Decapsulated::CookieReply(CookieReplyMessage(cookie)));
+        }
+
+        self.handle_verified_packet(packet, now)
+    }
+
     /// Completes the decapsulation of a decrypted data message.
     ///
     /// Marks its counter as received, which rejects a duplicate that passed
     /// [`Tunnel::decapsulate`] before the original got here.
-    ///
     pub fn commit_decrypted<B: AsRef<[u8]>>(
         &mut self,
         decrypted: Decrypted<B>,
@@ -389,26 +408,6 @@ impl Tunnel {
         self.timer_tick(TimerName::TimeLastDataPacketReceived, now);
 
         Ok(Committed::Data { buffer, len })
-    }
-
-    /// Handles a message received from the network.
-    ///
-    /// Handshake messages and cookie replies are processed right away. The decryption of a data
-    /// message is deferred to the returned [`PendingDecapsulate`]: its session is selected and its
-    /// counter checked against the replay window, without updating any state or reading the
-    /// ciphertext. Hand the [`Decrypted`] message back to [`Tunnel::commit_decrypted`] to complete
-    /// the decapsulation.
-    pub fn decapsulate(
-        &mut self,
-        src_addr: Option<IpAddr>,
-        packet: Packet<'_>,
-        now: Instant,
-    ) -> Result<Decapsulated, Error> {
-        if let Some(cookie) = self.rate_limiter.verify_packet(src_addr, &packet, now)? {
-            return Ok(Decapsulated::CookieReply(CookieReplyMessage(cookie)));
-        }
-
-        self.handle_verified_packet(packet, now)
     }
 
     pub(crate) fn handle_verified_packet(
