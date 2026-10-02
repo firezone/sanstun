@@ -1,5 +1,5 @@
 use super::errors::Error;
-use crate::{Tunnel, TunnelResult};
+use crate::{Ciphertext, Tunnel};
 use std::iter;
 use std::ops::{Index, IndexMut};
 
@@ -320,7 +320,11 @@ impl Tunnel {
         Some((time_sent + self.timers.rekey_timeout, local_index))
     }
 
-    pub fn update_timers_at<'a>(&mut self, dst: &'a mut [u8], now: Instant) -> TunnelResult<'a> {
+    pub fn update_timers_at<'a>(
+        &mut self,
+        dst: &'a mut [u8],
+        now: Instant,
+    ) -> Result<Option<Ciphertext<'a>>, Error> {
         self.timers[TimeLastUpdate] = now;
 
         if let Some(scheduled_handshake_at) = self.timers.send_handshake_at {
@@ -340,7 +344,7 @@ impl Tunnel {
             // We have a handshake scheduled but the deadline is not expired yet.
             // Don't do anything to avoid repeated printing of logs.
             // The below logic would still evaluate that we need to send another handshake.
-            return TunnelResult::Done;
+            return Ok(None);
         }
 
         let mut handshake_initiation_required = false;
@@ -358,7 +362,7 @@ impl Tunnel {
             tracing::debug!("CONNECTION_EXPIRED(REJECT_AFTER_TIME)");
             self.handshake.set_expired();
             self.clear_all(now);
-            return TunnelResult::Err(e);
+            return Err(e);
         }
 
         // In case our session expired, create a new one iff we initiated the previous one.
@@ -370,7 +374,7 @@ impl Tunnel {
         }
 
         if self.handshake.is_expired() {
-            return TunnelResult::Err(Error::ConnectionExpired);
+            return Err(Error::ConnectionExpired);
         }
 
         // Clear cookie after COOKIE_EXPIRATION_TIME
@@ -389,7 +393,7 @@ impl Tunnel {
             tracing::debug!("CONNECTION_EXPIRED(REJECT_AFTER_TIME * 3)");
             self.handshake.set_expired();
             self.clear_all(now);
-            return TunnelResult::Err(Error::ConnectionExpired);
+            return Err(Error::ConnectionExpired);
         }
 
         if let Some((rekey_timeout, local_idx)) = self.handshake_rekey_timeout() {
@@ -402,7 +406,7 @@ impl Tunnel {
                 tracing::debug!(%local_idx, "CONNECTION_EXPIRED(REKEY_ATTEMPT_TIME)");
                 self.handshake.set_expired();
                 self.clear_all(now);
-                return TunnelResult::Err(Error::ConnectionExpired);
+                return Err(Error::ConnectionExpired);
             }
 
             if now >= rekey_timeout {
@@ -496,20 +500,20 @@ impl Tunnel {
 
             tracing::debug!(?jitter, "Scheduling new handshake");
 
-            return TunnelResult::Done;
+            return Ok(None);
         }
 
         if keepalive_required {
             // A keepalive is only ever sent on an established session, so encrypt the empty packet
             // in place; there is no need to queue it or start a handshake.
             return match self.encapsulate_data_at(&[], dst, now) {
-                Ok(len) => TunnelResult::WriteToNetwork(&mut dst[..len]),
-                Err(Error::NoCurrentSession) => TunnelResult::Done,
-                Err(e) => TunnelResult::Err(e),
+                Ok(packet) => Ok(Some(packet)),
+                Err(Error::NoCurrentSession) => Ok(None),
+                Err(e) => Err(e),
             };
         }
 
-        TunnelResult::Done
+        Ok(None)
     }
 
     /// Returns the [`Instant`] at which [`Tunnel::update_timers_at`] next needs to

@@ -424,13 +424,12 @@ impl Sim {
         let now = self.now;
         let mut buf = vec![0u8; BUF];
         let outgoing = match self.node_mut(peer).tunn.update_timers_at(&mut buf, now) {
-            TunnelResult::Done => None,
-            TunnelResult::Err(e) => {
+            Ok(None) => None,
+            Err(e) => {
                 self.node_mut(peer).errors.push(e);
                 None
             }
-            TunnelResult::WriteToNetwork(packet) => Some(packet.to_vec()),
-            other => panic!("unexpected result from update_timers_at: {other:?}"),
+            Ok(Some(packet)) => Some(packet.to_vec()),
         };
 
         if let Some(datagram) = outgoing {
@@ -492,11 +491,11 @@ impl Sim {
 
         let mut buf = vec![0u8; BUF];
         match node.tunn.decapsulate_at(src, datagram, &mut buf, now) {
-            TunnelResult::Done => {}
-            TunnelResult::Err(e) => outs.push(Out::Err(e)),
-            TunnelResult::WriteToTunnelV4(packet, _) => outs.push(Out::Ip(packet.to_vec())),
-            TunnelResult::WriteToTunnelV6(packet, _) => outs.push(Out::Ip(packet.to_vec())),
-            TunnelResult::WriteToNetwork(packet) => {
+            Ok(TunnelResult::Done) => {}
+            Err(e) => outs.push(Out::Err(e)),
+            Ok(TunnelResult::WriteToTunnelV4(packet, _)) => outs.push(Out::Ip(packet.to_vec())),
+            Ok(TunnelResult::WriteToTunnelV6(packet, _)) => outs.push(Out::Ip(packet.to_vec())),
+            Ok(TunnelResult::WriteToNetwork(packet)) => {
                 outs.push(Out::Net(packet.to_vec()));
             }
         }
@@ -528,9 +527,8 @@ impl Sim {
             .tunn
             .format_handshake_initiation_at(&mut buf, force, now)
         {
-            TunnelResult::WriteToNetwork(packet) => Some(packet.to_vec()),
-            TunnelResult::Done => None,
-            other => panic!("unexpected result from format_handshake_initiation_at: {other:?}"),
+            Ok(packet) => packet.map(|p| p.to_vec()),
+            Err(e) => panic!("unexpected error from format_handshake_initiation_at: {e:?}"),
         }
     }
 
@@ -562,12 +560,11 @@ impl Sim {
     pub fn try_encapsulate(&mut self, from: Peer, ip_packet: &[u8]) -> Result<Vec<u8>, Error> {
         let now = self.now;
         let mut buf = vec![0u8; BUF];
-        let len = self
+        let packet = self
             .node_mut(from)
             .tunn
             .encapsulate_data_at(ip_packet, &mut buf, now)?;
-        buf.truncate(len);
-        Ok(buf)
+        Ok(packet.to_vec())
     }
 
     /// Encrypt an IP packet and route it through the network.
