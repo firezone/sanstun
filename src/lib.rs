@@ -1,5 +1,6 @@
 //! A sans-IO implementation of the WireGuard protocol, acting as both initiator and responder.
 
+mod crypto;
 mod errors;
 mod handshake;
 mod index;
