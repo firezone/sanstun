@@ -235,8 +235,9 @@ impl Timers {
         );
     }
 
-    fn take_scheduled_handshake(&mut self) {
-        self.send_handshake_at = None;
+    /// Clears the scheduled handshake if it is due at `now`.
+    fn take_due_handshake(&mut self, now: Instant) -> Option<Instant> {
+        self.send_handshake_at.take_if(|at| now >= *at)
     }
 
     fn consume_passive_keepalive(&mut self) {
@@ -291,17 +292,15 @@ impl Tunnel {
     pub fn handle_timeout(&mut self, now: Instant) {
         self.timers.tick(TimeLastUpdate, now);
 
-        if let Some(scheduled_handshake_at) = self.timers.scheduled_handshake() {
-            // If we have scheduled a handshake and the deadline expired, send it immediately.
-            if now >= scheduled_handshake_at {
-                self.timers.take_scheduled_handshake();
-                if let Some(initiation) = self.format_handshake_initiation(true, now) {
-                    self.events
-                        .push_back(Event::HandshakeInitiation(initiation));
-                }
-                return;
+        if self.timers.take_due_handshake(now).is_some() {
+            if let Some(initiation) = self.format_handshake_initiation(true, now) {
+                self.events
+                    .push_back(Event::HandshakeInitiation(initiation));
             }
+            return;
+        }
 
+        if let Some(scheduled_handshake_at) = self.timers.scheduled_handshake() {
             debug_assert!(
                 scheduled_handshake_at
                     .checked_duration_since(now)
