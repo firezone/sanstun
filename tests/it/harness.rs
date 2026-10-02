@@ -188,6 +188,7 @@ pub struct Builder {
     persistent_keepalive_b: Option<u16>,
     seed_a: [u8; 32],
     seed_b: [u8; 32],
+    static_keys: Option<([u8; 32], [u8; 32])>,
     responder_under_load: bool,
     responder_expects_different_key: bool,
 }
@@ -214,6 +215,12 @@ impl Builder {
         self
     }
 
+    /// Use fixed static private keys instead of random ones.
+    pub fn static_keys(mut self, secret_a: [u8; 32], secret_b: [u8; 32]) -> Self {
+        self.static_keys = Some((secret_a, secret_b));
+        self
+    }
+
     /// Give the responder an [`Ingress`] that considers it permanently under
     /// load, forcing the cookie mechanism (§5.3) on every handshake.
     pub fn responder_under_load(mut self) -> Self {
@@ -232,9 +239,11 @@ impl Builder {
         let start = Instant::now();
         let unix = Duration::from_secs(1_700_000_000);
 
-        let secret_a = StaticSecret::random();
+        let (secret_a, secret_b) = match self.static_keys {
+            Some((a, b)) => (StaticSecret::from(a), StaticSecret::from(b)),
+            None => (StaticSecret::random(), StaticSecret::random()),
+        };
         let public_a = PublicKey::from(&secret_a);
-        let secret_b = StaticSecret::random();
         let public_b = PublicKey::from(&secret_b);
 
         let limit_b = if self.responder_under_load {
@@ -317,6 +326,7 @@ impl Sim {
             persistent_keepalive_b: None,
             seed_a: [1; 32],
             seed_b: [2; 32],
+            static_keys: None,
             responder_under_load: false,
             responder_expects_different_key: false,
         }
