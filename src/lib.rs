@@ -45,10 +45,13 @@ const N_SESSIONS: u8 = 8;
 /// What the caller needs to do after [`Tunnel::decapsulate`].
 #[derive(Debug)]
 pub enum Decapsulated<'a> {
-    /// Nothing to do.
-    Done,
-    /// Send this datagram to the peer.
-    WriteToNetwork(Ciphertext<'a>),
+    /// Send this handshake response to the peer, which sent a valid handshake initiation.
+    HandshakeResponse(Ciphertext<'a>),
+    /// Send this cookie reply to the peer: we are under load and its handshake message needs
+    /// a valid cookie.
+    CookieReply(Ciphertext<'a>),
+    /// The peer's cookie is stored for the next handshake; nothing to send.
+    CookieReceived,
     /// A keepalive is due: send an empty data message, encrypted through
     /// [`Tunnel::prepare_encapsulate`].
     KeepaliveDue,
@@ -59,8 +62,8 @@ pub enum Decapsulated<'a> {
 /// What the caller needs to do after [`Tunnel::update_timers`].
 #[derive(Debug)]
 pub enum TimerAction<'a> {
-    /// Send this datagram to the peer.
-    WriteToNetwork(Ciphertext<'a>),
+    /// Send this handshake initiation to the peer.
+    HandshakeInitiation(Ciphertext<'a>),
     /// A keepalive is due: send an empty data message, encrypted through
     /// [`Tunnel::prepare_encapsulate`].
     KeepaliveDue,
@@ -426,7 +429,7 @@ impl Tunnel {
                 .verify_packet(src_addr, &packet, &mut cookie, now)?
         {
             dst[..cookie.len()].copy_from_slice(cookie);
-            return Ok(Decapsulated::WriteToNetwork(Ciphertext(
+            return Ok(Decapsulated::CookieReply(Ciphertext(
                 &mut dst[..cookie.len()],
             )));
         }
@@ -472,7 +475,7 @@ impl Tunnel {
 
         tracing::debug!(%local_idx, %remote_idx, "Sending handshake_response");
 
-        Ok(Decapsulated::WriteToNetwork(Ciphertext(packet)))
+        Ok(Decapsulated::HandshakeResponse(Ciphertext(packet)))
     }
 
     fn handle_handshake_response<'a>(
@@ -514,7 +517,7 @@ impl Tunnel {
 
         tracing::debug!(%local_idx, "Did set cookie");
 
-        Ok(Decapsulated::Done)
+        Ok(Decapsulated::CookieReceived)
     }
 
     fn handle_data(&self, packet: PacketData) -> Result<PendingDecapsulate, Error> {

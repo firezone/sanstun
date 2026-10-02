@@ -429,7 +429,7 @@ impl Sim {
                 self.node_mut(peer).errors.push(e);
                 None
             }
-            Ok(Some(TimerAction::WriteToNetwork(packet))) => Some(packet.to_vec()),
+            Ok(Some(TimerAction::HandshakeInitiation(packet))) => Some(packet.to_vec()),
             Ok(Some(TimerAction::KeepaliveDue)) => Some(self.encapsulate(peer, &[])),
         };
 
@@ -494,9 +494,9 @@ impl Sim {
         let result = Packet::parse(datagram)
             .and_then(|packet| node.tunn.decapsulate(src, packet, &mut buf, now));
         match result {
-            Ok(Decapsulated::Done) => {}
+            Ok(Decapsulated::CookieReceived) => {}
             Err(e) => outs.push(Out::Err(e)),
-            Ok(Decapsulated::WriteToNetwork(packet)) => {
+            Ok(Decapsulated::HandshakeResponse(packet) | Decapsulated::CookieReply(packet)) => {
                 outs.push(Out::Net(packet.to_vec()));
             }
             Ok(Decapsulated::Data(pending)) => {

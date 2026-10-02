@@ -324,7 +324,7 @@ impl Tunnel {
                 self.timers.send_handshake_at = None;
                 let initiation = self.format_handshake_initiation(dst, true, now)?;
 
-                return Ok(initiation.map(TimerAction::WriteToNetwork));
+                return Ok(initiation.map(TimerAction::HandshakeInitiation));
             }
 
             debug_assert!(

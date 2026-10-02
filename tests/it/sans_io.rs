@@ -35,7 +35,8 @@ fn scheduled_handshake_honours_next_timer_update() {
     assert!(wake >= deadline && wake <= deadline + MAX_JITTER);
 
     // ... and emitted exactly once when the announced instant is polled.
-    let Ok(Some(TimerAction::WriteToNetwork(packet))) = tunn.update_timers(&mut buf, wake) else {
+    let Ok(Some(TimerAction::HandshakeInitiation(packet))) = tunn.update_timers(&mut buf, wake)
+    else {
         panic!("expected the scheduled handshake initiation");
     };
     assert_eq!(classify(&packet), Kind::Init);
@@ -249,7 +250,7 @@ fn identical_seeds_produce_identical_handshakes() {
             .to_vec();
 
         let mut response = [0u8; 256];
-        let Decapsulated::WriteToNetwork(response) = b
+        let Decapsulated::HandshakeResponse(response) = b
             .decapsulate(None, Packet::parse(&init).unwrap(), &mut response, now)
             .unwrap()
         else {
