@@ -5,6 +5,7 @@ mod handshake;
 mod index;
 mod message;
 mod rate_limiter;
+mod replay;
 mod session;
 mod timers;
 
