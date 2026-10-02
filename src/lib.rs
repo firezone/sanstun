@@ -126,13 +126,9 @@ pub struct HandshakeInit<'a> {
     initiator: InitiatorStatic,
 }
 
-impl<'a> HandshakeInit<'a> {
+impl HandshakeInit<'_> {
     pub fn sender_idx(&self) -> u32 {
         self.sender_idx
-    }
-
-    pub fn encrypted_timestamp(&self) -> &'a [u8] {
-        self.encrypted_timestamp
     }
 
     /// The initiator's static public key, e.g. to look up the [`Tunnel`] it belongs to.
