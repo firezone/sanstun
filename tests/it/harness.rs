@@ -506,7 +506,7 @@ impl Sim {
                 let decrypted = pending.decrypt(datagram, vec![0u8; BUF]);
                 match node.tunn.commit_decrypted(decrypted, now) {
                     Ok(Committed::Keepalive) => {}
-                    Ok(Committed::IpPacket { mut buffer, len }) => {
+                    Ok(Committed::Data { mut buffer, len }) => {
                         buffer.truncate(len);
                         outs.push(Out::Ip(buffer));
                     }

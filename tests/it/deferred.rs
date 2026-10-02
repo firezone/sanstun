@@ -183,15 +183,14 @@ fn decrypted_message_owns_its_buffer() {
     let decrypted = prepare_decrypt(sim.tunn_mut(B), &datagram, now)
         .unwrap()
         .decrypt(&datagram, buf);
-    let Committed::IpPacket { buffer, len } =
-        sim.tunn_mut(B).commit_decrypted(decrypted, now).unwrap()
+    let Committed::Data { buffer, len } = sim.tunn_mut(B).commit_decrypted(decrypted, now).unwrap()
     else {
-        panic!("expected an IP packet");
+        panic!("expected a data payload");
     };
 
-    assert_eq!(len, ip_packet.len());
+    assert_eq!(len, padded.len());
     assert_eq!(buffer.len(), BUF);
-    assert_eq!(&buffer[..len], ip_packet.as_slice());
+    assert_eq!(&buffer[..len], padded.as_slice());
 }
 
 #[test]
@@ -273,7 +272,7 @@ fn commit<B: AsRef<[u8]>>(
     now: Instant,
 ) -> Result<Option<Vec<u8>>, Error> {
     match tunn.commit_decrypted(decrypted, now)? {
-        Committed::IpPacket { buffer, len } => Ok(Some(buffer.as_ref()[..len].to_vec())),
+        Committed::Data { buffer, len } => Ok(Some(buffer.as_ref()[..len].to_vec())),
         Committed::Keepalive => Ok(None),
     }
 }

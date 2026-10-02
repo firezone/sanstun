@@ -33,14 +33,6 @@ use std::time::{Duration, Instant};
 /// The default value to use for rate limiting, when no other rate limiter is defined
 const PEER_HANDSHAKE_RATE_LIMIT: u64 = 10;
 
-const IPV4_MIN_HEADER_SIZE: usize = 20;
-const IPV4_LEN_OFF: usize = 2;
-
-const IPV6_MIN_HEADER_SIZE: usize = 40;
-const IPV6_LEN_OFF: usize = 4;
-
-const IP_LEN_SZ: usize = 2;
-
 /// number of sessions in the ring, better keep a PoT
 ///
 /// We use a `u8` to align with the number of bits reserved in [`Index`] for the sessions.
@@ -103,8 +95,9 @@ impl DerefMut for DataMessage<'_> {
 /// What the caller needs to do after [`Tunnel::commit_decrypted`].
 #[derive(Debug)]
 pub enum Committed<B> {
-    /// Write the IP packet in the first `len` bytes of `buffer` to the tunnel.
-    IpPacket { buffer: B, len: usize },
+    /// The first `len` bytes of `buffer` hold the decrypted payload: an IP packet for the tunnel,
+    /// possibly followed by padding, which the caller strips when parsing it.
+    Data { buffer: B, len: usize },
     /// The data message was a keepalive; nothing to write.
     Keepalive,
 }
@@ -386,24 +379,16 @@ impl Tunnel {
             return Err(Error::NoCurrentSession);
         };
         let len = session.finish_receive_packet_data(counter, plaintext_len)?;
-        let available = buffer.as_ref().len();
-        let plaintext = buffer
-            .as_ref()
-            .get(..len)
-            .ok_or(Error::DestinationBufferTooSmall {
-                required: len,
-                available,
-            })?;
 
         self.set_current_session(remote_idx);
-
         self.timer_tick(TimerName::TimeLastPacketReceived, now);
 
-        let Some(len) = self.validate_decapsulated_packet(plaintext, now)? else {
+        if len == 0 {
             return Ok(Committed::Keepalive);
-        };
+        }
+        self.timer_tick(TimerName::TimeLastDataPacketReceived, now);
 
-        Ok(Committed::IpPacket { buffer, len })
+        Ok(Committed::Data { buffer, len })
     }
 
     /// Handles a message received from the network.
@@ -575,38 +560,5 @@ impl Tunnel {
         self.timer_tick(TimerName::TimeLastPacketSent, now);
 
         Some(HandshakeInitiationMessage(packet))
-    }
-
-    /// Returns the length of the IPv4 or IPv6 packet at the start of `packet` according to its
-    /// header, or `None` for a keepalive.
-    fn validate_decapsulated_packet(
-        &mut self,
-        packet: &[u8],
-        now: Instant,
-    ) -> Result<Option<usize>, Error> {
-        let computed_len = match packet.len() {
-            0 => return Ok(None), // This is keepalive, and not an error
-            _ if packet[0] >> 4 == 4 && packet.len() >= IPV4_MIN_HEADER_SIZE => {
-                let len_bytes: [u8; IP_LEN_SZ] = packet[IPV4_LEN_OFF..IPV4_LEN_OFF + IP_LEN_SZ]
-                    .try_into()
-                    .unwrap();
-                u16::from_be_bytes(len_bytes) as usize
-            }
-            _ if packet[0] >> 4 == 6 && packet.len() >= IPV6_MIN_HEADER_SIZE => {
-                let len_bytes: [u8; IP_LEN_SZ] = packet[IPV6_LEN_OFF..IPV6_LEN_OFF + IP_LEN_SZ]
-                    .try_into()
-                    .unwrap();
-                u16::from_be_bytes(len_bytes) as usize + IPV6_MIN_HEADER_SIZE
-            }
-            _ => return Err(Error::InvalidPacket),
-        };
-
-        if computed_len > packet.len() {
-            return Err(Error::InvalidPacket);
-        }
-
-        self.timer_tick(TimerName::TimeLastDataPacketReceived, now);
-
-        Ok(Some(computed_len))
     }
 }
