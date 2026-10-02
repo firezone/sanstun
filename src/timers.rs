@@ -4,7 +4,6 @@ use std::iter;
 use std::ops::{Index, IndexMut};
 
 use rand::RngExt;
-use rand::{rngs::StdRng, SeedableRng};
 use std::time::{Duration, Instant};
 
 // Some constants, represent time in seconds
@@ -69,20 +68,13 @@ pub struct Timers {
     /// When we should sent a scheduled handshake.
     send_handshake_at: Option<Instant>,
 
-    jitter_rng: StdRng,
-
     rekey_attempt_time: Duration,
     keepalive_timeout: Duration,
     rekey_timeout: Duration,
 }
 
 impl Timers {
-    pub(super) fn new(
-        persistent_keepalive: Option<u16>,
-        reset_rr: bool,
-        rng_seed: u64,
-        now: Instant,
-    ) -> Timers {
+    pub(super) fn new(persistent_keepalive: Option<u16>, reset_rr: bool, now: Instant) -> Timers {
         Timers {
             is_initiator: false,
             timers: [now; TimerName::Top as usize],
@@ -91,7 +83,6 @@ impl Timers {
             persistent_keepalive: usize::from(persistent_keepalive.unwrap_or(0)),
             should_reset_rr: reset_rr,
             send_handshake_at: None,
-            jitter_rng: StdRng::seed_from_u64(rng_seed),
             rekey_attempt_time: REKEY_ATTEMPT_TIME,
             keepalive_timeout: KEEPALIVE_TIMEOUT,
             rekey_timeout: REKEY_TIMEOUT,
@@ -487,10 +478,7 @@ impl Tunnel {
         }
 
         if handshake_initiation_required {
-            let jitter = self
-                .timers
-                .jitter_rng
-                .random_range(Duration::ZERO..=MAX_JITTER);
+            let jitter = self.rng.random_range(Duration::ZERO..=MAX_JITTER);
 
             let existing = self.timers.send_handshake_at.replace(now + jitter);
             debug_assert!(

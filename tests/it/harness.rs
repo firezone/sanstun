@@ -171,8 +171,8 @@ pub struct Builder {
     psk_a: Option<[u8; 32]>,
     psk_b: Option<[u8; 32]>,
     persistent_keepalive_b: Option<u16>,
-    seed_a: u64,
-    seed_b: u64,
+    seed_a: [u8; 32],
+    seed_b: [u8; 32],
     responder_under_load: bool,
     responder_expects_different_key: bool,
 }
@@ -193,7 +193,7 @@ impl Builder {
         self
     }
 
-    pub fn seeds(mut self, seed_a: u64, seed_b: u64) -> Self {
+    pub fn seeds(mut self, seed_a: [u8; 32], seed_b: [u8; 32]) -> Self {
         self.seed_a = seed_a;
         self.seed_b = seed_b;
         self
@@ -295,8 +295,8 @@ impl Sim {
             psk_a: None,
             psk_b: None,
             persistent_keepalive_b: None,
-            seed_a: 1,
-            seed_b: 2,
+            seed_a: [1; 32],
+            seed_b: [2; 32],
             responder_under_load: false,
             responder_expects_different_key: false,
         }

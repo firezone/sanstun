@@ -16,7 +16,6 @@ ring = "0.17"
 x25519-dalek = { version = "3.0.0", features = [
     "reusable_secrets",
     "static_secrets",
-    "getrandom",
 ] }
 rand = "0.10"
 chacha20poly1305 = "0.10.1"
@@ -27,6 +26,7 @@ typenum = "1.20.1"
 constant_time_eq = "0.6.0"
 
 [dev-dependencies]
+x25519-dalek = { version = "3.0.0", features = ["getrandom"] }
 etherparse = "0.21"
 criterion = { version = "0.8.2", features = ["html_reports"] }
 
