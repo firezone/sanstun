@@ -577,7 +577,8 @@ impl Tunnel {
         Some(HandshakeInitiationMessage(packet))
     }
 
-    /// Check if an IP packet is v4 or v6 and truncate it to the length indicated by its length field
+    /// Returns the length of the IPv4 or IPv6 packet at the start of `packet` according to its
+    /// header, or `None` for a keepalive.
     fn validate_decapsulated_packet(
         &mut self,
         packet: &[u8],
