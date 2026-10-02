@@ -241,14 +241,16 @@ impl Session {
     }
 
     /// Accepts the counter of a decrypted data message, returning the length of its plaintext.
-    pub(super) fn finish_receive_packet_data(&mut self, opened: Opened) -> Result<usize, Error> {
-        debug_assert_eq!(opened.receiving_index, self.receiving_index);
-
-        let plaintext_len = opened.plaintext_len?;
+    pub(super) fn finish_receive_packet_data(
+        &mut self,
+        counter: u64,
+        plaintext_len: Result<usize, Error>,
+    ) -> Result<usize, Error> {
+        let plaintext_len = plaintext_len?;
 
         // Only an authenticated message may advance the replay window. The check is repeated
         // because a duplicate may have passed the quick check before this one was accepted.
-        self.receiving_counter_mark(opened.counter)?;
+        self.receiving_counter_mark(counter)?;
 
         Ok(plaintext_len)
     }
@@ -326,21 +328,22 @@ impl PendingDecapsulate {
     /// Copies the ciphertext of `message` to the start of `dst` and decrypts it in place.
     ///
     /// `message` is the data message this [`PendingDecapsulate`] was prepared from; anything else fails
-    /// to authenticate. Hand the result and `dst` to
+    /// to authenticate. The returned [`Opened`] message owns `dst`; hand it to
     /// [`Tunnel::finish_decapsulate`](crate::Tunnel::finish_decapsulate).
-    pub fn open_into(self, message: &[u8], dst: &mut [u8]) -> Opened {
+    pub fn open_into<B: AsMut<[u8]>>(self, message: &[u8], mut dst: B) -> Opened<B> {
         let ciphertext = message.get(DATA_OFFSET..).unwrap_or_default();
-        let plaintext_len = self.decrypt(ciphertext, dst);
+        let plaintext_len = self.open(ciphertext, dst.as_mut());
 
         Opened {
             receiving_index: self.receiving_index,
             counter: self.counter,
             plaintext_len,
+            buffer: dst,
             _key: self.key,
         }
     }
 
-    fn decrypt(&self, ciphertext: &[u8], dst: &mut [u8]) -> Result<usize, Error> {
+    fn open(&self, ciphertext: &[u8], dst: &mut [u8]) -> Result<usize, Error> {
         let ct_len = ciphertext.len();
         let buf_len = dst.len();
 
@@ -367,14 +370,15 @@ impl PendingDecapsulate {
 /// [`Tunnel`](crate::Tunnel).
 #[derive(Debug)]
 #[must_use = "the data message is not accepted until it is handed back to the `Tunnel`"]
-pub struct Opened {
-    pub(super) receiving_index: Index,
-    counter: u64,
-    plaintext_len: Result<usize, Error>,
+pub struct Opened<B> {
+    pub(crate) receiving_index: Index,
+    pub(crate) counter: u64,
+    pub(crate) plaintext_len: Result<usize, Error>,
+    pub(crate) buffer: B,
     /// Released when the [`Tunnel`](crate::Tunnel) accepts the message, so that opening a message
     /// leaves the reference count of the key to the thread that owns the
     /// [`Tunnel`](crate::Tunnel).
-    _key: Arc<Key>,
+    pub(crate) _key: Arc<Key>,
 }
 
 /// A session key on a cache line of its own, apart from the reference count of its [`Arc`].
@@ -382,4 +386,4 @@ pub struct Opened {
 /// Threads that only read the key then never contend with the thread updating the count.
 #[derive(Debug)]
 #[repr(align(128))]
-struct Key(LessSafeKey);
+pub(crate) struct Key(LessSafeKey);

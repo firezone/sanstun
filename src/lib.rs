@@ -90,27 +90,36 @@ impl DerefMut for Ciphertext<'_> {
     }
 }
 
-/// A decrypted IP packet to write to the tunnel.
-#[derive(Debug)]
-pub struct Plaintext<'a>(&'a mut [u8]);
+/// A decrypted IP packet to write to the tunnel, at the start of the buffer it was decrypted into.
+pub struct Plaintext<B> {
+    buffer: B,
+    len: usize,
+}
 
-impl<'a> Plaintext<'a> {
-    pub fn into_inner(self) -> &'a mut [u8] {
-        self.0
+impl<B> Plaintext<B> {
+    /// Returns the whole buffer; the IP packet is its first `self.len()` bytes.
+    pub fn into_inner(self) -> B {
+        self.buffer
     }
 }
 
-impl Deref for Plaintext<'_> {
+impl<B: AsRef<[u8]>> Deref for Plaintext<B> {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
-        self.0
+        &self.buffer.as_ref()[..self.len]
     }
 }
 
-impl DerefMut for Plaintext<'_> {
+impl<B: AsRef<[u8]> + AsMut<[u8]>> DerefMut for Plaintext<B> {
     fn deref_mut(&mut self) -> &mut [u8] {
-        self.0
+        &mut self.buffer.as_mut()[..self.len]
+    }
+}
+
+impl<B: AsRef<[u8]>> std::fmt::Debug for Plaintext<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Plaintext").field(&&**self).finish()
     }
 }
 
@@ -354,19 +363,24 @@ impl Tunnel {
             .filter(|s| s.should_use_at(now) || is_responder)
     }
 
-    /// Completes the decapsulation of a data message decrypted into `dst`.
+    /// Completes the decapsulation of a decrypted data message.
     ///
-    /// `dst` is the buffer the message was opened into. Marks its counter as received, which
-    /// rejects a duplicate that passed [`Tunnel::decapsulate`] before the original got here.
+    /// Marks its counter as received, which rejects a duplicate that passed
+    /// [`Tunnel::decapsulate`] before the original got here.
     ///
     /// Returns the IP packet to write to the tunnel interface, or `None` for a keepalive.
-    pub fn finish_decapsulate<'a>(
+    pub fn finish_decapsulate<B: AsRef<[u8]>>(
         &mut self,
-        opened: Opened,
-        dst: &'a mut [u8],
+        opened: Opened<B>,
         now: Instant,
-    ) -> Result<Option<Plaintext<'a>>, Error> {
-        let remote_idx = opened.receiving_index;
+    ) -> Result<Option<Plaintext<B>>, Error> {
+        let Opened {
+            receiving_index: remote_idx,
+            counter,
+            plaintext_len,
+            buffer,
+            _key: _,
+        } = opened;
 
         let Some(session) = self.sessions[remote_idx]
             .as_mut()
@@ -375,14 +389,21 @@ impl Tunnel {
             tracing::trace!(%remote_idx, "Session was replaced during decryption");
             return Err(Error::NoCurrentSession);
         };
-        let len = session.finish_receive_packet_data(opened)?;
-        let plaintext = dst.get_mut(..len).ok_or(Error::DestinationBufferTooSmall)?;
+        let len = session.finish_receive_packet_data(counter, plaintext_len)?;
+        let plaintext = buffer
+            .as_ref()
+            .get(..len)
+            .ok_or(Error::DestinationBufferTooSmall)?;
 
         self.set_current_session(remote_idx);
 
         self.timer_tick(TimerName::TimeLastPacketReceived, now);
 
-        self.validate_decapsulated_packet(plaintext, now)
+        let Some(len) = self.validate_decapsulated_packet(plaintext, now)? else {
+            return Ok(None);
+        };
+
+        Ok(Some(Plaintext { buffer, len }))
     }
 
     /// Handles a message received from the network.
@@ -566,11 +587,11 @@ impl Tunnel {
     }
 
     /// Check if an IP packet is v4 or v6 and truncate it to the length indicated by its length field
-    fn validate_decapsulated_packet<'a>(
+    fn validate_decapsulated_packet(
         &mut self,
-        packet: &'a mut [u8],
+        packet: &[u8],
         now: Instant,
-    ) -> Result<Option<Plaintext<'a>>, Error> {
+    ) -> Result<Option<usize>, Error> {
         let computed_len = match packet.len() {
             0 => return Ok(None), // This is keepalive, and not an error
             _ if packet[0] >> 4 == 4 && packet.len() >= IPV4_MIN_HEADER_SIZE => {
@@ -594,6 +615,6 @@ impl Tunnel {
 
         self.timer_tick(TimerName::TimeLastDataPacketReceived, now);
 
-        Ok(Some(Plaintext(&mut packet[..computed_len])))
+        Ok(Some(computed_len))
     }
 }

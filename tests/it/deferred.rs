@@ -93,15 +93,14 @@ fn open_runs_on_another_thread() {
     let now = sim.now;
 
     let open = prepare_open(sim.tunn_mut(B), &datagram, now).unwrap();
-    let mut buf = vec![0u8; BUF];
     let opened = std::thread::scope(|s| {
-        s.spawn(|| open.open_into(&datagram, &mut buf))
+        s.spawn(|| open.open_into(&datagram, vec![0u8; BUF]))
             .join()
             .unwrap()
     });
 
     assert_eq!(
-        finish_open(sim.tunn_mut(B), opened, &mut buf, now).unwrap(),
+        finish_open(sim.tunn_mut(B), opened, now).unwrap(),
         Some(ip_packet)
     );
 }
@@ -118,15 +117,12 @@ fn duplicate_within_one_batch_is_accepted_only_once() {
     let mut second_buf = vec![0u8; BUF];
     let first = prepare_open(tunn, &datagram, now).unwrap();
     let second = prepare_open(tunn, &datagram, now).unwrap();
-    let first = first.open_into(&datagram, &mut first_buf);
-    let second = second.open_into(&datagram, &mut second_buf);
+    let first = first.open_into(&datagram, &mut first_buf[..]);
+    let second = second.open_into(&datagram, &mut second_buf[..]);
 
-    assert_eq!(
-        finish_open(tunn, first, &mut first_buf, now).unwrap(),
-        Some(ip_packet)
-    );
+    assert_eq!(finish_open(tunn, first, now).unwrap(), Some(ip_packet));
     assert!(matches!(
-        finish_open(tunn, second, &mut second_buf, now),
+        finish_open(tunn, second, now),
         Err(Error::DuplicateCounter)
     ));
 }
@@ -146,7 +142,7 @@ fn tampered_packet_does_not_advance_the_replay_window() {
     let opened = prepare_open(sim.tunn_mut(B), &tampered, now)
         .unwrap()
         .open_into(&tampered, &mut buf);
-    let result = finish_open(sim.tunn_mut(B), opened, &mut buf, now);
+    let result = finish_open(sim.tunn_mut(B), opened, now);
 
     assert!(matches!(result, Err(Error::InvalidAeadTag)));
     assert_eq!(sim.deliver(B, &datagrams[0]).expect_one_ip(), ip_packet);
@@ -164,9 +160,34 @@ fn open_into_a_short_buffer_fails() {
         .open_into(&datagram, &mut buf);
 
     assert!(matches!(
-        finish_open(sim.tunn_mut(B), opened, &mut buf, now),
+        finish_open(sim.tunn_mut(B), opened, now),
         Err(Error::DestinationBufferTooSmall)
     ));
+}
+
+#[test]
+fn opened_message_owns_its_buffer() {
+    let mut sim = Sim::connected();
+    let ip_packet = ipv4_packet(b"boxed");
+    let mut padded = ip_packet.clone();
+    padded.extend_from_slice(&[0u8; 7]);
+    let datagram = sim.encapsulate(A, &padded);
+    let now = sim.now;
+
+    let buf: Box<[u8]> = vec![0u8; BUF].into_boxed_slice();
+    let opened = prepare_open(sim.tunn_mut(B), &datagram, now)
+        .unwrap()
+        .open_into(&datagram, buf);
+    let plaintext = sim
+        .tunn_mut(B)
+        .finish_decapsulate(opened, now)
+        .unwrap()
+        .expect("an IP packet");
+
+    assert_eq!(&*plaintext, ip_packet.as_slice());
+    let buf = plaintext.into_inner();
+    assert_eq!(buf.len(), BUF);
+    assert_eq!(&buf[..ip_packet.len()], ip_packet.as_slice());
 }
 
 #[test]
@@ -193,7 +214,7 @@ fn deferred_work_can_move_to_another_thread() {
 
     assert_send::<PendingEncapsulate>();
     assert_send::<PendingDecapsulate>();
-    assert_send::<Opened>();
+    assert_send::<Opened<Vec<u8>>>();
 }
 
 fn prepare_open(
@@ -208,13 +229,12 @@ fn prepare_open(
     }
 }
 
-fn finish_open(
+fn finish_open<B: AsRef<[u8]>>(
     tunn: &mut Tunnel,
-    opened: Opened,
-    buf: &mut [u8],
+    opened: Opened<B>,
     now: Instant,
 ) -> Result<Option<Vec<u8>>, Error> {
-    let plaintext = tunn.finish_decapsulate(opened, buf, now)?;
+    let plaintext = tunn.finish_decapsulate(opened, now)?;
 
     Ok(plaintext.map(|p| p.to_vec()))
 }

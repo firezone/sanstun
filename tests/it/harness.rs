@@ -500,9 +500,8 @@ impl Sim {
                 outs.push(Out::Net(packet.to_vec()));
             }
             Ok(Decapsulated::Data(open)) => {
-                let mut buf = vec![0u8; BUF];
-                let opened = open.open_into(datagram, &mut buf);
-                match node.tunn.finish_decapsulate(opened, &mut buf, now) {
+                let opened = open.open_into(datagram, vec![0u8; BUF]);
+                match node.tunn.finish_decapsulate(opened, now) {
                     Ok(None) => {}
                     Ok(Some(packet)) => outs.push(Out::Ip(packet.to_vec())),
                     Err(e) => outs.push(Out::Err(e)),
