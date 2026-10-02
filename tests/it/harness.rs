@@ -7,7 +7,7 @@
 //! sent *when*.
 
 use std::collections::VecDeque;
-use std::net::IpAddr;
+use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use sanstun::Error;
@@ -176,7 +176,7 @@ impl Outcome for Vec<Out> {
 struct Node {
     tunn: Tunnel,
     ingress: Ingress,
-    addr: IpAddr,
+    addr: SocketAddr,
     inbox: Vec<Vec<u8>>,
     errors: Vec<Error>,
     drop_outgoing: bool,
@@ -290,7 +290,7 @@ impl Builder {
                 Node {
                     tunn: a,
                     ingress: ingress_a,
-                    addr: "10.0.0.1".parse().unwrap(),
+                    addr: "10.0.0.1:51820".parse().unwrap(),
                     inbox: Vec::new(),
                     errors: Vec::new(),
                     drop_outgoing: false,
@@ -298,7 +298,7 @@ impl Builder {
                 Node {
                     tunn: b,
                     ingress: ingress_b,
-                    addr: "10.0.0.2".parse().unwrap(),
+                    addr: "10.0.0.2:51820".parse().unwrap(),
                     inbox: Vec::new(),
                     errors: Vec::new(),
                     drop_outgoing: false,
@@ -530,7 +530,7 @@ impl Sim {
         }
     }
 
-    fn deliver_from(&mut self, to: Peer, datagram: &[u8], src: IpAddr) -> Vec<Out> {
+    fn deliver_from(&mut self, to: Peer, datagram: &[u8], src: SocketAddr) -> Vec<Out> {
         let now = self.now;
         let node = self.node_mut(to);
         let mut outs = Vec::new();
