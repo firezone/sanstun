@@ -6,7 +6,7 @@ use crate::harness::{
     classify, ipv4_packet, secs, Kind, Outcome as _, Peer::A, Peer::B, Sim, KEEPALIVE_SIZE,
     KEEPALIVE_TIMEOUT, MAX_JITTER, REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_TIMEOUT,
 };
-use sanstun::{Error, Index, PublicKey, StaticSecret, Tunnel, TunnelResult};
+use sanstun::{Decapsulated, Error, Index, Packet, PublicKey, StaticSecret, TimerAction, Tunnel};
 use std::time::{Duration, Instant};
 
 /// A handshake triggered by a timer is not sent immediately: it is scheduled
@@ -26,26 +26,20 @@ fn scheduled_handshake_honours_next_timer_update() {
     // Nothing is due before the deadline.
     assert!(matches!(
         tunn.update_timers(&mut buf, deadline - Duration::from_millis(1)),
-        Ok(TunnelResult::Done)
+        Ok(None)
     ));
 
     // At the deadline, the handshake is only *scheduled* ...
-    assert!(matches!(
-        tunn.update_timers(&mut buf, deadline),
-        Ok(TunnelResult::Done)
-    ));
+    assert!(matches!(tunn.update_timers(&mut buf, deadline), Ok(None)));
     let (wake, _reason) = tunn.next_timer_update().expect("a scheduled handshake");
     assert!(wake >= deadline && wake <= deadline + MAX_JITTER);
 
     // ... and emitted exactly once when the announced instant is polled.
-    let Ok(TunnelResult::WriteToNetwork(packet)) = tunn.update_timers(&mut buf, wake) else {
+    let Ok(Some(TimerAction::WriteToNetwork(packet))) = tunn.update_timers(&mut buf, wake) else {
         panic!("expected the scheduled handshake initiation");
     };
     assert_eq!(classify(&packet), Kind::Init);
-    assert!(matches!(
-        tunn.update_timers(&mut buf, wake),
-        Ok(TunnelResult::Done)
-    ));
+    assert!(matches!(tunn.update_timers(&mut buf, wake), Ok(None)));
 }
 
 #[test]
@@ -64,11 +58,11 @@ fn next_timer_update_predicts_the_passive_keepalive() {
     let mut buf = [0u8; 256];
     assert!(matches!(
         tunn.update_timers(&mut buf, wake - Duration::from_millis(1)),
-        Ok(TunnelResult::Done)
+        Ok(None)
     ));
     assert!(matches!(
         tunn.update_timers(&mut buf, wake),
-        Ok(TunnelResult::KeepaliveDue)
+        Ok(Some(TimerAction::KeepaliveDue))
     ));
     let packet = tunn
         .prepare_encapsulate(0, wake)
@@ -152,10 +146,7 @@ fn different_seeds_produce_different_jitter() {
         let retry_due = sim.now + REKEY_TIMEOUT;
         let mut buf = [0u8; 256];
         let tunn = sim.tunn_mut(A);
-        assert!(matches!(
-            tunn.update_timers(&mut buf, retry_due),
-            Ok(TunnelResult::Done)
-        ));
+        assert!(matches!(tunn.update_timers(&mut buf, retry_due), Ok(None)));
 
         tunn.next_timer_update()
             .expect("a scheduled retry")
@@ -258,8 +249,9 @@ fn identical_seeds_produce_identical_handshakes() {
             .to_vec();
 
         let mut response = [0u8; 256];
-        let TunnelResult::WriteToNetwork(response) =
-            b.decapsulate(None, &init, &mut response, now).unwrap()
+        let Decapsulated::WriteToNetwork(response) = b
+            .decapsulate(None, Packet::parse(&init).unwrap(), &mut response, now)
+            .unwrap()
         else {
             panic!("expected a handshake response");
         };

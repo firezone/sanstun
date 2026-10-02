@@ -42,11 +42,23 @@ const IP_LEN_SZ: usize = 2;
 /// We use a `u8` to align with the number of bits reserved in [`Index`] for the sessions.
 const N_SESSIONS: u8 = 8;
 
-/// What the caller needs to do after [`Tunnel::decapsulate`] or [`Tunnel::update_timers`].
+/// What the caller needs to do after [`Tunnel::decapsulate`].
 #[derive(Debug)]
-pub enum TunnelResult<'a> {
+pub enum Decapsulated<'a> {
     /// Nothing to do.
     Done,
+    /// Send this datagram to the peer.
+    WriteToNetwork(Ciphertext<'a>),
+    /// A keepalive is due: send an empty data message, sealed through
+    /// [`Tunnel::prepare_encapsulate`].
+    KeepaliveDue,
+    /// A data message whose decryption is deferred to the [`PendingDecapsulate`].
+    Data(PendingDecapsulate),
+}
+
+/// What the caller needs to do after [`Tunnel::update_timers`].
+#[derive(Debug)]
+pub enum TimerAction<'a> {
     /// Send this datagram to the peer.
     WriteToNetwork(Ciphertext<'a>),
     /// A keepalive is due: send an empty data message, sealed through
@@ -128,12 +140,30 @@ const HANDSHAKE_RESP_SZ: usize = 92;
 const COOKIE_REPLY_SZ: usize = 64;
 const DATA_OVERHEAD_SZ: usize = 32;
 
+/// The bytes of a handshake message that its MACs cover, and the MACs themselves.
+#[derive(Debug, Clone, Copy)]
+struct Macs<'a> {
+    msg: &'a [u8],
+    mac1: &'a [u8],
+    mac2: &'a [u8],
+}
+
+impl<'a> Macs<'a> {
+    fn new(message: &'a [u8]) -> Self {
+        let (msg, macs) = message.split_at(message.len() - 32);
+        let (mac1, mac2) = macs.split_at(16);
+
+        Self { msg, mac1, mac2 }
+    }
+}
+
 #[derive(Debug)]
 pub struct HandshakeInit<'a> {
     sender_idx: u32,
     unencrypted_ephemeral: &'a [u8; 32],
     encrypted_static: &'a [u8],
     encrypted_timestamp: &'a [u8],
+    macs: Macs<'a>,
 }
 
 #[derive(Debug)]
@@ -142,6 +172,7 @@ pub struct HandshakeResponse<'a> {
     pub receiver_idx: u32,
     unencrypted_ephemeral: &'a [u8; 32],
     encrypted_nothing: &'a [u8],
+    macs: Macs<'a>,
 }
 
 #[derive(Debug)]
@@ -166,9 +197,10 @@ pub enum Packet<'a> {
     PacketData(PacketData),
 }
 
-impl Tunnel {
+impl<'a> Packet<'a> {
+    /// Parses a datagram received from the network.
     #[inline(always)]
-    pub fn parse_incoming_packet(src: &[u8]) -> Result<Packet<'_>, Error> {
+    pub fn parse(src: &'a [u8]) -> Result<Self, Error> {
         if src.len() < 4 {
             return Err(Error::InvalidPacket);
         }
@@ -183,6 +215,7 @@ impl Tunnel {
                     .expect("length already checked above"),
                 encrypted_static: &src[40..88],
                 encrypted_timestamp: &src[88..116],
+                macs: Macs::new(src),
             }),
             (HANDSHAKE_RESP, HANDSHAKE_RESP_SZ) => Packet::HandshakeResponse(HandshakeResponse {
                 sender_idx: u32::from_le_bytes(src[4..8].try_into().unwrap()),
@@ -190,6 +223,7 @@ impl Tunnel {
                 unencrypted_ephemeral: <&[u8; 32] as TryFrom<&[u8]>>::try_from(&src[12..44])
                     .expect("length already checked above"),
                 encrypted_nothing: &src[44..60],
+                macs: Macs::new(src),
             }),
             (COOKIE_REPLY, COOKIE_REPLY_SZ) => Packet::PacketCookieReply(PacketCookieReply {
                 receiver_idx: u32::from_le_bytes(src[4..8].try_into().unwrap()),
@@ -203,7 +237,9 @@ impl Tunnel {
             _ => return Err(Error::InvalidPacket),
         })
     }
+}
 
+impl Tunnel {
     pub fn is_expired(&self) -> bool {
         self.handshake.is_expired()
     }
@@ -318,26 +354,10 @@ impl Tunnel {
             .filter(|s| s.should_use_at(now) || is_responder)
     }
 
-    /// Prepares the decryption of a data message, deferring it to the returned [`PendingDecapsulate`].
-    ///
-    /// Selects the session and checks the counter against the replay window without updating
-    /// any state or reading the ciphertext. Hand the [`Opened`] message back to
-    /// [`Tunnel::finish_decapsulate`] to complete the decapsulation.
-    pub fn prepare_decapsulate(&self, packet: PacketData) -> Result<PendingDecapsulate, Error> {
-        let remote_idx = Index::from_peer(packet.receiver_idx);
-
-        let session = self.sessions[remote_idx].as_ref().ok_or_else(|| {
-            tracing::trace!(%remote_idx, "No current session available");
-            Error::NoCurrentSession
-        })?;
-
-        session.prepare_receive_packet_data(packet)
-    }
-
     /// Completes the decapsulation of a data message decrypted into `dst`.
     ///
     /// `dst` is the buffer the message was opened into. Marks its counter as received, which
-    /// rejects a duplicate that passed [`Tunnel::prepare_decapsulate`] before the original got here.
+    /// rejects a duplicate that passed [`Tunnel::decapsulate`] before the original got here.
     ///
     /// Returns the IP packet to write to the tunnel interface, or `None` for a keepalive.
     pub fn finish_decapsulate<'a>(
@@ -365,30 +385,30 @@ impl Tunnel {
         self.validate_decapsulated_packet(plaintext, now)
     }
 
-    /// Receives a UDP datagram from the network and parses it.
+    /// Handles a message received from the network.
     ///
-    /// Handles handshake messages and cookie replies. Data messages are decapsulated with
-    /// [`Tunnel::prepare_decapsulate`] instead and fail with `Err(Error::UnexpectedPacket)`.
+    /// Handshake messages and cookie replies are processed right away. The decryption of a data
+    /// message is deferred to the returned [`PendingDecapsulate`]: its session is selected and its
+    /// counter checked against the replay window, without updating any state or reading the
+    /// ciphertext. Hand the [`Opened`] message back to [`Tunnel::finish_decapsulate`] to complete
+    /// the decapsulation.
     pub fn decapsulate<'a>(
         &mut self,
         src_addr: Option<IpAddr>,
-        datagram: &[u8],
+        packet: Packet<'_>,
         dst: &'a mut [u8],
         now: Instant,
-    ) -> Result<TunnelResult<'a>, Error> {
+    ) -> Result<Decapsulated<'a>, Error> {
         let mut cookie = [0u8; COOKIE_REPLY_SZ];
-        let verified = self
-            .rate_limiter
-            .verify_packet(src_addr, datagram, &mut cookie, now)?;
-        let packet = match verified {
-            Ok(packet) => packet,
-            Err(cookie) => {
-                dst[..cookie.len()].copy_from_slice(cookie);
-                return Ok(TunnelResult::WriteToNetwork(Ciphertext(
-                    &mut dst[..cookie.len()],
-                )));
-            }
-        };
+        if let Some(cookie) =
+            self.rate_limiter
+                .verify_packet(src_addr, &packet, &mut cookie, now)?
+        {
+            dst[..cookie.len()].copy_from_slice(cookie);
+            return Ok(Decapsulated::WriteToNetwork(Ciphertext(
+                &mut dst[..cookie.len()],
+            )));
+        }
 
         self.handle_verified_packet(packet, dst, now)
     }
@@ -398,12 +418,12 @@ impl Tunnel {
         packet: Packet,
         dst: &'a mut [u8],
         now: Instant,
-    ) -> Result<TunnelResult<'a>, Error> {
+    ) -> Result<Decapsulated<'a>, Error> {
         match packet {
             Packet::HandshakeInit(p) => self.handle_handshake_init(p, dst, now),
             Packet::HandshakeResponse(p) => self.handle_handshake_response(p, now),
             Packet::PacketCookieReply(p) => self.handle_cookie_reply(p, now),
-            Packet::PacketData(_) => Err(Error::UnexpectedPacket),
+            Packet::PacketData(p) => self.handle_data(p).map(Decapsulated::Data),
         }
     }
 
@@ -412,7 +432,7 @@ impl Tunnel {
         p: HandshakeInit,
         dst: &'a mut [u8],
         now: Instant,
-    ) -> Result<TunnelResult<'a>, Error> {
+    ) -> Result<Decapsulated<'a>, Error> {
         let remote_idx = Index::from_peer(p.sender_idx);
 
         tracing::debug!(%remote_idx, "Received handshake_initiation",);
@@ -431,14 +451,14 @@ impl Tunnel {
 
         tracing::debug!(%local_idx, %remote_idx, "Sending handshake_response");
 
-        Ok(TunnelResult::WriteToNetwork(Ciphertext(packet)))
+        Ok(Decapsulated::WriteToNetwork(Ciphertext(packet)))
     }
 
     fn handle_handshake_response<'a>(
         &mut self,
         p: HandshakeResponse,
         now: Instant,
-    ) -> Result<TunnelResult<'a>, Error> {
+    ) -> Result<Decapsulated<'a>, Error> {
         tracing::debug!(
             local_idx = %Index::from_peer(p.receiver_idx),
             remote_idx = %Index::from_peer(p.sender_idx),
@@ -456,14 +476,14 @@ impl Tunnel {
         self.set_current_session(local_idx);
 
         // The keepalive confirms the session to the responder.
-        Ok(TunnelResult::KeepaliveDue)
+        Ok(Decapsulated::KeepaliveDue)
     }
 
     fn handle_cookie_reply<'a>(
         &mut self,
         p: PacketCookieReply,
         now: Instant,
-    ) -> Result<TunnelResult<'a>, Error> {
+    ) -> Result<Decapsulated<'a>, Error> {
         let local_idx = Index::from_peer(p.receiver_idx);
 
         tracing::debug!(%local_idx, "Received cookie_reply");
@@ -473,7 +493,18 @@ impl Tunnel {
 
         tracing::debug!(%local_idx, "Did set cookie");
 
-        Ok(TunnelResult::Done)
+        Ok(Decapsulated::Done)
+    }
+
+    fn handle_data(&self, packet: PacketData) -> Result<PendingDecapsulate, Error> {
+        let remote_idx = Index::from_peer(packet.receiver_idx);
+
+        let session = self.sessions[remote_idx].as_ref().ok_or_else(|| {
+            tracing::trace!(%remote_idx, "No current session available");
+            Error::NoCurrentSession
+        })?;
+
+        session.prepare_receive_packet_data(packet)
     }
 
     /// Update the index of the currently used session, if needed

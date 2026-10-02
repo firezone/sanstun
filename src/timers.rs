@@ -1,5 +1,5 @@
 use super::errors::Error;
-use crate::{Tunnel, TunnelResult};
+use crate::{TimerAction, Tunnel};
 use std::iter;
 use std::ops::{Index, IndexMut};
 
@@ -315,7 +315,7 @@ impl Tunnel {
         &mut self,
         dst: &'a mut [u8],
         now: Instant,
-    ) -> Result<TunnelResult<'a>, Error> {
+    ) -> Result<Option<TimerAction<'a>>, Error> {
         self.timers[TimeLastUpdate] = now;
 
         if let Some(scheduled_handshake_at) = self.timers.send_handshake_at {
@@ -324,7 +324,7 @@ impl Tunnel {
                 self.timers.send_handshake_at = None;
                 let initiation = self.format_handshake_initiation(dst, true, now)?;
 
-                return Ok(initiation.map_or(TunnelResult::Done, TunnelResult::WriteToNetwork));
+                return Ok(initiation.map(TimerAction::WriteToNetwork));
             }
 
             debug_assert!(
@@ -337,7 +337,7 @@ impl Tunnel {
             // We have a handshake scheduled but the deadline is not expired yet.
             // Don't do anything to avoid repeated printing of logs.
             // The below logic would still evaluate that we need to send another handshake.
-            return Ok(TunnelResult::Done);
+            return Ok(None);
         }
 
         let mut handshake_initiation_required = false;
@@ -490,16 +490,16 @@ impl Tunnel {
 
             tracing::debug!(?jitter, "Scheduling new handshake");
 
-            return Ok(TunnelResult::Done);
+            return Ok(None);
         }
 
         // A keepalive is only ever sent on an established session; there is no need to queue it
         // or start a handshake.
         if keepalive_required && self.sending_session(now).is_some() {
-            return Ok(TunnelResult::KeepaliveDue);
+            return Ok(Some(TimerAction::KeepaliveDue));
         }
 
-        Ok(TunnelResult::Done)
+        Ok(None)
     }
 
     /// Returns the [`Instant`] at which [`Tunnel::update_timers`] next needs to

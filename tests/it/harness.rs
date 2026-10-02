@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use sanstun::Error;
 use sanstun::RateLimiter;
-use sanstun::{Index, Packet, Tunnel, TunnelResult};
+use sanstun::{Decapsulated, Index, Packet, TimerAction, Tunnel};
 use sanstun::{PublicKey, StaticSecret};
 
 // Protocol constants from the WireGuard whitepaper (§6.1, table on p. 14).
@@ -82,7 +82,7 @@ pub enum Kind {
 }
 
 pub fn classify(datagram: &[u8]) -> Kind {
-    match Tunnel::parse_incoming_packet(datagram).expect("only valid packets should be routed") {
+    match Packet::parse(datagram).expect("only valid packets should be routed") {
         Packet::HandshakeInit(_) => Kind::Init,
         Packet::HandshakeResponse(_) => Kind::Response,
         Packet::PacketCookieReply(_) => Kind::CookieReply,
@@ -93,7 +93,7 @@ pub fn classify(datagram: &[u8]) -> Kind {
 
 /// The receiver index of a data message, identifying the session it uses.
 pub fn receiver_index(datagram: &[u8]) -> u32 {
-    match Tunnel::parse_incoming_packet(datagram).unwrap() {
+    match Packet::parse(datagram).unwrap() {
         Packet::PacketData(p) => p.receiver_idx,
         other => panic!("not a data packet: {other:?}"),
     }
@@ -424,13 +424,13 @@ impl Sim {
         let now = self.now;
         let mut buf = vec![0u8; BUF];
         let outgoing = match self.node_mut(peer).tunn.update_timers(&mut buf, now) {
-            Ok(TunnelResult::Done) => None,
+            Ok(None) => None,
             Err(e) => {
                 self.node_mut(peer).errors.push(e);
                 None
             }
-            Ok(TunnelResult::WriteToNetwork(packet)) => Some(packet.to_vec()),
-            Ok(TunnelResult::KeepaliveDue) => Some(self.encapsulate(peer, &[])),
+            Ok(Some(TimerAction::WriteToNetwork(packet))) => Some(packet.to_vec()),
+            Ok(Some(TimerAction::KeepaliveDue)) => Some(self.encapsulate(peer, &[])),
         };
 
         if let Some(datagram) = outgoing {
@@ -491,27 +491,24 @@ impl Sim {
         let mut outs = Vec::new();
 
         let mut buf = vec![0u8; BUF];
-        if let Ok(Packet::PacketData(data)) = Tunnel::parse_incoming_packet(datagram) {
-            let result = node.tunn.prepare_decapsulate(data).and_then(|open| {
-                let opened = open.open_into(datagram, &mut buf);
-                node.tunn.finish_decapsulate(opened, &mut buf, now)
-            });
-            match result {
-                Ok(None) => {}
-                Ok(Some(packet)) => outs.push(Out::Ip(packet.to_vec())),
-                Err(e) => outs.push(Out::Err(e)),
-            }
-
-            return outs;
-        }
-
-        match node.tunn.decapsulate(src, datagram, &mut buf, now) {
-            Ok(TunnelResult::Done) => {}
+        let result = Packet::parse(datagram)
+            .and_then(|packet| node.tunn.decapsulate(src, packet, &mut buf, now));
+        match result {
+            Ok(Decapsulated::Done) => {}
             Err(e) => outs.push(Out::Err(e)),
-            Ok(TunnelResult::WriteToNetwork(packet)) => {
+            Ok(Decapsulated::WriteToNetwork(packet)) => {
                 outs.push(Out::Net(packet.to_vec()));
             }
-            Ok(TunnelResult::KeepaliveDue) => {
+            Ok(Decapsulated::Data(open)) => {
+                let mut buf = vec![0u8; BUF];
+                let opened = open.open_into(datagram, &mut buf);
+                match node.tunn.finish_decapsulate(opened, &mut buf, now) {
+                    Ok(None) => {}
+                    Ok(Some(packet)) => outs.push(Out::Ip(packet.to_vec())),
+                    Err(e) => outs.push(Out::Err(e)),
+                }
+            }
+            Ok(Decapsulated::KeepaliveDue) => {
                 let keepalive = node
                     .tunn
                     .prepare_encapsulate(0, now)

@@ -1,6 +1,6 @@
 use super::handshake::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, b2s_mac_24};
 use crate::handshake::{LABEL_COOKIE, LABEL_MAC1};
-use crate::{Error, HandshakeInit, HandshakeResponse, Packet, PublicKey, Tunnel};
+use crate::{Error, HandshakeInit, HandshakeResponse, Macs, Packet, PublicKey};
 
 use std::net::IpAddr;
 use std::time::Instant;
@@ -146,22 +146,23 @@ impl RateLimiter {
 
     /// Verify the MAC fields on the datagram, and apply rate limiting if needed
     ///
-    /// Returns `Ok(Err(cookie_reply))` when the peer must be sent a cookie reply instead.
-    pub(crate) fn verify_packet<'a, 'b>(
+    /// Returns `Ok(Some(cookie_reply))` when the peer must be sent a cookie reply instead.
+    pub(crate) fn verify_packet<'b>(
         &self,
         src_addr: Option<IpAddr>,
-        src: &'a [u8],
+        packet: &Packet<'_>,
         dst: &'b mut [u8],
         now: Instant,
-    ) -> Result<Result<Packet<'a>, &'b mut [u8]>, Error> {
-        let packet = Tunnel::parse_incoming_packet(src)?;
-
+    ) -> Result<Option<&'b mut [u8]>, Error> {
         // Verify and rate limit handshake messages only
-        if let Packet::HandshakeInit(HandshakeInit { sender_idx, .. })
-        | Packet::HandshakeResponse(HandshakeResponse { sender_idx, .. }) = packet
+        if let Packet::HandshakeInit(HandshakeInit {
+            sender_idx, macs, ..
+        })
+        | Packet::HandshakeResponse(HandshakeResponse {
+            sender_idx, macs, ..
+        }) = packet
         {
-            let (msg, macs) = src.split_at(src.len() - 32);
-            let (mac1, mac2) = macs.split_at(16);
+            let Macs { msg, mac1, mac2 } = *macs;
 
             let computed_mac1 = b2s_keyed_mac_16(&self.mac1_key, msg);
             if !constant_time_eq(&computed_mac1[..16], mac1) {
@@ -184,12 +185,12 @@ impl RateLimiter {
                 let computed_mac2 = b2s_keyed_mac_16_2(&cookie, msg, mac1);
 
                 if !constant_time_eq(&computed_mac2[..16], mac2) {
-                    let cookie_packet = self.format_cookie_reply(sender_idx, cookie, mac1, dst)?;
-                    return Ok(Err(cookie_packet));
+                    let cookie_packet = self.format_cookie_reply(*sender_idx, cookie, mac1, dst)?;
+                    return Ok(Some(cookie_packet));
                 }
             }
         }
 
-        Ok(Ok(packet))
+        Ok(None)
     }
 }

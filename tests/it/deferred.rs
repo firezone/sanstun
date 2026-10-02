@@ -6,7 +6,7 @@ use crate::harness::{
     ipv4_packet, Outcome as _, Peer::A, Peer::B, Sim, DATA_OVERHEAD, REPLAY_WINDOW,
 };
 use sanstun::{
-    Error, Opened, Packet, PendingDecapsulate, PendingEncapsulate, Tunnel, TunnelResult,
+    Decapsulated, Error, Opened, Packet, PendingDecapsulate, PendingEncapsulate, Tunnel,
 };
 use std::time::Instant;
 
@@ -92,7 +92,7 @@ fn open_runs_on_another_thread() {
     let datagram = sim.encapsulate(A, &ip_packet);
     let now = sim.now;
 
-    let open = prepare_open(sim.tunn(B), &datagram).unwrap();
+    let open = prepare_open(sim.tunn_mut(B), &datagram, now).unwrap();
     let mut buf = vec![0u8; BUF];
     let opened = std::thread::scope(|s| {
         s.spawn(|| open.open_into(&datagram, &mut buf))
@@ -116,8 +116,8 @@ fn duplicate_within_one_batch_is_accepted_only_once() {
 
     let mut first_buf = vec![0u8; BUF];
     let mut second_buf = vec![0u8; BUF];
-    let first = prepare_open(tunn, &datagram).unwrap();
-    let second = prepare_open(tunn, &datagram).unwrap();
+    let first = prepare_open(tunn, &datagram, now).unwrap();
+    let second = prepare_open(tunn, &datagram, now).unwrap();
     let first = first.open_into(&datagram, &mut first_buf);
     let second = second.open_into(&datagram, &mut second_buf);
 
@@ -143,7 +143,7 @@ fn tampered_packet_does_not_advance_the_replay_window() {
     let now = sim.now;
 
     let mut buf = vec![0u8; BUF];
-    let opened = prepare_open(sim.tunn(B), &tampered)
+    let opened = prepare_open(sim.tunn_mut(B), &tampered, now)
         .unwrap()
         .open_into(&tampered, &mut buf);
     let result = finish_open(sim.tunn_mut(B), opened, &mut buf, now);
@@ -159,7 +159,7 @@ fn open_into_a_short_buffer_fails() {
     let now = sim.now;
 
     let mut buf = vec![0u8; datagram.len() - 17];
-    let opened = prepare_open(sim.tunn(B), &datagram)
+    let opened = prepare_open(sim.tunn_mut(B), &datagram, now)
         .unwrap()
         .open_into(&datagram, &mut buf);
 
@@ -170,18 +170,6 @@ fn open_into_a_short_buffer_fails() {
 }
 
 #[test]
-fn decapsulate_at_leaves_data_messages_to_decapsulate_data() {
-    let mut sim = Sim::connected();
-    let datagram = sim.encapsulate(A, &ipv4_packet(b"data"));
-    let now = sim.now;
-
-    let mut buf = vec![0u8; BUF];
-    let result = sim.tunn_mut(B).decapsulate(None, &datagram, &mut buf, now);
-
-    assert!(matches!(result, Err(Error::UnexpectedPacket)));
-}
-
-#[test]
 fn handshake_response_leaves_the_keepalive_to_the_caller() {
     let mut sim = Sim::new();
     let init = sim.initiate_handshake(A);
@@ -189,8 +177,10 @@ fn handshake_response_leaves_the_keepalive_to_the_caller() {
     let now = sim.now;
 
     let mut buf = vec![0u8; BUF];
-    let result = sim.tunn_mut(A).decapsulate(None, &response, &mut buf, now);
-    assert!(matches!(result, Ok(TunnelResult::KeepaliveDue)));
+    let result =
+        sim.tunn_mut(A)
+            .decapsulate(None, Packet::parse(&response).unwrap(), &mut buf, now);
+    assert!(matches!(result, Ok(Decapsulated::KeepaliveDue)));
 
     let keepalive = sim.encapsulate(A, &[]);
     sim.deliver(B, &keepalive).expect_consumed();
@@ -206,12 +196,16 @@ fn deferred_work_can_move_to_another_thread() {
     assert_send::<Opened>();
 }
 
-fn prepare_open(tunn: &Tunnel, datagram: &[u8]) -> Result<PendingDecapsulate, Error> {
-    let Packet::PacketData(data) = Tunnel::parse_incoming_packet(datagram)? else {
-        panic!("expected a data message");
-    };
-
-    tunn.prepare_decapsulate(data)
+fn prepare_open(
+    tunn: &mut Tunnel,
+    datagram: &[u8],
+    now: Instant,
+) -> Result<PendingDecapsulate, Error> {
+    let mut buf = vec![0u8; BUF];
+    match tunn.decapsulate(None, Packet::parse(datagram)?, &mut buf, now)? {
+        Decapsulated::Data(open) => Ok(open),
+        other => panic!("expected a data message, got {other:?}"),
+    }
 }
 
 fn finish_open(
