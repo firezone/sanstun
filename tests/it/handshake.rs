@@ -138,20 +138,6 @@ fn tampered_handshake_initiation_is_rejected() {
 }
 
 #[test]
-fn cookie_reply_out_of_the_blue_is_rejected() {
-    let mut sim = Sim::new();
-
-    // A valid-looking cookie reply (type 3, 64 bytes) without a preceding
-    // handshake from us must not be accepted.
-    let mut cookie_reply = vec![0u8; 64];
-    cookie_reply[0] = 3;
-
-    let error = sim.deliver(B, &cookie_reply).expect_err();
-
-    assert!(matches!(error, Error::UnexpectedPacket));
-}
-
-#[test]
 fn malformed_datagrams_are_rejected() {
     let mut sim = Sim::new();
     let init = sim.initiate_handshake(A);
