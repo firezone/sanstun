@@ -4,7 +4,7 @@
 use crate::harness::{
     DATA_OVERHEAD, KEEPALIVE_SIZE, Outcome as _, Peer::A, Peer::B, Sim, ipv4_packet, ipv6_packet,
 };
-use sanstun::{Error, Keepalive};
+use sanstun::{Decapsulated, Error, Keepalive};
 
 #[test]
 fn ipv4_packets_round_trip() {
@@ -47,7 +47,38 @@ fn keepalives_are_consumed_silently() {
     assert_eq!(keepalive.len(), KEEPALIVE_SIZE);
 
     sim.deliver(B, &keepalive).expect_consumed();
-    assert!(sim.take_inbox(B).is_empty());
+}
+
+#[test]
+fn keepalive_without_a_session_fails() {
+    let mut sim = Sim::new();
+    let now = sim.now;
+
+    assert!(matches!(
+        sim.tunn_mut(A).encapsulate_keepalive(Keepalive, now),
+        Err(Error::NoCurrentSession)
+    ));
+}
+
+#[test]
+fn handshake_response_leaves_the_keepalive_to_the_caller() {
+    let mut sim = Sim::new();
+    let init = sim.initiate_handshake(A);
+    let response = sim.deliver(B, &init).expect_one_net();
+    let now = sim.now;
+
+    let packet = sim.receive(A, &response);
+    let result = sim.tunn_mut(A).decapsulate(packet, now);
+    let Ok(Decapsulated::KeepaliveDue(keepalive)) = result else {
+        panic!("expected a due keepalive, got {result:?}");
+    };
+
+    let keepalive = sim
+        .tunn_mut(A)
+        .encapsulate_keepalive(keepalive, now)
+        .unwrap();
+    sim.deliver(B, &keepalive).expect_consumed();
+    sim.assert_connectivity();
 }
 
 #[test]
