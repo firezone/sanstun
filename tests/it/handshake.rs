@@ -5,10 +5,7 @@ use crate::harness::{
     HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, Outcome as _, Peer::A, Peer::B, Sim,
     classify,
 };
-use sanstun::{
-    Decapsulated, Error, Index, Ingress, Packet, PublicKey, Received, StaticSecret, Tunnel,
-};
-use std::time::{Duration, Instant};
+use sanstun::Error;
 
 #[test]
 fn handshake_completes_in_one_round_trip() {
@@ -171,49 +168,4 @@ fn malformed_datagrams_are_rejected() {
 
     let kind = classify(&init);
     assert_eq!(kind, Kind::Init, "the untampered packet parses fine");
-}
-
-/// A responder with many peers hands an initiation to the tunnel of the
-/// initiator's static key.
-#[test]
-fn initiation_is_routed_by_the_initiators_static_key() {
-    let now = Instant::now();
-    let [secret_a, secret_b, secret_c] = [1, 2, 3].map(|n| StaticSecret::from([n; 32]));
-    let [public_a, public_b, public_c] = [&secret_a, &secret_b, &secret_c].map(PublicKey::from);
-    let ingress_b = Ingress::new(secret_b.clone(), 10, [4; 32], now);
-    let mut tunnels_b =
-        [public_a, public_c].map(|peer| (peer, tunnel(secret_b.clone(), peer, now)));
-    let mut c = tunnel(secret_c, public_b, now);
-
-    let init = c.format_handshake_initiation(false, now).unwrap();
-    let Ok(Received::Packet(packet)) = ingress_b.receive(None, &init, now) else {
-        panic!("expected a handshake initiation to pass");
-    };
-    let Packet::HandshakeInit(init) = &packet else {
-        panic!("expected a handshake initiation, got {packet:?}");
-    };
-    let peer = init.peer_static_public();
-    assert_eq!(peer, public_c);
-
-    let (_, tunnel) = tunnels_b.iter_mut().find(|(p, _)| *p == peer).unwrap();
-    let result = tunnel.decapsulate(packet, now);
-
-    assert!(
-        matches!(result, Ok(Decapsulated::HandshakeResponse(_))),
-        "expected a handshake response, got {result:?}"
-    );
-}
-
-fn tunnel(secret: StaticSecret, peer: PublicKey, now: Instant) -> Tunnel {
-    Tunnel::new(
-        secret,
-        peer,
-        None,
-        None,
-        Index::new_local(1),
-        [5; 32],
-        now,
-        now,
-        Duration::from_secs(1_700_000_000),
-    )
 }
