@@ -1,5 +1,5 @@
 use super::errors::Error;
-use crate::Tunnel;
+use crate::{Ciphertext, Tunnel};
 use std::iter;
 use std::ops::{Index, IndexMut};
 
@@ -324,7 +324,7 @@ impl Tunnel {
         &mut self,
         dst: &'a mut [u8],
         now: Instant,
-    ) -> Result<Option<&'a mut [u8]>, Error> {
+    ) -> Result<Option<Ciphertext<'a>>, Error> {
         self.timers[TimeLastUpdate] = now;
 
         if let Some(scheduled_handshake_at) = self.timers.send_handshake_at {
@@ -507,7 +507,7 @@ impl Tunnel {
             // A keepalive is only ever sent on an established session, so encrypt the empty packet
             // in place; there is no need to queue it or start a handshake.
             return match self.encapsulate_data_at(&[], dst, now) {
-                Ok(len) => Ok(Some(&mut dst[..len])),
+                Ok(packet) => Ok(Some(packet)),
                 Err(Error::NoCurrentSession) => Ok(None),
                 Err(e) => Err(e),
             };

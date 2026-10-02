@@ -560,12 +560,11 @@ impl Sim {
     pub fn try_encapsulate(&mut self, from: Peer, ip_packet: &[u8]) -> Result<Vec<u8>, Error> {
         let now = self.now;
         let mut buf = vec![0u8; BUF];
-        let len = self
+        let packet = self
             .node_mut(from)
             .tunn
             .encapsulate_data_at(ip_packet, &mut buf, now)?;
-        buf.truncate(len);
-        Ok(buf)
+        Ok(packet.to_vec())
     }
 
     /// Encrypt an IP packet and route it through the network.

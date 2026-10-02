@@ -18,6 +18,7 @@ use crate::timers::{TimerName, Timers};
 
 use std::convert::{TryFrom, TryInto};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -44,9 +45,57 @@ const N_SESSIONS: u8 = 8;
 #[derive(Debug)]
 pub enum TunnelResult<'a> {
     Done,
-    WriteToNetwork(&'a mut [u8]),
-    WriteToTunnelV4(&'a mut [u8], Ipv4Addr),
-    WriteToTunnelV6(&'a mut [u8], Ipv6Addr),
+    WriteToNetwork(Ciphertext<'a>),
+    WriteToTunnelV4(Plaintext<'a>, Ipv4Addr),
+    WriteToTunnelV6(Plaintext<'a>, Ipv6Addr),
+}
+
+/// A datagram to send to the network.
+#[derive(Debug)]
+pub struct Ciphertext<'a>(&'a mut [u8]);
+
+impl<'a> Ciphertext<'a> {
+    pub fn into_inner(self) -> &'a mut [u8] {
+        self.0
+    }
+}
+
+impl Deref for Ciphertext<'_> {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        self.0
+    }
+}
+
+impl DerefMut for Ciphertext<'_> {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        self.0
+    }
+}
+
+/// A decrypted IP packet to write to the tunnel.
+#[derive(Debug)]
+pub struct Plaintext<'a>(&'a mut [u8]);
+
+impl<'a> Plaintext<'a> {
+    pub fn into_inner(self) -> &'a mut [u8] {
+        self.0
+    }
+}
+
+impl Deref for Plaintext<'_> {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        self.0
+    }
+}
+
+impl DerefMut for Plaintext<'_> {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        self.0
+    }
 }
 
 /// Tunnel represents a point-to-point WireGuard connection
@@ -228,15 +277,15 @@ impl Tunnel {
     /// Encapsulate a single packet from the tunnel interface **in place**, but only if
     /// there is currently a usable session.
     ///
-    /// Returns `Ok(len)` when the encrypted WireGuard data message (`len` bytes) has been written
-    /// to the start of `dst`. Returns `Err(Error::NoCurrentSession)` when there is no
-    /// usable session; in that case `dst` is left untouched and **no** handshake is initiated.
-    pub fn encapsulate_data_at(
+    /// Returns the encrypted WireGuard data message, written to the start of `dst`. Returns
+    /// `Err(Error::NoCurrentSession)` when there is no usable session; in that case `dst` is left
+    /// untouched and **no** handshake is initiated.
+    pub fn encapsulate_data_at<'a>(
         &mut self,
         src: &[u8],
-        dst: &mut [u8],
+        dst: &'a mut [u8],
         now: Instant,
-    ) -> Result<usize, Error> {
+    ) -> Result<Ciphertext<'a>, Error> {
         let is_responder = self.timers.is_responder();
         let Some(session) = self.sessions[self.current]
             .as_mut()
@@ -246,7 +295,7 @@ impl Tunnel {
         };
 
         // Send the packet using an established session
-        let len = session.format_packet_data(src, dst)?.len();
+        let packet = session.format_packet_data(src, dst)?;
 
         self.timer_tick(TimerName::TimeLastPacketSent, now);
         // Exclude Keepalive packets from timer update.
@@ -254,7 +303,7 @@ impl Tunnel {
             self.timer_tick(TimerName::TimeLastDataPacketSent, now);
         }
 
-        Ok(len)
+        Ok(Ciphertext(packet))
     }
 
     /// Receives a UDP datagram from the network and parses it.
@@ -274,7 +323,9 @@ impl Tunnel {
             Ok(packet) => packet,
             Err(cookie) => {
                 dst[..cookie.len()].copy_from_slice(cookie);
-                return Ok(TunnelResult::WriteToNetwork(&mut dst[..cookie.len()]));
+                return Ok(TunnelResult::WriteToNetwork(Ciphertext(
+                    &mut dst[..cookie.len()],
+                )));
             }
         };
 
@@ -319,7 +370,7 @@ impl Tunnel {
 
         tracing::debug!(%local_idx, %remote_idx, "Sending handshake_response");
 
-        Ok(TunnelResult::WriteToNetwork(packet))
+        Ok(TunnelResult::WriteToNetwork(Ciphertext(packet)))
     }
 
     fn handle_handshake_response<'a>(
@@ -347,7 +398,7 @@ impl Tunnel {
 
         tracing::debug!(%local_idx, "Sending keepalive");
 
-        Ok(TunnelResult::WriteToNetwork(keepalive_packet)) // Send a keepalive as a response
+        Ok(TunnelResult::WriteToNetwork(Ciphertext(keepalive_packet))) // Send a keepalive as a response
     }
 
     fn handle_cookie_reply<'a>(
@@ -426,7 +477,7 @@ impl Tunnel {
         dst: &'a mut [u8],
         force_resend: bool,
         now: Instant,
-    ) -> Result<Option<&'a mut [u8]>, Error> {
+    ) -> Result<Option<Ciphertext<'a>>, Error> {
         if self.handshake.is_in_progress() && !force_resend {
             return Ok(None);
         }
@@ -446,7 +497,7 @@ impl Tunnel {
         }
         self.timer_tick(TimerName::TimeLastPacketSent, now);
 
-        Ok(Some(packet))
+        Ok(Some(Ciphertext(packet)))
     }
 
     /// Check if an IP packet is v4 or v6, truncate to the length indicated by the length field
@@ -494,8 +545,12 @@ impl Tunnel {
         self.timer_tick(TimerName::TimeLastDataPacketReceived, now);
 
         Ok(match src_ip_address {
-            IpAddr::V4(addr) => TunnelResult::WriteToTunnelV4(&mut packet[..computed_len], addr),
-            IpAddr::V6(addr) => TunnelResult::WriteToTunnelV6(&mut packet[..computed_len], addr),
+            IpAddr::V4(addr) => {
+                TunnelResult::WriteToTunnelV4(Plaintext(&mut packet[..computed_len]), addr)
+            }
+            IpAddr::V6(addr) => {
+                TunnelResult::WriteToTunnelV6(Plaintext(&mut packet[..computed_len]), addr)
+            }
         })
     }
 }

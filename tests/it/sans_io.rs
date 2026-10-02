@@ -41,7 +41,7 @@ fn scheduled_handshake_honours_next_timer_update() {
     let Ok(Some(packet)) = tunn.update_timers_at(&mut buf, wake) else {
         panic!("expected the scheduled handshake initiation");
     };
-    assert_eq!(classify(packet), Kind::Init);
+    assert_eq!(classify(&packet), Kind::Init);
     assert!(matches!(tunn.update_timers_at(&mut buf, wake), Ok(None)));
 }
 
