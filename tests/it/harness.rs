@@ -580,7 +580,7 @@ impl Sim {
         let packet = self
             .node_mut(from)
             .tunn
-            .encapsulate(now)?
+            .encapsulate_data(now)?
             .encrypt(ip_packet, &mut buf)?;
         Ok(packet.to_vec())
     }

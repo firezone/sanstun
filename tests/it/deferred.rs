@@ -19,7 +19,7 @@ fn encrypt_runs_on_another_thread() {
     let ip_packet = ipv4_packet(b"encrypted elsewhere");
     let now = sim.now;
 
-    let pending = sim.tunn_mut(A).encapsulate(now).unwrap();
+    let pending = sim.tunn_mut(A).encapsulate_data(now).unwrap();
     let datagram = std::thread::scope(|s| {
         s.spawn(|| {
             let mut buf = vec![0u8; BUF];
@@ -41,7 +41,7 @@ fn encryptions_running_out_of_order_keep_their_counters() {
 
     let pending = ip_packets
         .iter()
-        .map(|_| sim.tunn_mut(A).encapsulate(now).unwrap())
+        .map(|_| sim.tunn_mut(A).encapsulate_data(now).unwrap())
         .collect::<Vec<_>>();
     let mut datagrams = pending
         .into_iter()
@@ -67,7 +67,7 @@ fn encrypt_into_a_short_buffer_fails() {
     let ip_packet = ipv4_packet(b"too big");
     let now = sim.now;
 
-    let pending = sim.tunn_mut(A).encapsulate(now).unwrap();
+    let pending = sim.tunn_mut(A).encapsulate_data(now).unwrap();
     let mut buf = vec![0u8; ip_packet.len() + DATA_OVERHEAD - 1];
 
     assert!(matches!(
@@ -81,7 +81,7 @@ fn encrypting_an_empty_plaintext_fails() {
     let mut sim = Sim::connected();
     let now = sim.now;
 
-    let pending = sim.tunn_mut(A).encapsulate(now).unwrap();
+    let pending = sim.tunn_mut(A).encapsulate_data(now).unwrap();
     let mut buf = vec![0u8; BUF];
 
     assert!(matches!(
