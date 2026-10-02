@@ -228,7 +228,7 @@ impl Session {
         &self,
         packet: PacketData,
     ) -> Result<PendingDecapsulate, Error> {
-        if packet.receiver_idx != self.receiving_index {
+        if Index::from_peer(packet.receiver_idx) != self.receiving_index {
             return Err(Error::WrongIndex);
         }
         // Don't reuse counters, in case this is a replay attack we want to quickly check the counter without running expensive decryption

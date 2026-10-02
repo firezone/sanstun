@@ -8,7 +8,7 @@ use super::{session::Session, N_SESSIONS};
 /// The lower 8 bits are used as a rotating session index with a given peer.
 ///
 /// This allows for ~16M unique peers and 256 sessions per peer.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct Index(u32);
 
 impl Index {
@@ -52,18 +52,6 @@ impl fmt::Display for Index {
         let session = idx as u8;
 
         write!(f, "({global}|{session})")
-    }
-}
-
-impl PartialEq<u32> for Index {
-    fn eq(&self, other: &u32) -> bool {
-        self.0.eq(other)
-    }
-}
-
-impl PartialEq<Index> for u32 {
-    fn eq(&self, other: &Index) -> bool {
-        self.eq(&other.0)
     }
 }
 
