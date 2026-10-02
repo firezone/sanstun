@@ -208,7 +208,7 @@ impl Tunnel {
     ///
     /// `rng_seed` must come from a cryptographically secure source because key material is derived from it.
     #[expect(clippy::too_many_arguments, reason = "We don't care that much.")]
-    pub fn new_at(
+    pub fn new(
         static_private: StaticSecret,
         peer_static_public: PublicKey,
         preshared_key: Option<StaticSecret>,
@@ -238,7 +238,7 @@ impl Tunnel {
             timers: Timers::new(persistent_keepalive, rate_limiter.is_none(), now),
 
             rate_limiter: rate_limiter.unwrap_or_else(|| {
-                Arc::new(RateLimiter::new_at(
+                Arc::new(RateLimiter::new(
                     &static_public,
                     PEER_HANDSHAKE_RATE_LIMIT,
                     rng.random(),
@@ -285,7 +285,7 @@ impl Tunnel {
     /// Returns the encrypted WireGuard data message, written to the start of `dst`. Returns
     /// `Err(Error::NoCurrentSession)` when there is no usable session; in that case `dst` is left
     /// untouched and **no** handshake is initiated.
-    pub fn encapsulate_data_at<'a>(
+    pub fn encapsulate_data<'a>(
         &mut self,
         src: &[u8],
         dst: &'a mut [u8],
@@ -313,7 +313,7 @@ impl Tunnel {
 
     /// Receives a UDP datagram from the network and parses it.
     /// Returns TunnelResult.
-    pub fn decapsulate_at<'a>(
+    pub fn decapsulate<'a>(
         &mut self,
         src_addr: Option<IpAddr>,
         datagram: &[u8],
@@ -323,7 +323,7 @@ impl Tunnel {
         let mut cookie = [0u8; COOKIE_REPLY_SZ];
         let verified = self
             .rate_limiter
-            .verify_packet_at(src_addr, datagram, &mut cookie, now)?;
+            .verify_packet(src_addr, datagram, &mut cookie, now)?;
         let packet = match verified {
             Ok(packet) => packet,
             Err(cookie) => {
@@ -477,7 +477,7 @@ impl Tunnel {
     /// a new handshake, even if a handshake is already in progress (for example when a handshake times out)
     ///
     /// Returns `Ok(None)` if no handshake initiation needs to be sent.
-    pub fn format_handshake_initiation_at<'a>(
+    pub fn format_handshake_initiation<'a>(
         &mut self,
         dst: &'a mut [u8],
         force_resend: bool,

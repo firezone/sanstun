@@ -311,7 +311,7 @@ impl Tunnel {
         Some((time_sent + self.timers.rekey_timeout, local_index))
     }
 
-    pub fn update_timers_at<'a>(
+    pub fn update_timers<'a>(
         &mut self,
         dst: &'a mut [u8],
         now: Instant,
@@ -322,7 +322,7 @@ impl Tunnel {
             // If we have scheduled a handshake and the deadline expired, send it immediately.
             if now >= scheduled_handshake_at {
                 self.timers.send_handshake_at = None;
-                return self.format_handshake_initiation_at(dst, true, now);
+                return self.format_handshake_initiation(dst, true, now);
             }
 
             debug_assert!(
@@ -342,7 +342,7 @@ impl Tunnel {
         let mut keepalive_required = false;
 
         if self.timers.should_reset_rr {
-            self.rate_limiter.reset_count_at(now);
+            self.rate_limiter.reset_count(now);
         }
 
         // Both peers derive a session's lifetime from the same handshake, so the remote
@@ -494,7 +494,7 @@ impl Tunnel {
         if keepalive_required {
             // A keepalive is only ever sent on an established session, so encrypt the empty packet
             // in place; there is no need to queue it or start a handshake.
-            return match self.encapsulate_data_at(&[], dst, now) {
+            return match self.encapsulate_data(&[], dst, now) {
                 Ok(packet) => Ok(Some(packet)),
                 Err(Error::NoCurrentSession) => Ok(None),
                 Err(e) => Err(e),
@@ -504,13 +504,13 @@ impl Tunnel {
         Ok(None)
     }
 
-    /// Returns the [`Instant`] at which [`Tunnel::update_timers_at`] next needs to
+    /// Returns the [`Instant`] at which [`Tunnel::update_timers`] next needs to
     /// be called, together with a human-readable reason for debugging.
     ///
     /// Calling it earlier than the given [`Instant`] is safe but unlikely to
     /// have any effect. Driving the state machine by repeatedly polling at the
     /// returned [`Instant`] is sufficient: there is no need to call
-    /// [`Tunnel::update_timers_at`] on a fixed interval.
+    /// [`Tunnel::update_timers`] on a fixed interval.
     pub fn next_timer_update(&self) -> Option<(Instant, &'static str)> {
         let (next, reason) = self.next_timer_update_internal()?;
         let last_update = self.timers[TimeLastUpdate];
@@ -521,7 +521,7 @@ impl Tunnel {
     }
 
     fn next_timer_update_internal(&self) -> Option<(Instant, &'static str)> {
-        // Mimic `update_timers_at`: if we have a handshake scheduled, no other timer matters.
+        // Mimic `update_timers`: if we have a handshake scheduled, no other timer matters.
         if let Some(scheduled_handshake) = self.timers.send_handshake_at {
             return Some((scheduled_handshake, "scheduled handshake"));
         }
@@ -582,7 +582,7 @@ impl Tunnel {
         }
     }
 
-    pub fn time_since_last_handshake_at(&self, now: Instant) -> Option<Duration> {
+    pub fn time_since_last_handshake(&self, now: Instant) -> Option<Duration> {
         if self.sessions[self.current].is_some() {
             let session_established_at = self.timers[TimeSessionEstablished];
 

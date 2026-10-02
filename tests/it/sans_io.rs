@@ -25,24 +25,21 @@ fn scheduled_handshake_honours_next_timer_update() {
 
     // Nothing is due before the deadline.
     assert!(matches!(
-        tunn.update_timers_at(&mut buf, deadline - Duration::from_millis(1)),
+        tunn.update_timers(&mut buf, deadline - Duration::from_millis(1)),
         Ok(None)
     ));
 
     // At the deadline, the handshake is only *scheduled* ...
-    assert!(matches!(
-        tunn.update_timers_at(&mut buf, deadline),
-        Ok(None)
-    ));
+    assert!(matches!(tunn.update_timers(&mut buf, deadline), Ok(None)));
     let (wake, _reason) = tunn.next_timer_update().expect("a scheduled handshake");
     assert!(wake >= deadline && wake <= deadline + MAX_JITTER);
 
     // ... and emitted exactly once when the announced instant is polled.
-    let Ok(Some(packet)) = tunn.update_timers_at(&mut buf, wake) else {
+    let Ok(Some(packet)) = tunn.update_timers(&mut buf, wake) else {
         panic!("expected the scheduled handshake initiation");
     };
     assert_eq!(classify(&packet), Kind::Init);
-    assert!(matches!(tunn.update_timers_at(&mut buf, wake), Ok(None)));
+    assert!(matches!(tunn.update_timers(&mut buf, wake), Ok(None)));
 }
 
 #[test]
@@ -60,10 +57,10 @@ fn next_timer_update_predicts_the_passive_keepalive() {
 
     let mut buf = [0u8; 256];
     assert!(matches!(
-        tunn.update_timers_at(&mut buf, wake - Duration::from_millis(1)),
+        tunn.update_timers(&mut buf, wake - Duration::from_millis(1)),
         Ok(None)
     ));
-    let Ok(Some(packet)) = tunn.update_timers_at(&mut buf, wake) else {
+    let Ok(Some(packet)) = tunn.update_timers(&mut buf, wake) else {
         panic!("expected the keepalive");
     };
     assert_eq!(packet.len(), KEEPALIVE_SIZE);
@@ -109,7 +106,7 @@ fn a_single_late_poll_observes_the_expiry() {
 
     let late = sim.now + 4 * REJECT_AFTER_TIME;
     let mut buf = [0u8; 256];
-    let result = sim.tunn_mut(A).update_timers_at(&mut buf, late);
+    let result = sim.tunn_mut(A).update_timers(&mut buf, late);
 
     assert!(matches!(result, Err(Error::ConnectionExpired)));
     assert!(sim.tunn(A).is_expired());
@@ -143,10 +140,7 @@ fn different_seeds_produce_different_jitter() {
         let retry_due = sim.now + REKEY_TIMEOUT;
         let mut buf = [0u8; 256];
         let tunn = sim.tunn_mut(A);
-        assert!(matches!(
-            tunn.update_timers_at(&mut buf, retry_due),
-            Ok(None)
-        ));
+        assert!(matches!(tunn.update_timers(&mut buf, retry_due), Ok(None)));
 
         tunn.next_timer_update()
             .expect("a scheduled retry")
@@ -158,7 +152,7 @@ fn different_seeds_produce_different_jitter() {
     assert_ne!(first_jitter(1), first_jitter(2));
 }
 
-/// `encapsulate_data_at` is advertised as side-effect free when no session
+/// `encapsulate_data` is advertised as side-effect free when no session
 /// exists: no packet is queued and no handshake is started.
 #[test]
 fn encapsulate_data_at_has_no_side_effects_without_a_session() {
@@ -174,7 +168,7 @@ fn encapsulate_data_at_has_no_side_effects_without_a_session() {
 
 /// Polling exactly at the announced instant must change something. A deadline
 /// the caller cannot action is a busy-loop: `next_timer_update` keeps handing
-/// back the same instant and `update_timers_at` keeps finding nothing to do.
+/// back the same instant and `update_timers` keeps finding nothing to do.
 ///
 /// The session expiry is the case that got this wrong: it was announced at
 /// `established_at + REJECT_AFTER_TIME` while the session was only discarded
@@ -189,14 +183,14 @@ fn the_announced_session_expiry_is_actionable() {
     sim.advance(REJECT_AFTER_TIME - secs(1));
     let now = sim.now;
     let tunn = sim.tunn_mut(A);
-    let _ = tunn.update_timers_at(&mut buf, now);
+    let _ = tunn.update_timers(&mut buf, now);
 
     let Some((wake, "next expired session")) = tunn.next_timer_update() else {
         panic!("expected the session expiry to be the next deadline");
     };
 
     // Poll exactly when told to, then ask again.
-    let _ = tunn.update_timers_at(&mut buf, wake);
+    let _ = tunn.update_timers(&mut buf, wake);
 
     assert_ne!(
         tunn.next_timer_update().map(|(instant, _)| instant),
@@ -216,7 +210,7 @@ fn identical_seeds_produce_identical_handshakes() {
         let public_a = PublicKey::from(&secret_a);
         let public_b = PublicKey::from(&secret_b);
 
-        let mut a = Tunnel::new_at(
+        let mut a = Tunnel::new(
             secret_a,
             public_b,
             None,
@@ -228,7 +222,7 @@ fn identical_seeds_produce_identical_handshakes() {
             now,
             unix,
         );
-        let mut b = Tunnel::new_at(
+        let mut b = Tunnel::new(
             secret_b,
             public_a,
             None,
@@ -243,14 +237,14 @@ fn identical_seeds_produce_identical_handshakes() {
 
         let mut init = [0u8; 256];
         let init = a
-            .format_handshake_initiation_at(&mut init, false, now)
+            .format_handshake_initiation(&mut init, false, now)
             .unwrap()
             .expect("a handshake initiation")
             .to_vec();
 
         let mut response = [0u8; 256];
         let TunnelResult::WriteToNetwork(response) =
-            b.decapsulate_at(None, &init, &mut response, now).unwrap()
+            b.decapsulate(None, &init, &mut response, now).unwrap()
         else {
             panic!("expected a handshake response");
         };

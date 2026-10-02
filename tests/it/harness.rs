@@ -222,7 +222,7 @@ impl Builder {
         let secret_b = StaticSecret::random();
         let public_b = PublicKey::from(&secret_b);
 
-        let a = Tunnel::new_at(
+        let a = Tunnel::new(
             secret_a,
             public_b,
             self.psk_a.map(StaticSecret::from),
@@ -242,8 +242,8 @@ impl Builder {
         };
         let rate_limiter = self
             .responder_under_load
-            .then(|| Arc::new(RateLimiter::new_at(&public_b, 0, [3; 32], start)));
-        let b = Tunnel::new_at(
+            .then(|| Arc::new(RateLimiter::new(&public_b, 0, [3; 32], start)));
+        let b = Tunnel::new(
             secret_b,
             expected_by_b,
             self.psk_b.map(StaticSecret::from),
@@ -338,7 +338,7 @@ impl Sim {
     /// Whether `peer` currently has a usable session.
     pub fn is_established(&self, peer: Peer) -> bool {
         self.tunn(peer)
-            .time_since_last_handshake_at(self.now)
+            .time_since_last_handshake(self.now)
             .is_some()
     }
 
@@ -423,7 +423,7 @@ impl Sim {
     fn poll(&mut self, peer: Peer) {
         let now = self.now;
         let mut buf = vec![0u8; BUF];
-        let outgoing = match self.node_mut(peer).tunn.update_timers_at(&mut buf, now) {
+        let outgoing = match self.node_mut(peer).tunn.update_timers(&mut buf, now) {
             Ok(None) => None,
             Err(e) => {
                 self.node_mut(peer).errors.push(e);
@@ -490,7 +490,7 @@ impl Sim {
         let mut outs = Vec::new();
 
         let mut buf = vec![0u8; BUF];
-        match node.tunn.decapsulate_at(src, datagram, &mut buf, now) {
+        match node.tunn.decapsulate(src, datagram, &mut buf, now) {
             Ok(TunnelResult::Done) => {}
             Err(e) => outs.push(Out::Err(e)),
             Ok(TunnelResult::WriteToTunnel(packet)) => outs.push(Out::Ip(packet.to_vec())),
@@ -524,10 +524,10 @@ impl Sim {
         match self
             .node_mut(peer)
             .tunn
-            .format_handshake_initiation_at(&mut buf, force, now)
+            .format_handshake_initiation(&mut buf, force, now)
         {
             Ok(packet) => packet.map(|p| p.to_vec()),
-            Err(e) => panic!("unexpected error from format_handshake_initiation_at: {e:?}"),
+            Err(e) => panic!("unexpected error from format_handshake_initiation: {e:?}"),
         }
     }
 
@@ -562,7 +562,7 @@ impl Sim {
         let packet = self
             .node_mut(from)
             .tunn
-            .encapsulate_data_at(ip_packet, &mut buf, now)?;
+            .encapsulate_data(ip_packet, &mut buf, now)?;
         Ok(packet.to_vec())
     }
 

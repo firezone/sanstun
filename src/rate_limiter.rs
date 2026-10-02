@@ -51,7 +51,7 @@ pub struct RateLimiter {
 
 impl RateLimiter {
     /// `rng_seed` must come from a cryptographically secure source because the cookie secrets are derived from it.
-    pub fn new_at(public_key: &PublicKey, limit: u64, rng_seed: [u8; 32], now: Instant) -> Self {
+    pub fn new(public_key: &PublicKey, limit: u64, rng_seed: [u8; 32], now: Instant) -> Self {
         let mut rng = StdRng::from_seed(rng_seed);
 
         RateLimiter {
@@ -68,7 +68,7 @@ impl RateLimiter {
     }
 
     /// Reset packet count (ideally should be called with a period of 1 second)
-    pub(crate) fn reset_count_at(&self, current_time: Instant) {
+    pub(crate) fn reset_count(&self, current_time: Instant) {
         // The rate limiter is not very accurate, but at the scale we care about it doesn't matter much
         let mut last_reset_time = self.last_reset.lock();
         if current_time.duration_since(*last_reset_time).as_secs() >= RESET_PERIOD {
@@ -147,7 +147,7 @@ impl RateLimiter {
     /// Verify the MAC fields on the datagram, and apply rate limiting if needed
     ///
     /// Returns `Ok(Err(cookie_reply))` when the peer must be sent a cookie reply instead.
-    pub(crate) fn verify_packet_at<'a, 'b>(
+    pub(crate) fn verify_packet<'a, 'b>(
         &self,
         src_addr: Option<IpAddr>,
         src: &'a [u8],
@@ -171,7 +171,7 @@ impl RateLimiter {
             // Advance the per-second window before checking it. Resetting it
             // lazily here, on use, means callers don't need a background timer
             // ticking once a second just to keep the counter accurate.
-            self.reset_count_at(now);
+            self.reset_count(now);
 
             if self.is_under_load() {
                 let addr = match src_addr {
