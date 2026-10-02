@@ -4,10 +4,10 @@
 //! echoing the cookie in mac2.
 
 use crate::harness::{
-    COOKIE_EXPIRATION_TIME, COOKIE_REPLY_SIZE, Kind, Outcome as _, Peer::A, Peer::B, Sim, classify,
-    secs,
+    COOKIE_EXPIRATION_TIME, COOKIE_REPLY_SIZE, HANDSHAKE_INIT_SIZE, Kind, Outcome as _, Peer::A,
+    Peer::B, Sim, classify, secs,
 };
-use sanstun::Error;
+use sanstun::{Error, Verified};
 
 #[test]
 fn responder_under_load_replies_with_a_cookie_instead_of_a_handshake() {
@@ -19,6 +19,38 @@ fn responder_under_load_replies_with_a_cookie_instead_of_a_handshake() {
     assert_eq!(classify(&reply), Kind::CookieReply);
     assert_eq!(reply.len(), COOKIE_REPLY_SIZE); // §5.4.7
     assert!(!sim.is_established(B), "no session state was created");
+}
+
+/// The rate limiter answers an initiation without a valid mac2 on its own, so
+/// the initiation never reaches the expensive handshake processing.
+#[test]
+fn rate_limiter_replies_with_a_cookie_before_any_tunnel_is_involved() {
+    let mut sim = Sim::builder().responder_under_load().build();
+
+    let init = sim.initiate_handshake(A);
+    let result = sim.try_verify(B, &init);
+
+    let Ok(Verified::CookieReply(reply)) = result else {
+        panic!("expected a cookie reply, got {result:?}");
+    };
+    assert_eq!(classify(&reply), Kind::CookieReply);
+}
+
+/// §5.4.4: a datagram shaped like a handshake initiation but without a valid
+/// mac1 is rejected by the rate limiter, whether or not it is under load.
+#[test]
+fn rate_limiter_rejects_an_initiation_without_a_valid_mac1() {
+    let mut garbage = [0xa5; HANDSHAKE_INIT_SIZE];
+    garbage[..4].copy_from_slice(&1u32.to_le_bytes());
+
+    for sim in [Sim::new(), Sim::builder().responder_under_load().build()] {
+        let result = sim.try_verify(B, &garbage);
+
+        assert!(
+            matches!(result, Err(Error::InvalidMac)),
+            "expected an invalid mac1, got {result:?}"
+        );
+    }
 }
 
 /// The initiator stores the received cookie and its next (retransmitted)
@@ -89,7 +121,7 @@ fn expired_cookie_forces_a_new_cookie_round_trip() {
     assert_eq!(classify(&reply), Kind::CookieReply);
 }
 
-/// With its own rate limiter, a tunnel considers itself under load beyond 10
+/// A rate limiter with a limit of 10 considers itself under load beyond 10
 /// handshake messages per second and recovers once the flood stops.
 #[test]
 fn rate_limited_tunnel_recovers_once_load_subsides() {

@@ -5,7 +5,11 @@ use crate::harness::{
     HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, Outcome as _, Peer::A, Peer::B, Sim,
     classify,
 };
-use sanstun::Error;
+use sanstun::{
+    Error, Index, Packet, PublicKey, RateLimiter, StaticSecret, Tunnel, Verified,
+    parse_handshake_anon,
+};
+use std::time::{Duration, Instant};
 
 #[test]
 fn handshake_completes_in_one_round_trip() {
@@ -168,4 +172,37 @@ fn malformed_datagrams_are_rejected() {
 
     let kind = classify(&init);
     assert_eq!(kind, Kind::Init, "the untampered packet parses fine");
+}
+
+/// A responder with many peers learns from a verified initiation which peer's
+/// tunnel to hand it to.
+#[test]
+fn verified_initiation_reveals_the_initiator() {
+    let now = Instant::now();
+    let secret_a = StaticSecret::from([1; 32]);
+    let secret_b = StaticSecret::from([2; 32]);
+    let public_a = PublicKey::from(&secret_a);
+    let public_b = PublicKey::from(&secret_b);
+    let mut a = Tunnel::new(
+        secret_a,
+        public_b,
+        None,
+        None,
+        Index::new_local(1),
+        [3; 32],
+        now,
+        now,
+        Duration::from_secs(1_700_000_000),
+    );
+    let rate_limiter_b = RateLimiter::new(&public_b, 10, [4; 32], now);
+
+    let init = a.format_handshake_initiation(false, now).unwrap();
+    let Ok(Verified::Packet(packet)) =
+        rate_limiter_b.verify(None, Packet::parse(&init).unwrap(), now)
+    else {
+        panic!("expected a verified handshake initiation");
+    };
+    let half = parse_handshake_anon(&secret_b, &public_b, &packet).unwrap();
+
+    assert_eq!(half.peer_static_public, public_a.to_bytes());
 }

@@ -17,7 +17,7 @@ pub use index::Index;
 pub use message::{
     CookieReplyMessage, HandshakeInitiationMessage, HandshakeResponseMessage, KeepaliveMessage,
 };
-pub use rate_limiter::RateLimiter;
+pub use rate_limiter::{RateLimiter, Verified, VerifiedPacket};
 pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
 pub use x25519_dalek::{PublicKey, StaticSecret};
 
@@ -25,26 +25,18 @@ use crate::handshake::Handshake;
 use crate::session::Sessions;
 use crate::timers::{TimerName, Timers};
 
+use rand::SeedableRng;
 use rand::rngs::StdRng;
-use rand::{RngExt, SeedableRng};
 
 use std::convert::{TryFrom, TryInto};
-use std::net::IpAddr;
 use std::ops::Deref;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-/// The default value to use for rate limiting, when no other rate limiter is defined
-const PEER_HANDSHAKE_RATE_LIMIT: u64 = 10;
 
 /// What the caller needs to do after [`Tunnel::decapsulate`].
 #[derive(Debug)]
 pub enum Decapsulated {
     /// Send this handshake response to the peer, which sent a valid handshake initiation.
     HandshakeResponse(HandshakeResponseMessage),
-    /// Send this cookie reply to the peer: we are under load and its handshake message needs
-    /// a valid cookie.
-    CookieReply(CookieReplyMessage),
     /// The peer's cookie is stored for the next handshake; nothing to send.
     CookieReceived,
     /// A keepalive is due: send it with [`Tunnel::encapsulate_keepalive`].
@@ -96,7 +88,6 @@ pub struct Tunnel {
     sessions: Sessions,
     /// Keeps tabs on the expiring timers
     timers: timers::Timers,
-    rate_limiter: Arc<RateLimiter>,
     /// Source of the ephemeral keys and the handshake jitter
     rng: StdRng,
 }
@@ -226,14 +217,12 @@ impl Tunnel {
         preshared_key: Option<StaticSecret>,
         persistent_keepalive: Option<u16>,
         index: Index,
-        rate_limiter: Option<Arc<RateLimiter>>,
         rng_seed: [u8; 32],
         now: Instant,
         unix_instant: Instant,
         unix: Duration,
     ) -> Self {
         let static_public = PublicKey::from(&static_private);
-        let mut rng = StdRng::from_seed(rng_seed);
 
         Tunnel {
             handshake: Handshake::new(
@@ -247,16 +236,7 @@ impl Tunnel {
             ),
             sessions: Sessions::default(),
             timers: Timers::new(persistent_keepalive, now),
-
-            rate_limiter: rate_limiter.unwrap_or_else(|| {
-                Arc::new(RateLimiter::new(
-                    &static_public,
-                    PEER_HANDSHAKE_RATE_LIMIT,
-                    rng.random(),
-                    now,
-                ))
-            }),
-            rng,
+            rng: StdRng::from_seed(rng_seed),
         }
     }
 
@@ -336,7 +316,7 @@ impl Tunnel {
             .filter(|s| s.should_use_at(now) || is_responder)
     }
 
-    /// Handles a message received from the network.
+    /// Handles a message received from the network, after it passed [`RateLimiter::verify`].
     ///
     /// Handshake messages and cookie replies are processed right away. The decryption of a data
     /// message is deferred to the returned [`PendingDecapsulate`]: its session is selected and its
@@ -345,15 +325,10 @@ impl Tunnel {
     /// the decapsulation.
     pub fn decapsulate(
         &mut self,
-        src_addr: Option<IpAddr>,
-        packet: Packet<'_>,
+        packet: VerifiedPacket<'_>,
         now: Instant,
     ) -> Result<Decapsulated, Error> {
-        if let Some(cookie) = self.rate_limiter.verify_packet(src_addr, &packet, now)? {
-            return Ok(Decapsulated::CookieReply(CookieReplyMessage(cookie)));
-        }
-
-        match packet {
+        match packet.0 {
             Packet::HandshakeInit(p) => self.handle_handshake_init(p, now),
             Packet::HandshakeResponse(p) => self.handle_handshake_response(p, now),
             Packet::PacketCookieReply(p) => self.handle_cookie_reply(p, now),

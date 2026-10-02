@@ -1,6 +1,6 @@
 use super::index::Index;
 use super::timers::COOKIE_EXPIRATION_TIME;
-use super::{HandshakeInit, HandshakeResponse, PacketCookieReply};
+use super::{HandshakeInit, HandshakeResponse, Packet, PacketCookieReply, VerifiedPacket};
 use crate::crypto::{
     aead_chacha20_open, aead_chacha20_seal, b2s_hash, b2s_hmac, b2s_hmac2, b2s_keyed_mac_16,
 };
@@ -125,11 +125,18 @@ pub struct HalfHandshake {
     pub peer_static_public: [u8; 32],
 }
 
+/// Decrypts the initiator's static public key from a handshake initiation, e.g. to look up
+/// the [`Tunnel`](crate::Tunnel) it belongs to.
+///
+/// Fails with [`Error::UnexpectedPacket`] if `packet` is not a handshake initiation.
 pub fn parse_handshake_anon(
     static_private: &StaticSecret,
     static_public: &PublicKey,
-    packet: &HandshakeInit,
+    packet: &VerifiedPacket,
 ) -> Result<HalfHandshake, Error> {
+    let Packet::HandshakeInit(packet) = packet.packet() else {
+        return Err(Error::UnexpectedPacket);
+    };
     let InitiatorStatic {
         peer_static_public, ..
     } = decrypt_initiator_static(static_private, static_public, packet)?;

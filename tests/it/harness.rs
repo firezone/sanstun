@@ -8,13 +8,12 @@
 
 use std::collections::VecDeque;
 use std::net::IpAddr;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use sanstun::Error;
-use sanstun::RateLimiter;
 use sanstun::{Committed, Decapsulated, Index, Packet, TimerAction, Tunnel};
 use sanstun::{PublicKey, StaticSecret};
+use sanstun::{RateLimiter, Verified, VerifiedPacket};
 
 // Protocol constants from the WireGuard whitepaper (§6.1, table on p. 14).
 // They are deliberately redefined here instead of imported: the tests assert
@@ -44,6 +43,9 @@ pub const COOKIE_REPLY_SIZE: usize = 64;
 /// sanstun's anti-replay window: 128 words of 64 bits each
 /// (implementation-specific; the paper's reference window is 2000 packets).
 pub const REPLAY_WINDOW: u64 = 8192;
+
+/// Handshake messages per second a peer accepts before it considers itself under load.
+const HANDSHAKE_RATE_LIMIT: u64 = 10;
 
 /// Slack the timing assertions allow on either side of a deadline, covering the
 /// few polls a peer may take to act on one (scheduling a handshake at one
@@ -161,6 +163,7 @@ impl Outcome for Vec<Out> {
 
 struct Node {
     tunn: Tunnel,
+    rate_limiter: RateLimiter,
     addr: IpAddr,
     inbox: Vec<Vec<u8>>,
     errors: Vec<Error>,
@@ -228,7 +231,6 @@ impl Builder {
             self.psk_a.map(StaticSecret::from),
             None,
             Index::new_local(1),
-            None,
             self.seed_a,
             start,
             start,
@@ -240,21 +242,23 @@ impl Builder {
         } else {
             public_a
         };
-        let rate_limiter = self
-            .responder_under_load
-            .then(|| Arc::new(RateLimiter::new(&public_b, 0, [3; 32], start)));
         let b = Tunnel::new(
             secret_b,
             expected_by_b,
             self.psk_b.map(StaticSecret::from),
             self.persistent_keepalive_b,
             Index::new_local(2),
-            rate_limiter,
             self.seed_b,
             start,
             start,
             unix,
         );
+
+        let limit_b = if self.responder_under_load {
+            0
+        } else {
+            HANDSHAKE_RATE_LIMIT
+        };
 
         Sim {
             start,
@@ -262,6 +266,7 @@ impl Builder {
             nodes: [
                 Node {
                     tunn: a,
+                    rate_limiter: RateLimiter::new(&public_a, HANDSHAKE_RATE_LIMIT, [3; 32], start),
                     addr: "10.0.0.1".parse().unwrap(),
                     inbox: Vec::new(),
                     errors: Vec::new(),
@@ -269,6 +274,7 @@ impl Builder {
                 },
                 Node {
                     tunn: b,
+                    rate_limiter: RateLimiter::new(&public_b, limit_b, [4; 32], start),
                     addr: "10.0.0.2".parse().unwrap(),
                     inbox: Vec::new(),
                     errors: Vec::new(),
@@ -490,18 +496,40 @@ impl Sim {
         self.deliver_from(to, datagram, None)
     }
 
+    /// Run a datagram through the rate limiter of `to`, as if sent by its peer.
+    pub fn try_verify<'a>(&self, to: Peer, datagram: &'a [u8]) -> Result<Verified<'a>, Error> {
+        let src = Some(self.node(to.other()).addr);
+        self.node(to)
+            .rate_limiter
+            .verify(src, Packet::parse(datagram)?, self.now)
+    }
+
+    /// Like [`Sim::try_verify`], panicking unless the datagram passes.
+    #[track_caller]
+    pub fn verify<'a>(&self, to: Peer, datagram: &'a [u8]) -> VerifiedPacket<'a> {
+        match self.try_verify(to, datagram) {
+            Ok(Verified::Packet(packet)) => packet,
+            other => panic!("expected a verified packet, got {other:?}"),
+        }
+    }
+
     fn deliver_from(&mut self, to: Peer, datagram: &[u8], src: Option<IpAddr>) -> Vec<Out> {
         let now = self.now;
         let node = self.node_mut(to);
         let mut outs = Vec::new();
 
-        let result =
-            Packet::parse(datagram).and_then(|packet| node.tunn.decapsulate(src, packet, now));
-        match result {
+        let verified =
+            Packet::parse(datagram).and_then(|packet| node.rate_limiter.verify(src, packet, now));
+        let packet = match verified {
+            Ok(Verified::Packet(packet)) => packet,
+            Ok(Verified::CookieReply(reply)) => return vec![Out::Net(reply.to_vec())],
+            Err(e) => return vec![Out::Err(e)],
+        };
+
+        match node.tunn.decapsulate(packet, now) {
             Ok(Decapsulated::CookieReceived) => {}
             Err(e) => outs.push(Out::Err(e)),
             Ok(Decapsulated::HandshakeResponse(packet)) => outs.push(Out::Net(packet.to_vec())),
-            Ok(Decapsulated::CookieReply(packet)) => outs.push(Out::Net(packet.to_vec())),
             Ok(Decapsulated::Data(pending)) => {
                 let decrypted = pending.decrypt(datagram, vec![0u8; BUF]);
                 match node.tunn.commit_decrypted(decrypted, now) {

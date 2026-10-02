@@ -1,6 +1,6 @@
 use crate::crypto::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, b2s_mac_24};
 use crate::handshake::{LABEL_COOKIE, LABEL_MAC1};
-use crate::{Error, HandshakeInit, HandshakeResponse, Macs, Packet, PublicKey};
+use crate::{CookieReplyMessage, Error, HandshakeInit, HandshakeResponse, Macs, Packet, PublicKey};
 
 use std::net::IpAddr;
 use std::time::Instant;
@@ -50,6 +50,11 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
+    /// Creates the rate limiter for handshake messages addressed to our static `public_key`.
+    ///
+    /// Share one instance across all [`Tunnel`](crate::Tunnel)s using that key, so that `limit`
+    /// handshake messages per second apply to all of them together.
+    ///
     /// `rng_seed` must come from a cryptographically secure source because the cookie secrets are derived from it.
     pub fn new(public_key: &PublicKey, limit: u64, rng_seed: [u8; 32], now: Instant) -> Self {
         let mut rng = StdRng::from_seed(rng_seed);
@@ -104,7 +109,7 @@ impl RateLimiter {
         self.count.fetch_add(1, Ordering::SeqCst) >= self.limit
     }
 
-    pub(crate) fn format_cookie_reply(
+    fn format_cookie_reply(
         &self,
         idx: u32,
         cookie: Cookie,
@@ -138,22 +143,28 @@ impl RateLimiter {
         dst
     }
 
-    /// Verify the MAC fields on the datagram, and apply rate limiting if needed
+    /// Verifies the MACs of a packet received from the network and applies rate limiting.
     ///
-    /// Returns `Ok(Some(cookie_reply))` when the peer must be sent a cookie reply instead.
-    pub(crate) fn verify_packet(
+    /// Run this on every incoming packet before any other processing: handshake messages are
+    /// only processed further once they carry a valid mac1 and, under load, a valid mac2.
+    /// Under load, a handshake message with a missing or invalid mac2 yields a
+    /// [`Verified::CookieReply`] for the sender instead. Cookie replies and data messages pass
+    /// unchanged because they are authenticated by their own AEAD.
+    ///
+    /// `src_addr` is the source address of the datagram; without it, handshake messages fail
+    /// with [`Error::UnderLoad`] under load.
+    pub fn verify<'a>(
         &self,
         src_addr: Option<IpAddr>,
-        packet: &Packet<'_>,
+        packet: Packet<'a>,
         now: Instant,
-    ) -> Result<Option<[u8; super::COOKIE_REPLY_SZ]>, Error> {
-        // Verify and rate limit handshake messages only
+    ) -> Result<Verified<'a>, Error> {
         if let Packet::HandshakeInit(HandshakeInit {
             sender_idx, macs, ..
         })
         | Packet::HandshakeResponse(HandshakeResponse {
             sender_idx, macs, ..
-        }) = packet
+        }) = &packet
         {
             let Macs { msg, mac1, mac2 } = *macs;
 
@@ -178,11 +189,35 @@ impl RateLimiter {
                 let computed_mac2 = b2s_keyed_mac_16_2(&cookie, msg, mac1);
 
                 if !constant_time_eq(&computed_mac2[..16], mac2) {
-                    return Ok(Some(self.format_cookie_reply(*sender_idx, cookie, mac1)));
+                    return Ok(Verified::CookieReply(CookieReplyMessage(
+                        self.format_cookie_reply(*sender_idx, cookie, mac1),
+                    )));
                 }
             }
         }
 
-        Ok(None)
+        Ok(Verified::Packet(VerifiedPacket(packet)))
+    }
+}
+
+/// What the caller needs to do after [`RateLimiter::verify`].
+#[derive(Debug)]
+pub enum Verified<'a> {
+    /// Route the packet to its [`Tunnel`](crate::Tunnel) and hand it to
+    /// [`Tunnel::decapsulate`](crate::Tunnel::decapsulate).
+    Packet(VerifiedPacket<'a>),
+    /// Send this cookie reply to the peer: we are under load and its handshake message needs
+    /// a valid cookie.
+    CookieReply(CookieReplyMessage),
+}
+
+/// A [`Packet`] that passed [`RateLimiter::verify`].
+#[derive(Debug)]
+pub struct VerifiedPacket<'a>(pub(crate) Packet<'a>);
+
+impl<'a> VerifiedPacket<'a> {
+    /// The verified packet, e.g. to look up the [`Tunnel`](crate::Tunnel) it belongs to.
+    pub fn packet(&self) -> &Packet<'a> {
+        &self.0
     }
 }

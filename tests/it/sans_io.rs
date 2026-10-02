@@ -6,7 +6,10 @@ use crate::harness::{
     KEEPALIVE_SIZE, KEEPALIVE_TIMEOUT, Kind, MAX_JITTER, Outcome as _, Peer::A, Peer::B,
     REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_TIMEOUT, Sim, classify, ipv4_packet, secs,
 };
-use sanstun::{Decapsulated, Error, Index, Packet, PublicKey, StaticSecret, TimerAction, Tunnel};
+use sanstun::{
+    Decapsulated, Error, Index, Packet, PublicKey, RateLimiter, StaticSecret, TimerAction, Tunnel,
+    Verified,
+};
 use std::time::{Duration, Instant};
 
 /// A handshake triggered by a timer is not sent immediately: it is scheduled
@@ -212,7 +215,6 @@ fn identical_seeds_produce_identical_handshakes() {
             None,
             None,
             Index::new_local(1),
-            None,
             seed_a,
             now,
             now,
@@ -224,7 +226,6 @@ fn identical_seeds_produce_identical_handshakes() {
             None,
             None,
             Index::new_local(2),
-            None,
             [4; 32],
             now,
             now,
@@ -236,9 +237,13 @@ fn identical_seeds_produce_identical_handshakes() {
             .expect("a handshake initiation")
             .to_vec();
 
-        let Decapsulated::HandshakeResponse(response) = b
-            .decapsulate(None, Packet::parse(&init).unwrap(), now)
-            .unwrap()
+        let rate_limiter_b = RateLimiter::new(&public_b, 10, [5; 32], now);
+        let Ok(Verified::Packet(init_packet)) =
+            rate_limiter_b.verify(None, Packet::parse(&init).unwrap(), now)
+        else {
+            panic!("expected a verified handshake initiation");
+        };
+        let Decapsulated::HandshakeResponse(response) = b.decapsulate(init_packet, now).unwrap()
         else {
             panic!("expected a handshake response");
         };
