@@ -1,6 +1,3 @@
-// Copyright (c) 2019 Cloudflare, Inc. All rights reserved.
-// SPDX-License-Identifier: BSD-3-Clause
-
 use super::index::Index;
 use super::timers::COOKIE_EXPIRATION_TIME;
 use super::{HandshakeInit, HandshakeResponse, PacketCookieReply};

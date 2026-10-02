@@ -1,6 +1,3 @@
-// Copyright (c) 2019 Cloudflare, Inc. All rights reserved.
-// SPDX-License-Identifier: BSD-3-Clause
-
 use super::{
     index::Index,
     timers::{REJECT_AFTER_TIME, SHOULD_NOT_USE_AFTER_TIME},
