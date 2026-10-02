@@ -45,7 +45,7 @@ fn ingress_rejects_an_initiation_without_a_valid_mac1() {
     let mut garbage = [0xa5; HANDSHAKE_INIT_SIZE];
     garbage[..4].copy_from_slice(&1u32.to_le_bytes());
 
-    for sim in [Sim::new(), Sim::builder().responder_under_load().build()] {
+    for mut sim in [Sim::new(), Sim::builder().responder_under_load().build()] {
         let result = sim.try_receive(B, &garbage);
 
         assert!(

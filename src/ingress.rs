@@ -13,8 +13,6 @@ use aead::generic_array::GenericArray;
 use aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{Key, XChaCha20Poly1305};
 use constant_time_eq::constant_time_eq;
-use parking_lot::Mutex;
-use portable_atomic::{AtomicU64, Ordering};
 use rand::rngs::StdRng;
 use rand::{RngExt, SeedableRng};
 
@@ -51,20 +49,20 @@ pub struct Ingress {
     secret_key: [u8; 16],
     start_time: Instant,
     /// A single 64 bit counter (should suffice for many years)
-    nonce_ctr: AtomicU64,
+    nonce_ctr: u64,
     mac1_key: [u8; 32],
     cookie_key: Key,
     limit: u64,
     /// The counter since last reset
-    count: AtomicU64,
+    count: u64,
     /// The time the handshake count was last reset
-    last_reset: Mutex<Instant>,
+    last_reset: Instant,
 }
 
 impl Ingress {
     /// Creates the entry point for datagrams addressed to our `static_private` key.
     ///
-    /// Share one instance across all [`Tunnel`](crate::Tunnel)s using that key, so that `limit`
+    /// Use one instance for all [`Tunnel`](crate::Tunnel)s of that key, so that `limit`
     /// handshake messages per second apply to all of them together.
     ///
     /// `rng_seed` must come from a cryptographically secure source because the cookie secrets are derived from it.
@@ -78,12 +76,12 @@ impl Ingress {
             nonce_key: rng.random(),
             secret_key: rng.random(),
             start_time: now,
-            nonce_ctr: AtomicU64::new(0),
+            nonce_ctr: 0,
             mac1_key: b2s_hash(LABEL_MAC1, static_public.as_bytes()),
             cookie_key: b2s_hash(LABEL_COOKIE, static_public.as_bytes()).into(),
             limit,
-            count: AtomicU64::new(0),
-            last_reset: Mutex::new(now),
+            count: 0,
+            last_reset: now,
         }
     }
 
@@ -94,7 +92,7 @@ impl Ingress {
     /// `src_addr` is the source address of the datagram; without it, handshake messages fail
     /// with [`Error::UnderLoad`] under load.
     pub fn receive<'a>(
-        &self,
+        &mut self,
         src_addr: Option<IpAddr>,
         datagram: &'a [u8],
         now: Instant,
@@ -161,7 +159,7 @@ impl Ingress {
     /// Returns the cookie reply to send instead of processing the message when we are under load
     /// and it lacks a valid mac2.
     fn verify_macs(
-        &self,
+        &mut self,
         src_addr: Option<IpAddr>,
         sender_idx: u32,
         message: &[u8],
@@ -202,12 +200,11 @@ impl Ingress {
     }
 
     /// Reset packet count once `RESET_PERIOD` has passed since the last reset
-    fn reset_count(&self, current_time: Instant) {
+    fn reset_count(&mut self, current_time: Instant) {
         // The rate limit is not very accurate, but at the scale we care about it doesn't matter much
-        let mut last_reset_time = self.last_reset.lock();
-        if current_time.duration_since(*last_reset_time).as_secs() >= RESET_PERIOD {
-            self.count.store(0, Ordering::SeqCst);
-            *last_reset_time = current_time;
+        if current_time.duration_since(self.last_reset).as_secs() >= RESET_PERIOD {
+            self.count = 0;
+            self.last_reset = current_time;
         }
     }
 
@@ -228,17 +225,26 @@ impl Ingress {
         b2s_keyed_mac_16_2(&self.secret_key, &cur_counter.to_le_bytes(), &addr_bytes)
     }
 
-    fn nonce(&self) -> [u8; COOKIE_NONCE_SIZE] {
-        let ctr = self.nonce_ctr.fetch_add(1, Ordering::Relaxed);
+    fn nonce(&mut self) -> [u8; COOKIE_NONCE_SIZE] {
+        let ctr = self.nonce_ctr;
+        self.nonce_ctr += 1;
 
         b2s_mac_24(&self.nonce_key, &ctr.to_le_bytes())
     }
 
-    fn is_under_load(&self) -> bool {
-        self.count.fetch_add(1, Ordering::SeqCst) >= self.limit
+    fn is_under_load(&mut self) -> bool {
+        let count = self.count;
+        self.count += 1;
+
+        count >= self.limit
     }
 
-    fn format_cookie_reply(&self, idx: u32, cookie: Cookie, mac1: &[u8]) -> [u8; COOKIE_REPLY_SZ] {
+    fn format_cookie_reply(
+        &mut self,
+        idx: u32,
+        cookie: Cookie,
+        mac1: &[u8],
+    ) -> [u8; COOKIE_REPLY_SZ] {
         let mut dst = [0u8; COOKIE_REPLY_SZ];
 
         let (message_type, rest) = dst.split_at_mut(4);

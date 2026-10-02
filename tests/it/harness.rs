@@ -502,14 +502,15 @@ impl Sim {
     }
 
     /// Run a datagram through the [`Ingress`] of `to`, as if sent by its peer.
-    pub fn try_receive<'a>(&self, to: Peer, datagram: &'a [u8]) -> Result<Received<'a>, Error> {
+    pub fn try_receive<'a>(&mut self, to: Peer, datagram: &'a [u8]) -> Result<Received<'a>, Error> {
         let src = Some(self.node(to.other()).addr);
-        self.node(to).ingress.receive(src, datagram, self.now)
+        let now = self.now;
+        self.node_mut(to).ingress.receive(src, datagram, now)
     }
 
     /// Like [`Sim::try_receive`], panicking unless the datagram passes.
     #[track_caller]
-    pub fn receive<'a>(&self, to: Peer, datagram: &'a [u8]) -> Packet<'a> {
+    pub fn receive<'a>(&mut self, to: Peer, datagram: &'a [u8]) -> Packet<'a> {
         match self.try_receive(to, datagram) {
             Ok(Received::Packet(packet)) => packet,
             other => panic!("expected a packet, got {other:?}"),

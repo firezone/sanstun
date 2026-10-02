@@ -205,7 +205,7 @@ fn identical_seeds_produce_identical_handshakes() {
         let unix = Duration::from_secs(1_700_000_000);
         let secret_a = StaticSecret::from([1; 32]);
         let secret_b = StaticSecret::from([2; 32]);
-        let ingress_b = Ingress::new(secret_b.clone(), 10, [5; 32], now);
+        let mut ingress_b = Ingress::new(secret_b.clone(), 10, [5; 32], now);
         let public_a = PublicKey::from(&secret_a);
         let public_b = PublicKey::from(&secret_b);
 

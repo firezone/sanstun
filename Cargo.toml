@@ -9,8 +9,6 @@ edition = "2024"
 rust-version = "1.89"
 
 [dependencies]
-parking_lot = "0.12"
-portable-atomic = { version = "1.13.1", features = ["fallback"] }
 tracing = "0.1.44"
 ring = "0.17"
 x25519-dalek = { version = "3.0.0", features = [
