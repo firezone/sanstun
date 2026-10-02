@@ -4,6 +4,7 @@ use super::{
     timers::{REJECT_AFTER_TIME, SHOULD_NOT_USE_AFTER_TIME},
 };
 use crate::DataMessage;
+use crate::crypto::nonce;
 use crate::errors::Error;
 use crate::replay::ReceivingKeyCounterValidator;
 use crossbeam_utils::CachePadded;
@@ -179,11 +180,13 @@ impl PendingEncapsulate {
         // TODO: spec requires padding to 16 bytes, but actually works fine without it
         data.copy_from_slice(plaintext);
 
-        let mut nonce = [0u8; 12];
-        nonce[4..12].copy_from_slice(&self.counter.to_le_bytes());
         let computed_tag = self
             .key
-            .seal_in_place_separate_tag(Nonce::assume_unique_for_key(nonce), Aad::from(&[]), data)
+            .seal_in_place_separate_tag(
+                Nonce::assume_unique_for_key(nonce(self.counter)),
+                Aad::from(&[]),
+                data,
+            )
             .expect("plaintext of a data message is always within the AEAD's limits");
         tag.copy_from_slice(computed_tag.as_ref());
 
@@ -235,11 +238,13 @@ impl PendingDecapsulate {
         };
         buf.copy_from_slice(ciphertext);
 
-        let mut nonce = [0u8; 12];
-        nonce[4..12].copy_from_slice(&self.counter.to_le_bytes());
         let plaintext = self
             .key
-            .open_in_place(Nonce::assume_unique_for_key(nonce), Aad::from(&[]), buf)
+            .open_in_place(
+                Nonce::assume_unique_for_key(nonce(self.counter)),
+                Aad::from(&[]),
+                buf,
+            )
             .map_err(|_| Error::InvalidAeadTag)?;
 
         Ok(plaintext.len())
