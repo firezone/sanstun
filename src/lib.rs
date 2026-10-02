@@ -11,7 +11,7 @@ pub use errors::Error;
 pub use handshake::{parse_handshake_anon, HalfHandshake};
 pub use index::Index;
 pub use rate_limiter::RateLimiter;
-pub use session::{Opened, PendingOpen, PendingSeal};
+pub use session::{Opened, PendingDecapsulate, PendingEncapsulate};
 pub use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::handshake::Handshake;
@@ -50,7 +50,7 @@ pub enum TunnelResult<'a> {
     /// Send this datagram to the peer.
     WriteToNetwork(Ciphertext<'a>),
     /// A keepalive is due: send an empty data message, sealed through
-    /// [`Tunnel::encapsulate_data`].
+    /// [`Tunnel::prepare_encapsulate`].
     KeepaliveDue,
 }
 
@@ -284,13 +284,17 @@ impl Tunnel {
     }
 
     /// Prepares a data message carrying a plaintext of `len` bytes, deferring writing and
-    /// encrypting it to the returned [`PendingSeal`].
+    /// encrypting it to the returned [`PendingEncapsulate`].
     ///
     /// All state of the [`Tunnel`] is updated immediately; the caller may run
-    /// [`PendingSeal::seal_into`] later and on another thread. Returns
+    /// [`PendingEncapsulate::seal_into`] later and on another thread. Returns
     /// `Err(Error::NoCurrentSession)` when there is no usable session; in that case **no**
     /// handshake is initiated.
-    pub fn encapsulate_data(&mut self, len: usize, now: Instant) -> Result<PendingSeal, Error> {
+    pub fn prepare_encapsulate(
+        &mut self,
+        len: usize,
+        now: Instant,
+    ) -> Result<PendingEncapsulate, Error> {
         let seal = self
             .sending_session(now)
             .ok_or(Error::NoCurrentSession)?
@@ -314,12 +318,12 @@ impl Tunnel {
             .filter(|s| s.should_use_at(now) || is_responder)
     }
 
-    /// Prepares the decryption of a data message, deferring it to the returned [`PendingOpen`].
+    /// Prepares the decryption of a data message, deferring it to the returned [`PendingDecapsulate`].
     ///
     /// Selects the session and checks the counter against the replay window without updating
     /// any state or reading the ciphertext. Hand the [`Opened`] message back to
-    /// [`Tunnel::finish_decapsulate_data_at`] to complete the decapsulation.
-    pub fn decapsulate_data(&self, packet: PacketData) -> Result<PendingOpen, Error> {
+    /// [`Tunnel::finish_decapsulate`] to complete the decapsulation.
+    pub fn prepare_decapsulate(&self, packet: PacketData) -> Result<PendingDecapsulate, Error> {
         let remote_idx = Index::from_peer(packet.receiver_idx);
 
         let session = self.sessions[remote_idx].as_ref().ok_or_else(|| {
@@ -333,10 +337,10 @@ impl Tunnel {
     /// Completes the decapsulation of a data message decrypted into `dst`.
     ///
     /// `dst` is the buffer the message was opened into. Marks its counter as received, which
-    /// rejects a duplicate that passed [`Tunnel::decapsulate_data`] before the original got here.
+    /// rejects a duplicate that passed [`Tunnel::prepare_decapsulate`] before the original got here.
     ///
     /// Returns the IP packet to write to the tunnel interface, or `None` for a keepalive.
-    pub fn finish_decapsulate_data_at<'a>(
+    pub fn finish_decapsulate<'a>(
         &mut self,
         opened: Opened,
         dst: &'a mut [u8],
@@ -364,7 +368,7 @@ impl Tunnel {
     /// Receives a UDP datagram from the network and parses it.
     ///
     /// Handles handshake messages and cookie replies. Data messages are decapsulated with
-    /// [`Tunnel::decapsulate_data`] instead and fail with `Err(Error::UnexpectedPacket)`.
+    /// [`Tunnel::prepare_decapsulate`] instead and fail with `Err(Error::UnexpectedPacket)`.
     pub fn decapsulate<'a>(
         &mut self,
         src_addr: Option<IpAddr>,

@@ -71,7 +71,7 @@ fn next_timer_update_predicts_the_passive_keepalive() {
         Ok(TunnelResult::KeepaliveDue)
     ));
     let packet = tunn
-        .encapsulate_data(0, wake)
+        .prepare_encapsulate(0, wake)
         .unwrap()
         .seal_into(&[], &mut buf)
         .unwrap();
@@ -167,7 +167,7 @@ fn different_seeds_produce_different_jitter() {
     assert_ne!(first_jitter(1), first_jitter(2));
 }
 
-/// `encapsulate_data` is advertised as side-effect free when no session
+/// `prepare_encapsulate` is advertised as side-effect free when no session
 /// exists: no packet is queued and no handshake is started.
 #[test]
 fn encapsulate_data_at_has_no_side_effects_without_a_session() {

@@ -492,9 +492,9 @@ impl Sim {
 
         let mut buf = vec![0u8; BUF];
         if let Ok(Packet::PacketData(data)) = Tunnel::parse_incoming_packet(datagram) {
-            let result = node.tunn.decapsulate_data(data).and_then(|open| {
+            let result = node.tunn.prepare_decapsulate(data).and_then(|open| {
                 let opened = open.open_into(datagram, &mut buf);
-                node.tunn.finish_decapsulate_data_at(opened, &mut buf, now)
+                node.tunn.finish_decapsulate(opened, &mut buf, now)
             });
             match result {
                 Ok(None) => {}
@@ -514,7 +514,7 @@ impl Sim {
             Ok(TunnelResult::KeepaliveDue) => {
                 let keepalive = node
                     .tunn
-                    .encapsulate_data(0, now)
+                    .prepare_encapsulate(0, now)
                     .and_then(|seal| seal.seal_into(&[], &mut buf))
                     .expect("a keepalive is only due on a usable session");
                 outs.push(Out::Net(keepalive.to_vec()));
@@ -584,7 +584,7 @@ impl Sim {
         let packet = self
             .node_mut(from)
             .tunn
-            .encapsulate_data(ip_packet.len(), now)?
+            .prepare_encapsulate(ip_packet.len(), now)?
             .seal_into(ip_packet, &mut buf)?;
         Ok(packet.to_vec())
     }

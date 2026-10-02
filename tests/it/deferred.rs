@@ -5,7 +5,9 @@
 use crate::harness::{
     ipv4_packet, Outcome as _, Peer::A, Peer::B, Sim, DATA_OVERHEAD, REPLAY_WINDOW,
 };
-use sanstun::{Error, Opened, Packet, PendingOpen, PendingSeal, Tunnel, TunnelResult};
+use sanstun::{
+    Error, Opened, Packet, PendingDecapsulate, PendingEncapsulate, Tunnel, TunnelResult,
+};
 use std::time::Instant;
 
 const BUF: usize = 4096;
@@ -18,7 +20,7 @@ fn seal_runs_on_another_thread() {
 
     let seal = sim
         .tunn_mut(A)
-        .encapsulate_data(ip_packet.len(), now)
+        .prepare_encapsulate(ip_packet.len(), now)
         .unwrap();
     let datagram = std::thread::scope(|s| {
         s.spawn(|| {
@@ -43,7 +45,7 @@ fn seals_running_out_of_order_keep_their_counters() {
         .iter()
         .map(|ip_packet| {
             sim.tunn_mut(A)
-                .encapsulate_data(ip_packet.len(), now)
+                .prepare_encapsulate(ip_packet.len(), now)
                 .unwrap()
         })
         .collect::<Vec<_>>();
@@ -73,7 +75,7 @@ fn seal_into_a_short_buffer_fails() {
 
     let seal = sim
         .tunn_mut(A)
-        .encapsulate_data(ip_packet.len(), now)
+        .prepare_encapsulate(ip_packet.len(), now)
         .unwrap();
     let mut buf = vec![0u8; ip_packet.len() + DATA_OVERHEAD - 1];
 
@@ -199,17 +201,17 @@ fn handshake_response_leaves_the_keepalive_to_the_caller() {
 fn deferred_work_can_move_to_another_thread() {
     fn assert_send<T: Send>() {}
 
-    assert_send::<PendingSeal>();
-    assert_send::<PendingOpen>();
+    assert_send::<PendingEncapsulate>();
+    assert_send::<PendingDecapsulate>();
     assert_send::<Opened>();
 }
 
-fn prepare_open(tunn: &Tunnel, datagram: &[u8]) -> Result<PendingOpen, Error> {
+fn prepare_open(tunn: &Tunnel, datagram: &[u8]) -> Result<PendingDecapsulate, Error> {
     let Packet::PacketData(data) = Tunnel::parse_incoming_packet(datagram)? else {
         panic!("expected a data message");
     };
 
-    tunn.decapsulate_data(data)
+    tunn.prepare_decapsulate(data)
 }
 
 fn finish_open(
@@ -218,7 +220,7 @@ fn finish_open(
     buf: &mut [u8],
     now: Instant,
 ) -> Result<Option<Vec<u8>>, Error> {
-    let plaintext = tunn.finish_decapsulate_data_at(opened, buf, now)?;
+    let plaintext = tunn.finish_decapsulate(opened, buf, now)?;
 
     Ok(plaintext.map(|p| p.to_vec()))
 }

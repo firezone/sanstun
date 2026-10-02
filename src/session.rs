@@ -211,11 +211,11 @@ impl Session {
     }
 
     /// Assigns the next counter to a data message, deferring writing and encrypting it.
-    pub(super) fn prepare_packet_data(&mut self) -> PendingSeal {
+    pub(super) fn prepare_packet_data(&mut self) -> PendingEncapsulate {
         let counter = self.sending_key_counter;
         self.sending_key_counter += 1;
 
-        PendingSeal {
+        PendingEncapsulate {
             key: Arc::clone(&self.sender),
             receiver_index: self.sending_index,
             counter,
@@ -226,14 +226,14 @@ impl Session {
     pub(super) fn prepare_receive_packet_data(
         &self,
         packet: PacketData,
-    ) -> Result<PendingOpen, Error> {
+    ) -> Result<PendingDecapsulate, Error> {
         if packet.receiver_idx != self.receiving_index {
             return Err(Error::WrongIndex);
         }
         // Don't reuse counters, in case this is a replay attack we want to quickly check the counter without running expensive decryption
         self.receiving_counter_quick_check(packet.counter)?;
 
-        Ok(PendingOpen {
+        Ok(PendingDecapsulate {
             key: Arc::clone(&self.receiver),
             receiving_index: self.receiving_index,
             counter: packet.counter,
@@ -256,17 +256,17 @@ impl Session {
 
 /// The encryption of a data message whose counter is already assigned.
 ///
-/// The nonce is fixed when the [`PendingSeal`] is created, so seals may run in any order and on
+/// The nonce is fixed when the [`PendingEncapsulate`] is created, so seals may run in any order and on
 /// any thread: the receiver's sliding replay window accepts data messages that arrive out of order.
 #[derive(Debug)]
 #[must_use = "the data message is not sent until it is sealed"]
-pub struct PendingSeal {
+pub struct PendingEncapsulate {
     key: Arc<Key>,
     receiver_index: Index,
     counter: u64,
 }
 
-impl PendingSeal {
+impl PendingEncapsulate {
     /// Writes the data message encrypting `plaintext` to the start of `dst`.
     ///
     /// The data message is 32 bytes longer than `plaintext`.
@@ -316,18 +316,18 @@ impl PendingSeal {
 /// fails to authenticate never advances the replay window.
 #[derive(Debug)]
 #[must_use = "the data message is not decrypted until it is opened"]
-pub struct PendingOpen {
+pub struct PendingDecapsulate {
     key: Arc<Key>,
     receiving_index: Index,
     counter: u64,
 }
 
-impl PendingOpen {
+impl PendingDecapsulate {
     /// Copies the ciphertext of `message` to the start of `dst` and decrypts it in place.
     ///
-    /// `message` is the data message this [`PendingOpen`] was prepared from; anything else fails
+    /// `message` is the data message this [`PendingDecapsulate`] was prepared from; anything else fails
     /// to authenticate. Hand the result and `dst` to
-    /// [`Tunnel::finish_decapsulate_data_at`](crate::Tunnel::finish_decapsulate_data_at).
+    /// [`Tunnel::finish_decapsulate`](crate::Tunnel::finish_decapsulate).
     pub fn open_into(self, message: &[u8], dst: &mut [u8]) -> Opened {
         let ciphertext = message.get(DATA_OFFSET..).unwrap_or_default();
         let plaintext_len = self.decrypt(ciphertext, dst);
@@ -363,7 +363,7 @@ impl PendingOpen {
     }
 }
 
-/// A data message decrypted by [`PendingOpen::open_into`], to be handed back to the
+/// A data message decrypted by [`PendingDecapsulate::open_into`], to be handed back to the
 /// [`Tunnel`](crate::Tunnel).
 #[derive(Debug)]
 #[must_use = "the data message is not accepted until it is handed back to the `Tunnel`"]
