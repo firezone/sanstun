@@ -476,7 +476,7 @@ impl Handshake {
         matches!(self.state, HandshakeState::InitSent(_))
     }
 
-    pub(crate) fn timer(&self) -> Option<(Instant, Index)> {
+    pub(crate) fn in_flight_initiation(&self) -> Option<(Instant, Index)> {
         match self.state {
             HandshakeState::InitSent(HandshakeInitSentState {
                 time_sent,

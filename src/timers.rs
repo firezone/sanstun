@@ -306,7 +306,7 @@ impl Tunnel {
     /// Returns `None` unless we are currently the initiator of an in-progress
     /// handshake.
     fn handshake_rekey_timeout(&self) -> Option<(Instant, super::Index)> {
-        let (time_sent, local_index) = self.handshake.timer()?;
+        let (time_sent, local_index) = self.handshake.in_flight_initiation()?;
 
         Some((time_sent + self.timers.rekey_timeout, local_index))
     }
