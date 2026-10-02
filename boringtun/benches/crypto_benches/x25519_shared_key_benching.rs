@@ -9,7 +9,7 @@ pub fn bench_x25519_shared_key(c: &mut Criterion) {
         let public_key = x25519_dalek::PublicKey::from(&x25519_dalek::StaticSecret::random());
 
         b.iter_batched(
-            || x25519_dalek::StaticSecret::random(),
+            x25519_dalek::StaticSecret::random,
             |secret_key| secret_key.diffie_hellman(&public_key),
             BatchSize::SmallInput,
         );
