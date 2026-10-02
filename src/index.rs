@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn incrementing_never_changes_global_part() {
-        let mut index = Index::new_local(rand::random::<u32>() >> 8);
+        let mut index = Index::new_local(0xab_cdef);
 
         let global = index.global();
 
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn incrementing_changes_session_index() {
-        let mut index = Index::new_local(rand::random::<u32>() >> 8);
+        let mut index = Index::new_local(0xab_cdef);
 
         for i in 0..256 {
             assert_eq!(index.session(), i);

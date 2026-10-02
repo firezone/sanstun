@@ -11,7 +11,8 @@ use chacha20poly1305::{Key, XChaCha20Poly1305};
 use constant_time_eq::constant_time_eq;
 use parking_lot::Mutex;
 use portable_atomic::{AtomicU64, Ordering};
-use rand::Rng;
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
 
 const COOKIE_REFRESH: u64 = 128; // Use 128 and not 120 so the compiler can optimize out the division
 const COOKIE_SIZE: usize = 16;
@@ -49,12 +50,13 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
-    pub fn new_at(public_key: &PublicKey, limit: u64, now: Instant) -> Self {
-        let mut secret_key = [0u8; 16];
-        rand::rng().fill_bytes(&mut secret_key);
+    /// `rng_seed` must come from a cryptographically secure source because the cookie secrets are derived from it.
+    pub fn new_at(public_key: &PublicKey, limit: u64, rng_seed: [u8; 32], now: Instant) -> Self {
+        let mut rng = StdRng::from_seed(rng_seed);
+
         RateLimiter {
-            nonce_key: Self::rand_bytes(),
-            secret_key,
+            nonce_key: rng.random(),
+            secret_key: rng.random(),
             start_time: now,
             nonce_ctr: AtomicU64::new(0),
             mac1_key: b2s_hash(LABEL_MAC1, public_key.as_bytes()),
@@ -63,12 +65,6 @@ impl RateLimiter {
             count: AtomicU64::new(0),
             last_reset: Mutex::new(now),
         }
-    }
-
-    fn rand_bytes() -> [u8; 32] {
-        let mut key = [0u8; 32];
-        rand::rng().fill_bytes(&mut key);
-        key
     }
 
     /// Reset packet count (ideally should be called with a period of 1 second)

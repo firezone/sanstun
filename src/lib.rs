@@ -16,6 +16,9 @@ pub use x25519_dalek::{PublicKey, StaticSecret};
 use crate::handshake::Handshake;
 use crate::timers::{TimerName, Timers};
 
+use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
+
 use std::convert::{TryFrom, TryInto};
 use std::net::IpAddr;
 use std::ops::{Deref, DerefMut};
@@ -104,6 +107,8 @@ pub struct Tunnel {
     /// Keeps tabs on the expiring timers
     timers: timers::Timers,
     rate_limiter: Arc<RateLimiter>,
+    /// Source of the ephemeral keys and the handshake jitter
+    rng: StdRng,
 }
 
 type MessageType = u32;
@@ -200,6 +205,8 @@ impl Tunnel {
     }
 
     /// Create a new tunnel using own private key and the peer public key
+    ///
+    /// `rng_seed` must come from a cryptographically secure source because key material is derived from it.
     #[expect(clippy::too_many_arguments, reason = "We don't care that much.")]
     pub fn new_at(
         static_private: StaticSecret,
@@ -208,12 +215,13 @@ impl Tunnel {
         persistent_keepalive: Option<u16>,
         index: Index,
         rate_limiter: Option<Arc<RateLimiter>>,
-        rng_seed: u64,
+        rng_seed: [u8; 32],
         now: Instant,
         unix_instant: Instant,
         unix: Duration,
     ) -> Self {
         let static_public = PublicKey::from(&static_private);
+        let mut rng = StdRng::from_seed(rng_seed);
 
         Tunnel {
             handshake: Handshake::new(
@@ -227,15 +235,17 @@ impl Tunnel {
             ),
             sessions: Default::default(),
             current: Default::default(),
-            timers: Timers::new(persistent_keepalive, rate_limiter.is_none(), rng_seed, now),
+            timers: Timers::new(persistent_keepalive, rate_limiter.is_none(), now),
 
             rate_limiter: rate_limiter.unwrap_or_else(|| {
                 Arc::new(RateLimiter::new_at(
                     &static_public,
                     PEER_HANDSHAKE_RATE_LIMIT,
+                    rng.random(),
                     now,
                 ))
             }),
+            rng,
         }
     }
 
@@ -351,9 +361,9 @@ impl Tunnel {
 
         tracing::debug!(%remote_idx, "Received handshake_initiation",);
 
-        let (packet, session) = self
-            .handshake
-            .receive_handshake_initialization(p, dst, now)?;
+        let (packet, session) =
+            self.handshake
+                .receive_handshake_initialization(p, dst, &mut self.rng, now)?;
 
         // Store new session in ring buffer
         let local_idx = session.local_index();
@@ -483,7 +493,9 @@ impl Tunnel {
 
         let starting_new_handshake = !self.handshake.is_in_progress();
 
-        let (packet, local_idx) = self.handshake.format_handshake_initiation(dst, now)?;
+        let (packet, local_idx) =
+            self.handshake
+                .format_handshake_initiation(dst, &mut self.rng, now)?;
 
         tracing::debug!(%local_idx, "Sending handshake_initiation");
 

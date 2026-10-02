@@ -6,8 +6,8 @@ use crate::harness::{
     classify, ipv4_packet, secs, Kind, Outcome as _, Peer::A, Peer::B, Sim, KEEPALIVE_SIZE,
     KEEPALIVE_TIMEOUT, MAX_JITTER, REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_TIMEOUT,
 };
-use sanstun::Error;
-use std::time::Duration;
+use sanstun::{Error, Index, PublicKey, StaticSecret, Tunnel, TunnelResult};
+use std::time::{Duration, Instant};
 
 /// A handshake triggered by a timer is not sent immediately: it is scheduled
 /// with a random jitter of up to 333ms, announced via `next_timer_update` and
@@ -119,8 +119,10 @@ fn a_single_late_poll_observes_the_expiry() {
 /// identical seeds must produce identical retransmission schedules.
 #[test]
 fn identical_seeds_produce_identical_schedules() {
-    fn retransmissions(seed: u64) -> Vec<Duration> {
-        let mut sim = Sim::builder().seeds(seed, seed.wrapping_add(1)).build();
+    fn retransmissions(seed: u8) -> Vec<Duration> {
+        let mut sim = Sim::builder()
+            .seeds([seed; 32], [seed.wrapping_add(1); 32])
+            .build();
         sim.cut_link();
         let init = sim.initiate_handshake(A);
         sim.route(A, init);
@@ -133,8 +135,8 @@ fn identical_seeds_produce_identical_schedules() {
 
 #[test]
 fn different_seeds_produce_different_jitter() {
-    fn first_jitter(seed: u64) -> Duration {
-        let mut sim = Sim::builder().seeds(seed, 99).build();
+    fn first_jitter(seed: u8) -> Duration {
+        let mut sim = Sim::builder().seeds([seed; 32], [99; 32]).build();
         let _init = sim.initiate_handshake(A);
 
         // Once REKEY_TIMEOUT passes, a retry is scheduled `jitter` in the future.
@@ -201,4 +203,63 @@ fn the_announced_session_expiry_is_actionable() {
         Some(wake),
         "polling at the announced instant left the same deadline outstanding"
     );
+}
+
+/// All randomness is derived from the caller's seed: two pairs of tunnels
+/// built from the same inputs must emit byte-identical handshakes.
+#[test]
+fn identical_seeds_produce_identical_handshakes() {
+    fn handshake(seed_a: [u8; 32], now: Instant) -> (Vec<u8>, Vec<u8>) {
+        let unix = Duration::from_secs(1_700_000_000);
+        let secret_a = StaticSecret::from([1; 32]);
+        let secret_b = StaticSecret::from([2; 32]);
+        let public_a = PublicKey::from(&secret_a);
+        let public_b = PublicKey::from(&secret_b);
+
+        let mut a = Tunnel::new_at(
+            secret_a,
+            public_b,
+            None,
+            None,
+            Index::new_local(1),
+            None,
+            seed_a,
+            now,
+            now,
+            unix,
+        );
+        let mut b = Tunnel::new_at(
+            secret_b,
+            public_a,
+            None,
+            None,
+            Index::new_local(2),
+            None,
+            [4; 32],
+            now,
+            now,
+            unix,
+        );
+
+        let mut init = [0u8; 256];
+        let init = a
+            .format_handshake_initiation_at(&mut init, false, now)
+            .unwrap()
+            .expect("a handshake initiation")
+            .to_vec();
+
+        let mut response = [0u8; 256];
+        let TunnelResult::WriteToNetwork(response) =
+            b.decapsulate_at(None, &init, &mut response, now).unwrap()
+        else {
+            panic!("expected a handshake response");
+        };
+
+        (init, response.to_vec())
+    }
+
+    let now = Instant::now();
+
+    assert_eq!(handshake([3; 32], now), handshake([3; 32], now));
+    assert_ne!(handshake([3; 32], now).0, handshake([5; 32], now).0);
 }
