@@ -1,5 +1,5 @@
 [package]
-name = "boringtun"
+name = "sanstun"
 description = "an implementation of the WireGuard® protocol designed for portability and speed"
 version = "0.7.0"
 authors = [
@@ -8,8 +8,7 @@ authors = [
     "Jeff Hiner <jhiner@cloudflare.com>",
 ]
 license = "BSD-3-Clause"
-repository = "https://github.com/cloudflare/boringtun"
-documentation = "https://docs.rs/boringtun/0.7.0/boringtun/"
+repository = "https://github.com/firezone/sanstun"
 edition = "2021"
 
 [dependencies]

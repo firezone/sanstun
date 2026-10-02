@@ -11,10 +11,10 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use boringtun::noise::errors::WireGuardError;
-use boringtun::noise::rate_limiter::RateLimiter;
-use boringtun::noise::{Index, Packet, Tunn, TunnResult};
-use boringtun::x25519::{PublicKey, StaticSecret};
+use sanstun::noise::errors::WireGuardError;
+use sanstun::noise::rate_limiter::RateLimiter;
+use sanstun::noise::{Index, Packet, Tunn, TunnResult};
+use sanstun::x25519::{PublicKey, StaticSecret};
 
 // Protocol constants from the WireGuard whitepaper (§6.1, table on p. 14).
 // They are deliberately redefined here instead of imported: the tests assert
@@ -28,7 +28,7 @@ pub const COOKIE_EXPIRATION_TIME: Duration = Duration::from_secs(120);
 /// Handshake initiations are delayed by a random jitter of up to 333ms (§6.1).
 pub const MAX_JITTER: Duration = Duration::from_millis(333);
 
-/// boringtun stops *initiating* on a session `KEEPALIVE_TIMEOUT` before
+/// sanstun stops *initiating* on a session `KEEPALIVE_TIMEOUT` before
 /// `REJECT_AFTER_TIME`, so that packets sent just before the deadline can
 /// still be decrypted by the peer (implementation-specific safety margin).
 pub const SHOULD_NOT_USE_AFTER_TIME: Duration = Duration::from_secs(180 - 10);
@@ -41,7 +41,7 @@ pub const HANDSHAKE_INIT_SIZE: usize = 148;
 pub const HANDSHAKE_RESPONSE_SIZE: usize = 92;
 pub const COOKIE_REPLY_SIZE: usize = 64;
 
-/// boringtun's anti-replay window: 128 words of 64 bits each
+/// sanstun's anti-replay window: 128 words of 64 bits each
 /// (implementation-specific; the paper's reference window is 2000 packets).
 pub const REPLAY_WINDOW: u64 = 8192;
 

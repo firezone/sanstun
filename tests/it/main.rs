@@ -1,5 +1,5 @@
-//! Behavioural integration tests for boringtun's sans-IO WireGuard
-//! implementation ([`boringtun::noise::Tunn`]).
+//! Behavioural integration tests for sanstun's sans-IO WireGuard
+//! implementation ([`sanstun::noise::Tunn`]).
 //!
 //! All tests drive two `Tunn` instances against each other through the public
 //! API only, on a virtual clock (see [`harness`]). They are grounded in the

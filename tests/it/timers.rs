@@ -6,7 +6,7 @@ use crate::harness::{
     KEEPALIVE_TIMEOUT, MAX_JITTER, REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_ATTEMPT_TIME,
     REKEY_TIMEOUT, SHOULD_NOT_USE_AFTER_TIME, TICK,
 };
-use boringtun::noise::errors::WireGuardError;
+use sanstun::noise::errors::WireGuardError;
 
 /// §6.4: an unanswered handshake initiation is retransmitted after
 /// `REKEY_TIMEOUT + jitter`, where jitter is up to 333ms.
@@ -247,7 +247,7 @@ fn responder_discards_the_session_after_reject_after_time() {
     );
 }
 
-/// When the expired session was initiated by us, boringtun starts a new
+/// When the expired session was initiated by us, sanstun starts a new
 /// handshake right away instead of waiting for the next outgoing packet.
 #[test]
 fn initiator_renews_an_expired_session_automatically() {
@@ -328,7 +328,7 @@ fn tunnel_is_wiped_after_three_times_reject_after_time() {
         .any(|e| matches!(e, WireGuardError::ConnectionExpired)));
 }
 
-/// boringtun-specific: the initiator refuses to *send* on a session within
+/// sanstun-specific: the initiator refuses to *send* on a session within
 /// `KEEPALIVE_TIMEOUT` of its expiry, because the packet could reach the peer
 /// after the peer discarded the session.
 #[test]

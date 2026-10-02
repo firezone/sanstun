@@ -26,10 +26,10 @@ jobs:
           toolchain: stable
 
       - name: Check Windows
-        run: cargo check -p boringtun
+        run: cargo check -p sanstun
 
       - name: Test Windows
-        run: cargo test -p boringtun
+        run: cargo test -p sanstun
 
   clippy:
     strategy:

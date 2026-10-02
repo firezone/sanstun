@@ -1,8 +1,8 @@
-# BoringTun
+# sanstun
 
 This is a fork of [BoringTun](https://github.com/cloudflare/boringtun), heavily modified for [Firezone](https://github.com/firezone/firezone).
 It has no API compatibility with upstream: anything Firezone does not use has been removed.
-The last commit that is still API-compatible with upstream is [`0702986`](https://github.com/firezone/boringtun/tree/0702986446add9a79efdb4934042a2043ba1e3de).
+The last commit that is still API-compatible with upstream is [`0702986`](https://github.com/firezone/sanstun/tree/0702986446add9a79efdb4934042a2043ba1e3de).
 
 Compared to upstream, this fork:
 
@@ -18,4 +18,4 @@ Compared to upstream, this fork:
 
 The project is licensed under the [3-Clause BSD License](LICENSE.md).
 
-<sub>WireGuard is a registered trademark of Jason A. Donenfeld. BoringTun is not sponsored or endorsed by Jason A. Donenfeld.</sub>
+<sub>WireGuard is a registered trademark of Jason A. Donenfeld. sanstun is not sponsored or endorsed by Jason A. Donenfeld.</sub>

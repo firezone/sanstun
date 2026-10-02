@@ -6,8 +6,8 @@ use crate::harness::{
     classify, ipv4_packet, secs, Kind, Outcome as _, Peer::A, Peer::B, Sim, KEEPALIVE_SIZE,
     KEEPALIVE_TIMEOUT, MAX_JITTER, REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_TIMEOUT,
 };
-use boringtun::noise::errors::WireGuardError;
-use boringtun::noise::TunnResult;
+use sanstun::noise::errors::WireGuardError;
+use sanstun::noise::TunnResult;
 use std::time::Duration;
 
 /// A handshake triggered by a timer is not sent immediately: it is scheduled
@@ -150,7 +150,7 @@ fn different_seeds_produce_different_jitter() {
         let tunn = sim.tunn_mut(A);
         assert!(matches!(
             tunn.update_timers_at(&mut buf, retry_due),
-            boringtun::noise::TunnResult::Done
+            sanstun::noise::TunnResult::Done
         ));
 
         tunn.next_timer_update()

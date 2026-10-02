@@ -5,7 +5,7 @@ use crate::harness::{
     classify, Kind, Outcome as _, Peer::A, Peer::B, Sim, HANDSHAKE_INIT_SIZE,
     HANDSHAKE_RESPONSE_SIZE,
 };
-use boringtun::noise::errors::WireGuardError;
+use sanstun::noise::errors::WireGuardError;
 
 #[test]
 fn handshake_completes_in_one_round_trip() {
@@ -92,7 +92,7 @@ fn replayed_handshake_initiation_is_rejected() {
     assert!(matches!(error, WireGuardError::WrongTai64nTimestamp));
 }
 
-// boringtun keeps two outgoing handshakes in flight so that a delayed
+// sanstun keeps two outgoing handshakes in flight so that a delayed
 // response to an earlier initiation is not lost on flaky networks.
 #[test]
 fn delayed_response_to_a_superseded_initiation_is_accepted() {
