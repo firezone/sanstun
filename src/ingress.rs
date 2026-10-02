@@ -87,81 +87,9 @@ impl Ingress {
         }
     }
 
-    /// Reset packet count once `RESET_PERIOD` has passed since the last reset
-    fn reset_count(&self, current_time: Instant) {
-        // The rate limit is not very accurate, but at the scale we care about it doesn't matter much
-        let mut last_reset_time = self.last_reset.lock();
-        if current_time.duration_since(*last_reset_time).as_secs() >= RESET_PERIOD {
-            self.count.store(0, Ordering::SeqCst);
-            *last_reset_time = current_time;
-        }
-    }
-
-    /// Compute the correct cookie value based on the current secret value and the source IP
-    fn current_cookie(&self, addr: IpAddr, now: Instant) -> Cookie {
-        let mut addr_bytes = [0u8; 16];
-
-        match addr {
-            IpAddr::V4(a) => addr_bytes[..4].copy_from_slice(&a.octets()[..]),
-            IpAddr::V6(a) => addr_bytes[..].copy_from_slice(&a.octets()[..]),
-        }
-
-        // The current cookie for a given IP is the MAC(responder.changing_secret_every_two_minutes, initiator.ip_address)
-        // First we derive the secret from the current time, the value of cur_counter would change with time.
-        let cur_counter = now.duration_since(self.start_time).as_secs() / COOKIE_REFRESH;
-
-        // Next we derive the cookie
-        b2s_keyed_mac_16_2(&self.secret_key, &cur_counter.to_le_bytes(), &addr_bytes)
-    }
-
-    fn nonce(&self) -> [u8; COOKIE_NONCE_SIZE] {
-        let ctr = self.nonce_ctr.fetch_add(1, Ordering::Relaxed);
-
-        b2s_mac_24(&self.nonce_key, &ctr.to_le_bytes())
-    }
-
-    fn is_under_load(&self) -> bool {
-        self.count.fetch_add(1, Ordering::SeqCst) >= self.limit
-    }
-
-    fn format_cookie_reply(&self, idx: u32, cookie: Cookie, mac1: &[u8]) -> [u8; COOKIE_REPLY_SZ] {
-        let mut dst = [0u8; COOKIE_REPLY_SZ];
-
-        let (message_type, rest) = dst.split_at_mut(4);
-        let (receiver_index, rest) = rest.split_at_mut(4);
-        let (nonce, rest) = rest.split_at_mut(24);
-        let (encrypted_cookie, _) = rest.split_at_mut(16 + 16);
-
-        // msg.message_type = 3
-        // msg.reserved_zero = { 0, 0, 0 }
-        message_type.copy_from_slice(&COOKIE_REPLY.to_le_bytes());
-        // msg.receiver_index = little_endian(initiator.sender_index)
-        receiver_index.copy_from_slice(&idx.to_le_bytes());
-        nonce.copy_from_slice(&self.nonce()[..]);
-
-        let cipher = XChaCha20Poly1305::new(&self.cookie_key);
-
-        let iv = GenericArray::from_slice(nonce);
-
-        encrypted_cookie[..16].copy_from_slice(&cookie);
-        let tag = cipher
-            .encrypt_in_place_detached(iv, mac1, &mut encrypted_cookie[..16])
-            .expect("a cookie is always within the AEAD's limits");
-
-        encrypted_cookie[16..].copy_from_slice(&tag);
-
-        dst
-    }
-
     /// Parses and verifies a datagram received from the network.
     ///
-    /// Run this on every incoming datagram: it is the only way to obtain a [`Packet`]. Handshake
-    /// messages are only processed further once they carry a valid mac1 and, under load, a
-    /// valid mac2. Under load, a handshake message with a missing or invalid mac2 yields a
-    /// [`Received::CookieReply`] for the sender instead. Only then is the initiator's static
-    /// public key of a handshake initiation decrypted, see [`HandshakeInit::peer_static_public`].
-    /// Cookie replies and data messages pass unchanged because they are authenticated by their
-    /// own AEAD.
+    /// This is the only entry point for inbound datagrams and enforces WireGuard's cookie mechanism.
     ///
     /// `src_addr` is the source address of the datagram; without it, handshake messages fail
     /// with [`Error::UnderLoad`] under load.
@@ -271,6 +199,72 @@ impl Ingress {
         }
 
         Ok(None)
+    }
+
+    /// Reset packet count once `RESET_PERIOD` has passed since the last reset
+    fn reset_count(&self, current_time: Instant) {
+        // The rate limit is not very accurate, but at the scale we care about it doesn't matter much
+        let mut last_reset_time = self.last_reset.lock();
+        if current_time.duration_since(*last_reset_time).as_secs() >= RESET_PERIOD {
+            self.count.store(0, Ordering::SeqCst);
+            *last_reset_time = current_time;
+        }
+    }
+
+    /// Compute the correct cookie value based on the current secret value and the source IP
+    fn current_cookie(&self, addr: IpAddr, now: Instant) -> Cookie {
+        let mut addr_bytes = [0u8; 16];
+
+        match addr {
+            IpAddr::V4(a) => addr_bytes[..4].copy_from_slice(&a.octets()[..]),
+            IpAddr::V6(a) => addr_bytes[..].copy_from_slice(&a.octets()[..]),
+        }
+
+        // The current cookie for a given IP is the MAC(responder.changing_secret_every_two_minutes, initiator.ip_address)
+        // First we derive the secret from the current time, the value of cur_counter would change with time.
+        let cur_counter = now.duration_since(self.start_time).as_secs() / COOKIE_REFRESH;
+
+        // Next we derive the cookie
+        b2s_keyed_mac_16_2(&self.secret_key, &cur_counter.to_le_bytes(), &addr_bytes)
+    }
+
+    fn nonce(&self) -> [u8; COOKIE_NONCE_SIZE] {
+        let ctr = self.nonce_ctr.fetch_add(1, Ordering::Relaxed);
+
+        b2s_mac_24(&self.nonce_key, &ctr.to_le_bytes())
+    }
+
+    fn is_under_load(&self) -> bool {
+        self.count.fetch_add(1, Ordering::SeqCst) >= self.limit
+    }
+
+    fn format_cookie_reply(&self, idx: u32, cookie: Cookie, mac1: &[u8]) -> [u8; COOKIE_REPLY_SZ] {
+        let mut dst = [0u8; COOKIE_REPLY_SZ];
+
+        let (message_type, rest) = dst.split_at_mut(4);
+        let (receiver_index, rest) = rest.split_at_mut(4);
+        let (nonce, rest) = rest.split_at_mut(24);
+        let (encrypted_cookie, _) = rest.split_at_mut(16 + 16);
+
+        // msg.message_type = 3
+        // msg.reserved_zero = { 0, 0, 0 }
+        message_type.copy_from_slice(&COOKIE_REPLY.to_le_bytes());
+        // msg.receiver_index = little_endian(initiator.sender_index)
+        receiver_index.copy_from_slice(&idx.to_le_bytes());
+        nonce.copy_from_slice(&self.nonce()[..]);
+
+        let cipher = XChaCha20Poly1305::new(&self.cookie_key);
+
+        let iv = GenericArray::from_slice(nonce);
+
+        encrypted_cookie[..16].copy_from_slice(&cookie);
+        let tag = cipher
+            .encrypt_in_place_detached(iv, mac1, &mut encrypted_cookie[..16])
+            .expect("a cookie is always within the AEAD's limits");
+
+        encrypted_cookie[16..].copy_from_slice(&tag);
+
+        dst
     }
 }
 
