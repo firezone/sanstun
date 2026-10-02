@@ -273,52 +273,8 @@ impl IndexMut<TimerName> for Timers {
 impl Tunnel {
     /// Drops all sessions and resets the timers to `now`.
     fn clear_all(&mut self, now: Instant) {
-        for session in &mut self.sessions {
-            *session = None;
-        }
-
+        self.sessions.clear();
         self.timers.clear(now);
-    }
-
-    /// Discards every session past [`REJECT_AFTER_TIME`].
-    ///
-    /// Fails if the current session was among them and had carried data, because
-    /// the re-key that data made due never landed.
-    fn expire_sessions(&mut self, now: Instant) -> Result<(), Error> {
-        let carried_data = self.timers.current_session_carried_data();
-        let mut result = Ok(());
-
-        for maybe_session in self.sessions.iter_mut() {
-            let Some(session) = maybe_session else {
-                continue;
-            };
-
-            let is_current = self.current == session.local_index();
-
-            if session.expired_at(now) {
-                tracing::debug!(
-                    session = %session.receiving_index,
-                    %is_current,
-                    "SESSION_EXPIRED(REJECT_AFTER_TIME)"
-                );
-                *maybe_session = None;
-
-                if is_current && carried_data {
-                    result = Err(Error::ConnectionExpired);
-                }
-            }
-        }
-
-        result
-    }
-
-    /// The earliest [`Instant`] at which one of our sessions expires.
-    fn next_expired_session(&self) -> Option<Instant> {
-        self.sessions
-            .iter()
-            .flatten()
-            .map(|s| s.established_at() + REJECT_AFTER_TIME)
-            .min()
     }
 
     /// The [`Instant`] at which we need to retransmit our handshake initiation,
@@ -364,15 +320,15 @@ impl Tunnel {
         // discards it at the same moment we do. A session that carried data was due a
         // re-key at REKEY_AFTER_TIME, so reaching its expiry means that re-key never
         // landed and there is no shared state left to reach.
-        if let Err(e) = self.expire_sessions(now) {
+        if self.sessions.expire(now) && self.timers.current_session_carried_data() {
             tracing::debug!("CONNECTION_EXPIRED(REJECT_AFTER_TIME)");
             self.handshake.set_expired();
             self.clear_all(now);
-            return Err(e);
+            return Err(Error::ConnectionExpired);
         }
 
         // In case our session expired, create a new one iff we initiated the previous one.
-        if self.sessions[self.current].is_none()
+        if self.sessions.current().is_none()
             && !self.handshake.is_in_progress()
             && self.timers.is_initiator()
         {
@@ -535,7 +491,8 @@ impl Tunnel {
 
         let common_timers = iter::empty()
             .chain(
-                self.next_expired_session()
+                self.sessions
+                    .next_expiry()
                     .map(|instant| (instant, "next expired session")),
             )
             .chain(
@@ -559,8 +516,9 @@ impl Tunnel {
                 .min_by_key(|(instant, _)| *instant)
         } else {
             // Persistent keep-alive only makes sense if the current session is active.
-            let persistent_keepalive = self.sessions[self.current]
-                .as_ref()
+            let persistent_keepalive = self
+                .sessions
+                .current()
                 .and_then(|_| self.timers.next_persistent_keepalive());
 
             common_timers
@@ -590,7 +548,7 @@ impl Tunnel {
     }
 
     pub fn time_since_last_handshake(&self, now: Instant) -> Option<Duration> {
-        if self.sessions[self.current].is_some() {
+        if self.sessions.current().is_some() {
             let session_established_at = self.timers[TimeSessionEstablished];
 
             Some(now.duration_since(session_established_at))

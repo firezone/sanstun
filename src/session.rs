@@ -59,16 +59,16 @@ impl Session {
         }
     }
 
-    pub(super) fn local_index(&self) -> Index {
-        self.receiving_index
-    }
-
     pub(crate) fn established_at(&self) -> Instant {
         self.established_at
     }
 
+    pub(crate) fn expires_at(&self) -> Instant {
+        self.established_at + REJECT_AFTER_TIME
+    }
+
     pub(crate) fn expired_at(&self, time: Instant) -> bool {
-        time >= self.established_at + REJECT_AFTER_TIME
+        time >= self.expires_at()
     }
 
     pub(crate) fn should_use_at(&self, time: Instant) -> bool {
@@ -118,6 +118,122 @@ impl Session {
         self.receiving_key_counter.mark_did_receive(counter)?;
 
         Ok(plaintext_len)
+    }
+}
+
+/// Number of sessions in the ring, better keep a PoT
+///
+/// We use a `u8` to align with the number of bits reserved in [`Index`] for the sessions.
+const N_SESSIONS: u8 = 8;
+
+/// The [`N_SESSIONS`] most recent sessions, stored at their index modulo [`N_SESSIONS`].
+#[derive(Default)]
+pub(crate) struct Sessions {
+    slots: [Option<Session>; N_SESSIONS as usize],
+    /// Index of most recently used session
+    current: Index,
+}
+
+impl Sessions {
+    /// Stores a new session, replacing the one in its slot, and returns its index.
+    pub(crate) fn insert(&mut self, session: Session) -> Index {
+        let index = session.receiving_index;
+        *self.slot_mut(index) = Some(session);
+
+        index
+    }
+
+    /// The most recently used session, if it still exists.
+    pub(crate) fn current(&self) -> Option<&Session> {
+        self.slot(self.current).as_ref()
+    }
+
+    pub(crate) fn current_mut(&mut self) -> Option<&mut Session> {
+        self.slot_mut(self.current).as_mut()
+    }
+
+    /// The session in the slot of `index`, which may have a different index.
+    pub(crate) fn in_slot_of(&self, index: Index) -> Option<&Session> {
+        self.slot(index).as_ref()
+    }
+
+    /// The session with exactly `index`, if it still exists.
+    pub(crate) fn get_mut(&mut self, index: Index) -> Option<&mut Session> {
+        self.slot_mut(index)
+            .as_mut()
+            .filter(|s| s.receiving_index == index)
+    }
+
+    /// Update the index of the currently used session, if needed
+    pub(crate) fn set_current(&mut self, new_idx: Index) {
+        let cur_idx = self.current;
+        if cur_idx == new_idx {
+            // There is nothing to do, already using this session, this is the common case
+            return;
+        }
+
+        let Some(new) = self.slot(new_idx).as_ref() else {
+            debug_assert!(false, "new session should always exist");
+            return;
+        };
+        if self
+            .slot(cur_idx)
+            .as_ref()
+            .is_some_and(|current| current.established_at() > new.established_at())
+        {
+            // The current session is "newer" than the new one, don't update.
+            return;
+        }
+
+        self.current = new_idx;
+        tracing::debug!(idx = %new_idx, "New session");
+    }
+
+    pub(crate) fn clear(&mut self) {
+        for session in &mut self.slots {
+            *session = None;
+        }
+    }
+
+    /// Discards every session past [`REJECT_AFTER_TIME`].
+    ///
+    /// Returns whether the current session was among them.
+    pub(crate) fn expire(&mut self, now: Instant) -> bool {
+        let mut current_expired = false;
+
+        for maybe_session in self.slots.iter_mut() {
+            let Some(session) = maybe_session else {
+                continue;
+            };
+
+            let is_current = self.current == session.receiving_index;
+
+            if session.expired_at(now) {
+                tracing::debug!(
+                    session = %session.receiving_index,
+                    %is_current,
+                    "SESSION_EXPIRED(REJECT_AFTER_TIME)"
+                );
+                *maybe_session = None;
+
+                current_expired |= is_current;
+            }
+        }
+
+        current_expired
+    }
+
+    /// The earliest [`Instant`] at which one of our sessions expires.
+    pub(crate) fn next_expiry(&self) -> Option<Instant> {
+        self.slots.iter().flatten().map(Session::expires_at).min()
+    }
+
+    fn slot(&self, index: Index) -> &Option<Session> {
+        &self.slots[index.session() % N_SESSIONS as usize]
+    }
+
+    fn slot_mut(&mut self, index: Index) -> &mut Option<Session> {
+        &mut self.slots[index.session() % N_SESSIONS as usize]
     }
 }
 
