@@ -321,7 +321,7 @@ impl Tunnel {
     /// [`PendingEncapsulate::encrypt`] later and on another thread. Keepalives are sent with
     /// [`Tunnel::encapsulate_keepalive`] instead. Returns `Err(Error::NoCurrentSession)` when
     /// there is no usable session; in that case **no** handshake is initiated.
-    pub fn prepare_encapsulate(&mut self, now: Instant) -> Result<PendingEncapsulate, Error> {
+    pub fn encapsulate(&mut self, now: Instant) -> Result<PendingEncapsulate, Error> {
         let pending = self
             .sending_session(now)
             .ok_or(Error::NoCurrentSession)?
