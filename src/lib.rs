@@ -9,7 +9,7 @@ mod session;
 mod timers;
 
 pub use errors::Error;
-pub use handshake::{parse_handshake_anon, HalfHandshake};
+pub use handshake::{HalfHandshake, parse_handshake_anon};
 pub use index::Index;
 pub use message::{
     CookieReplyMessage, HandshakeInitiationMessage, HandshakeResponseMessage, KeepaliveMessage,

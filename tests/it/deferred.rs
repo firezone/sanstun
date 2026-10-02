@@ -3,7 +3,7 @@
 //! order and on any thread.
 
 use crate::harness::{
-    ipv4_packet, Outcome as _, Peer::A, Peer::B, Sim, DATA_OVERHEAD, REPLAY_WINDOW,
+    DATA_OVERHEAD, Outcome as _, Peer::A, Peer::B, REPLAY_WINDOW, Sim, ipv4_packet,
 };
 use sanstun::{
     Committed, Decapsulated, Decrypted, Error, Keepalive, Packet, PendingDecapsulate,

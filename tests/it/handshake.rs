@@ -2,8 +2,8 @@
 //! failures and replay of handshake messages.
 
 use crate::harness::{
-    classify, Kind, Outcome as _, Peer::A, Peer::B, Sim, HANDSHAKE_INIT_SIZE,
-    HANDSHAKE_RESPONSE_SIZE,
+    HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, Outcome as _, Peer::A, Peer::B, Sim,
+    classify,
 };
 use sanstun::Error;
 

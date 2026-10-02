@@ -3,8 +3,8 @@
 //! behaviour for identical inputs.
 
 use crate::harness::{
-    classify, ipv4_packet, secs, Kind, Outcome as _, Peer::A, Peer::B, Sim, KEEPALIVE_SIZE,
-    KEEPALIVE_TIMEOUT, MAX_JITTER, REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_TIMEOUT,
+    KEEPALIVE_SIZE, KEEPALIVE_TIMEOUT, Kind, MAX_JITTER, Outcome as _, Peer::A, Peer::B,
+    REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_TIMEOUT, Sim, classify, ipv4_packet, secs,
 };
 use sanstun::{Decapsulated, Error, Index, Packet, PublicKey, StaticSecret, TimerAction, Tunnel};
 use std::time::{Duration, Instant};
