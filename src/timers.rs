@@ -249,8 +249,7 @@ impl Tunnel {
         self.timers.is_initiator = is_initiator;
     }
 
-    // We don't really clear the timers, but we set them to the current time to
-    // so the reference time frame is the same
+    /// Drops all sessions and resets the timers to `now`.
     fn clear_all(&mut self, now: Instant) {
         for session in &mut self.sessions {
             *session = None;
