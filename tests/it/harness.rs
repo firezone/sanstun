@@ -596,7 +596,11 @@ impl Sim {
     ) -> Result<Option<Vec<u8>>, Error> {
         let now = self.now;
         match self.tunn_mut(to).commit_decrypted(decrypted, now)? {
-            Committed::Data { buffer, len } => Ok(Some(buffer.as_ref()[..len].to_vec())),
+            Committed::Data { buffer, len } => {
+                let payload = &buffer.as_ref()[..len];
+
+                Ok(Some(payload[..ip_packet_len(payload)].to_vec()))
+            }
             Committed::Keepalive => Ok(None),
         }
     }
@@ -728,6 +732,15 @@ pub fn assert_close(actual: Duration, expected: Duration) {
 }
 
 // --- Test IP packets ---
+
+/// The length of the IP packet at the start of `buffer`, i.e. without the padding behind it.
+pub fn ip_packet_len(buffer: &[u8]) -> usize {
+    match buffer[0] >> 4 {
+        4 => u16::from_be_bytes([buffer[2], buffer[3]]).into(),
+        6 => 40 + usize::from(u16::from_be_bytes([buffer[4], buffer[5]])),
+        version => panic!("expected an IP packet, got version {version}"),
+    }
+}
 
 pub fn ipv4_packet(payload: &[u8]) -> Vec<u8> {
     let builder =

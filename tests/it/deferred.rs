@@ -4,7 +4,7 @@
 
 use crate::harness::{
     BUF, DATA_OVERHEAD, Outcome as _, Peer::A, Peer::B, REJECT_AFTER_TIME, REPLAY_WINDOW, Sim,
-    counter, ipv4_packet, receiver_index,
+    counter, ip_packet_len, ipv4_packet, receiver_index,
 };
 use sanstun::{Committed, Decrypted, Error, PendingDecapsulate, PendingEncapsulate};
 use std::time::Duration;
@@ -25,7 +25,10 @@ fn encrypt_runs_on_another_thread() {
         .unwrap()
     });
 
-    assert_eq!(datagram.len(), ip_packet.len() + DATA_OVERHEAD);
+    assert_eq!(
+        datagram.len(),
+        ip_packet.len().next_multiple_of(16) + DATA_OVERHEAD
+    );
     assert_eq!(sim.deliver(B, &datagram).expect_one_ip(), ip_packet);
 }
 
@@ -64,12 +67,17 @@ fn encrypt_into_a_short_buffer_fails() {
     let now = sim.now;
 
     let pending = sim.tunn_mut(A).encapsulate_data(now).unwrap();
-    let mut buf = vec![0u8; ip_packet.len() + DATA_OVERHEAD - 1];
+    let required = ip_packet.len().next_multiple_of(16) + DATA_OVERHEAD;
+    let mut buf = vec![0u8; required - 1];
 
-    assert!(matches!(
-        pending.encrypt(&ip_packet, &mut buf),
-        Err(Error::DestinationBufferTooSmall { .. })
-    ));
+    let Err(Error::DestinationBufferTooSmall {
+        required: reported,
+        available,
+    }) = pending.encrypt(&ip_packet, &mut buf)
+    else {
+        panic!("expected the buffer to be too small");
+    };
+    assert_eq!((reported, available), (required, required - 1));
 }
 
 #[test]
@@ -209,9 +217,7 @@ fn decrypt_into_a_short_buffer_fails() {
 fn decrypted_message_owns_its_buffer() {
     let mut sim = Sim::connected();
     let ip_packet = ipv4_packet(b"boxed");
-    let mut padded = ip_packet.clone();
-    padded.extend_from_slice(&[0u8; 7]);
-    let datagram = sim.encapsulate(A, &padded);
+    let datagram = sim.encapsulate(A, &ip_packet);
     let now = sim.now;
 
     let buf: Box<[u8]> = vec![0u8; BUF].into_boxed_slice();
@@ -224,9 +230,11 @@ fn decrypted_message_owns_its_buffer() {
         panic!("expected a data payload");
     };
 
-    assert_eq!(len, padded.len());
     assert_eq!(buffer.len(), BUF);
-    assert_eq!(&buffer[..len], padded.as_slice());
+    assert_eq!(
+        &buffer[..ip_packet_len(&buffer[..len])],
+        ip_packet.as_slice()
+    );
 }
 
 #[test]

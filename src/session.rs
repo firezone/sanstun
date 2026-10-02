@@ -31,6 +31,9 @@ impl std::fmt::Debug for Session {
     }
 }
 
+/// The plaintext of a data message is zero-padded to a multiple of this
+const PADDING_MULTIPLE: usize = 16;
+
 impl Session {
     pub(super) fn new(
         local_index: Index,
@@ -253,7 +256,8 @@ pub struct PendingEncapsulate {
 impl PendingEncapsulate {
     /// Writes the data message encrypting `plaintext` to the start of `dst`.
     ///
-    /// The data message is 32 bytes longer than `plaintext`. Fails with
+    /// `plaintext` is zero-padded to the next multiple of 16 bytes, so the data message, and the
+    /// minimum length of `dst`, is `plaintext.len().next_multiple_of(16) + 32` bytes. Fails with
     /// `Err(Error::EmptyPlaintext)` if `plaintext` is empty: an empty data message is a keepalive,
     /// which is sent with [`Tunnel::encapsulate_keepalive`](crate::Tunnel::encapsulate_keepalive).
     pub fn encrypt<'a>(
@@ -273,7 +277,8 @@ impl PendingEncapsulate {
         plaintext: &[u8],
         dst: &'a mut [u8],
     ) -> Result<DataMessage<'a>, Error> {
-        let len = DATA_HEADER_SZ + plaintext.len() + AEAD_TAG_SZ;
+        let padded_len = plaintext.len().next_multiple_of(PADDING_MULTIPLE);
+        let len = DATA_HEADER_SZ + padded_len + AEAD_TAG_SZ;
         let available = dst.len();
 
         let Some(message) = dst.get_mut(..len) else {
@@ -284,7 +289,7 @@ impl PendingEncapsulate {
         };
 
         let (header, rest) = message.split_at_mut(DATA_HEADER_SZ);
-        let (data, tag) = rest.split_at_mut(plaintext.len());
+        let (data, tag) = rest.split_at_mut(padded_len);
 
         let (message_type, rest) = header.split_at_mut(4);
         let (receiver_index, counter) = rest.split_at_mut(4);
@@ -292,8 +297,9 @@ impl PendingEncapsulate {
         receiver_index.copy_from_slice(&self.receiver_index.to_le_bytes());
         counter.copy_from_slice(&self.counter.to_le_bytes());
 
-        // TODO: spec requires padding to 16 bytes, but actually works fine without it
-        data.copy_from_slice(plaintext);
+        let (payload, padding) = data.split_at_mut(plaintext.len());
+        payload.copy_from_slice(plaintext);
+        padding.fill(0);
 
         let computed_tag = self
             .key
