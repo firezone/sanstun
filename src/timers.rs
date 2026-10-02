@@ -27,7 +27,7 @@ pub(crate) const SHOULD_NOT_USE_AFTER_TIME: Duration =
     Duration::from_secs(REJECT_AFTER_TIME.as_secs() - KEEPALIVE_TIMEOUT.as_secs());
 
 #[derive(Debug)]
-pub enum TimerName {
+pub(crate) enum TimerName {
     /// Time when last handshake was completed
     TimeSessionEstablished,
     /// Time the last attempt for a new handshake began
@@ -50,7 +50,7 @@ pub enum TimerName {
 use self::TimerName::*;
 
 #[derive(Debug)]
-pub struct Timers {
+pub(crate) struct Timers {
     /// Is the owner of the timer the initiator or the responder for the last handshake?
     is_initiator: bool,
     timers: [Instant; TimerName::Top as usize],

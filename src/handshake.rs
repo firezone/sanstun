@@ -170,7 +170,7 @@ struct TimeStamper {
 
 impl TimeStamper {
     /// Create a new TimeStamper
-    pub fn new(now: Instant, unix: Duration) -> TimeStamper {
+    pub(crate) fn new(now: Instant, unix: Duration) -> TimeStamper {
         TimeStamper {
             unix,
             created_at: now,
@@ -178,7 +178,7 @@ impl TimeStamper {
     }
 
     /// Generate a 12 byte timestamp for the given instant.
-    pub fn stamp(&self, now: Instant) -> [u8; 12] {
+    pub(crate) fn stamp(&self, now: Instant) -> [u8; 12] {
         let mut ext_stamp = [0u8; 12];
         let stamp = now.duration_since(self.created_at) + self.unix;
         ext_stamp[0..8].copy_from_slice(&(stamp.as_secs() + Tai64N::BASE).to_be_bytes());
@@ -218,7 +218,7 @@ impl Tai64N {
 
     /// Check if this timestamp represents a time that is chronologically after the time represented
     /// by the other timestamp
-    pub fn after(&self, other: &Tai64N) -> bool {
+    pub(crate) fn after(&self, other: &Tai64N) -> bool {
         (self.secs > other.secs) || ((self.secs == other.secs) && (self.nano > other.nano))
     }
 }

@@ -410,7 +410,7 @@ impl Tunnel {
         Ok(Committed::Data { buffer, len })
     }
 
-    pub(crate) fn handle_verified_packet(
+    fn handle_verified_packet(
         &mut self,
         packet: Packet,
         now: Instant,

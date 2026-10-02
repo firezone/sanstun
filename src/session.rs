@@ -10,7 +10,7 @@ use ring::aead::{Aad, LessSafeKey, Nonce, UnboundKey, CHACHA20_POLY1305};
 use std::sync::Arc;
 use std::time::Instant;
 
-pub struct Session {
+pub(crate) struct Session {
     established_at: Instant,
     pub(crate) receiving_index: Index,
     sending_index: Index,
