@@ -877,7 +877,7 @@ dependencies = [
 
 [[package]]
 name = "sanstun"
-version = "0.7.0"
+version = "0.1.0"
 dependencies = [
  "aead",
  "blake2",
