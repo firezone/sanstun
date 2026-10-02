@@ -196,24 +196,13 @@ impl Tai64N {
     }
 
     /// Parse a timestamp from a 12 byte u8 slice
-    fn parse(buf: &[u8; 12]) -> Result<Tai64N, Error> {
-        if buf.len() < 12 {
-            return Err(Error::InvalidTai64nTimestamp);
-        }
-
+    fn parse(buf: &[u8; 12]) -> Tai64N {
         let (sec_bytes, nano_bytes) = buf.split_at(std::mem::size_of::<u64>());
         let secs = u64::from_be_bytes(sec_bytes.try_into().unwrap());
         let nano = u32::from_be_bytes(nano_bytes.try_into().unwrap());
 
         // WireGuard does not actually expect tai64n timestamp, just monotonically increasing one
-        //if secs < (1u64 << 62) || secs >= (1u64 << 63) {
-        //    return Err(Error::InvalidTai64nTimestamp);
-        //};
-        //if nano >= 1_000_000_000 {
-        //   return Err(Error::InvalidTai64nTimestamp);
-        //}
-
-        Ok(Tai64N { secs, nano })
+        Tai64N { secs, nano }
     }
 
     /// Check if this timestamp represents a time that is chronologically after the time represented
@@ -543,7 +532,7 @@ impl Handshake {
         let mut timestamp = [0u8; TIMESTAMP_LEN];
         aead_chacha20_open(&mut timestamp, &key, 0, packet.encrypted_timestamp, &hash)?;
 
-        let timestamp = Tai64N::parse(&timestamp)?;
+        let timestamp = Tai64N::parse(&timestamp);
 
         tracing::debug!(new_handshake_ts = %timestamp, last_handshake_ts = %self.last_handshake_timestamp);
 
