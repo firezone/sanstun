@@ -13,7 +13,7 @@ pub struct Session {
     established_at: Instant,
     pub(crate) receiving_index: Index,
     sending_index: Index,
-    receiver: LessSafeKey,
+    receiver: Arc<LessSafeKey>,
     sender: Arc<LessSafeKey>,
     sending_key_counter: u64,
     receiving_key_counter: ReceivingKeyCounterValidator,
@@ -173,9 +173,9 @@ impl Session {
             established_at: now,
             receiving_index: local_index,
             sending_index: peer_index,
-            receiver: LessSafeKey::new(
+            receiver: Arc::new(LessSafeKey::new(
                 UnboundKey::new(&CHACHA20_POLY1305, &receiving_key).unwrap(),
-            ),
+            )),
             sender: Arc::new(LessSafeKey::new(
                 UnboundKey::new(&CHACHA20_POLY1305, &sending_key).unwrap(),
             )),
@@ -222,45 +222,35 @@ impl Session {
         }
     }
 
-    /// packet - a data packet we received from the network
-    /// dst - pre-allocated space to hold the encapsulated IP packet, to send to the interface
-    ///       dst will always take less space than src
-    /// return the size of the encapsulated packet on success
-    pub(super) fn receive_packet_data<'a>(
-        &mut self,
+    /// Checks the counter of a data message, deferring its decryption.
+    pub(super) fn prepare_receive_packet_data(
+        &self,
         packet: PacketData,
-        dst: &'a mut [u8],
-    ) -> Result<&'a mut [u8], Error> {
-        let ct_len = packet.encrypted_encapsulated_packet.len();
-        let buf_len = dst.len();
-
-        if buf_len < ct_len {
-            tracing::warn!(%buf_len, %ct_len, "Destination buffer too small for incoming packet data");
-
-            return Err(Error::DestinationBufferTooSmall);
-        }
+    ) -> Result<PendingOpen, Error> {
         if packet.receiver_idx != self.receiving_index {
             return Err(Error::WrongIndex);
         }
         // Don't reuse counters, in case this is a replay attack we want to quickly check the counter without running expensive decryption
         self.receiving_counter_quick_check(packet.counter)?;
 
-        let ret = {
-            let mut nonce = [0u8; 12];
-            nonce[4..12].copy_from_slice(&packet.counter.to_le_bytes());
-            dst[..ct_len].copy_from_slice(packet.encrypted_encapsulated_packet);
-            self.receiver
-                .open_in_place(
-                    Nonce::assume_unique_for_key(nonce),
-                    Aad::from(&[]),
-                    &mut dst[..ct_len],
-                )
-                .map_err(|_| Error::InvalidAeadTag)?
-        };
+        Ok(PendingOpen {
+            key: Arc::clone(&self.receiver),
+            receiving_index: self.receiving_index,
+            counter: packet.counter,
+        })
+    }
 
-        // After decryption is done, check counter again, and mark as received
-        self.receiving_counter_mark(packet.counter)?;
-        Ok(ret)
+    /// Accepts the counter of a decrypted data message, returning the length of its plaintext.
+    pub(super) fn finish_receive_packet_data(&mut self, opened: Opened) -> Result<usize, Error> {
+        debug_assert_eq!(opened.receiving_index, self.receiving_index);
+
+        let plaintext_len = opened.plaintext_len?;
+
+        // Only an authenticated message may advance the replay window. The check is repeated
+        // because a duplicate may have passed the quick check before this one was accepted.
+        self.receiving_counter_mark(opened.counter)?;
+
+        Ok(plaintext_len)
     }
 }
 
@@ -316,4 +306,66 @@ impl PendingSeal {
 
         Ok(Ciphertext(message))
     }
+}
+
+/// The decryption of a data message whose counter has been checked.
+///
+/// Its counter has passed the replay check but is not yet marked as received: that only happens
+/// once the [`Opened`] message is handed back to the [`Tunnel`](crate::Tunnel), so a message that
+/// fails to authenticate never advances the replay window.
+#[derive(Debug)]
+#[must_use = "the data message is not decrypted until it is opened"]
+pub struct PendingOpen {
+    key: Arc<LessSafeKey>,
+    receiving_index: Index,
+    counter: u64,
+}
+
+impl PendingOpen {
+    /// Copies the ciphertext of `message` to the start of `dst` and decrypts it in place.
+    ///
+    /// `message` is the data message this [`PendingOpen`] was prepared from; anything else fails
+    /// to authenticate. Hand the result and `dst` to
+    /// [`Tunnel::finish_decapsulate_data_at`](crate::Tunnel::finish_decapsulate_data_at).
+    pub fn open_into(self, message: &[u8], dst: &mut [u8]) -> Opened {
+        let ciphertext = message.get(DATA_OFFSET..).unwrap_or_default();
+        let plaintext_len = self.decrypt(ciphertext, dst);
+
+        Opened {
+            receiving_index: self.receiving_index,
+            counter: self.counter,
+            plaintext_len,
+        }
+    }
+
+    fn decrypt(&self, ciphertext: &[u8], dst: &mut [u8]) -> Result<usize, Error> {
+        let ct_len = ciphertext.len();
+        let buf_len = dst.len();
+
+        let Some(buf) = dst.get_mut(..ct_len) else {
+            tracing::warn!(%buf_len, %ct_len, "Destination buffer too small for incoming packet data");
+
+            return Err(Error::DestinationBufferTooSmall);
+        };
+        buf.copy_from_slice(ciphertext);
+
+        let mut nonce = [0u8; 12];
+        nonce[4..12].copy_from_slice(&self.counter.to_le_bytes());
+        let plaintext = self
+            .key
+            .open_in_place(Nonce::assume_unique_for_key(nonce), Aad::from(&[]), buf)
+            .map_err(|_| Error::InvalidAeadTag)?;
+
+        Ok(plaintext.len())
+    }
+}
+
+/// A data message decrypted by [`PendingOpen::open_into`], to be handed back to the
+/// [`Tunnel`](crate::Tunnel).
+#[derive(Debug)]
+#[must_use = "the data message is not accepted until it is handed back to the `Tunnel`"]
+pub struct Opened {
+    pub(super) receiving_index: Index,
+    counter: u64,
+    plaintext_len: Result<usize, Error>,
 }

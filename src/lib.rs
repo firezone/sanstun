@@ -11,7 +11,7 @@ pub use errors::Error;
 pub use handshake::{parse_handshake_anon, HalfHandshake};
 pub use index::Index;
 pub use rate_limiter::RateLimiter;
-pub use session::PendingSeal;
+pub use session::{Opened, PendingOpen, PendingSeal};
 pub use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::handshake::Handshake;
@@ -46,7 +46,6 @@ const N_SESSIONS: u8 = 8;
 pub enum TunnelResult<'a> {
     Done,
     WriteToNetwork(Ciphertext<'a>),
-    WriteToTunnel(Plaintext<'a>),
 }
 
 /// A datagram to send to the network.
@@ -147,10 +146,9 @@ pub struct PacketCookieReply<'a> {
 }
 
 #[derive(Debug)]
-pub struct PacketData<'a> {
+pub struct PacketData {
     pub receiver_idx: u32,
     counter: u64,
-    encrypted_encapsulated_packet: &'a [u8],
 }
 
 /// Describes a packet from network
@@ -159,7 +157,7 @@ pub enum Packet<'a> {
     HandshakeInit(HandshakeInit<'a>),
     HandshakeResponse(HandshakeResponse<'a>),
     PacketCookieReply(PacketCookieReply<'a>),
-    PacketData(PacketData<'a>),
+    PacketData(PacketData),
 }
 
 impl Tunnel {
@@ -195,7 +193,6 @@ impl Tunnel {
             (DATA, DATA_OVERHEAD_SZ..=usize::MAX) => Packet::PacketData(PacketData {
                 receiver_idx: u32::from_le_bytes(src[4..8].try_into().unwrap()),
                 counter: u64::from_le_bytes(src[8..16].try_into().unwrap()),
-                encrypted_encapsulated_packet: &src[16..],
             }),
             _ => return Err(Error::InvalidPacket),
         })
@@ -304,8 +301,57 @@ impl Tunnel {
         Ok(seal)
     }
 
+    /// Prepares the decryption of a data message, deferring it to the returned [`PendingOpen`].
+    ///
+    /// Selects the session and checks the counter against the replay window without updating
+    /// any state or reading the ciphertext. Hand the [`Opened`] message back to
+    /// [`Tunnel::finish_decapsulate_data_at`] to complete the decapsulation.
+    pub fn decapsulate_data(&self, packet: PacketData) -> Result<PendingOpen, Error> {
+        let remote_idx = Index::from_peer(packet.receiver_idx);
+
+        let session = self.sessions[remote_idx].as_ref().ok_or_else(|| {
+            tracing::trace!(%remote_idx, "No current session available");
+            Error::NoCurrentSession
+        })?;
+
+        session.prepare_receive_packet_data(packet)
+    }
+
+    /// Completes the decapsulation of a data message decrypted into `dst`.
+    ///
+    /// `dst` is the buffer the message was opened into. Marks its counter as received, which
+    /// rejects a duplicate that passed [`Tunnel::decapsulate_data`] before the original got here.
+    ///
+    /// Returns the IP packet to write to the tunnel interface, or `None` for a keepalive.
+    pub fn finish_decapsulate_data_at<'a>(
+        &mut self,
+        opened: Opened,
+        dst: &'a mut [u8],
+        now: Instant,
+    ) -> Result<Option<Plaintext<'a>>, Error> {
+        let remote_idx = opened.receiving_index;
+
+        let Some(session) = self.sessions[remote_idx]
+            .as_mut()
+            .filter(|s| s.receiving_index == remote_idx)
+        else {
+            tracing::trace!(%remote_idx, "Session was replaced during decryption");
+            return Err(Error::NoCurrentSession);
+        };
+        let len = session.finish_receive_packet_data(opened)?;
+        let plaintext = dst.get_mut(..len).ok_or(Error::DestinationBufferTooSmall)?;
+
+        self.set_current_session(remote_idx);
+
+        self.timer_tick(TimerName::TimeLastPacketReceived, now);
+
+        self.validate_decapsulated_packet(plaintext, now)
+    }
+
     /// Receives a UDP datagram from the network and parses it.
-    /// Returns TunnelResult.
+    ///
+    /// Handles handshake messages and cookie replies. Data messages are decapsulated with
+    /// [`Tunnel::decapsulate_data`] instead and fail with `Err(Error::UnexpectedPacket)`.
     pub fn decapsulate<'a>(
         &mut self,
         src_addr: Option<IpAddr>,
@@ -340,7 +386,7 @@ impl Tunnel {
             Packet::HandshakeInit(p) => self.handle_handshake_init(p, dst, now),
             Packet::HandshakeResponse(p) => self.handle_handshake_response(p, dst, now),
             Packet::PacketCookieReply(p) => self.handle_cookie_reply(p, now),
-            Packet::PacketData(p) => self.handle_data(p, dst, now),
+            Packet::PacketData(_) => Err(Error::UnexpectedPacket),
         }
     }
 
@@ -440,32 +486,6 @@ impl Tunnel {
         tracing::debug!(idx = %new_idx, "New session");
     }
 
-    /// Decrypts a data packet, and stores the decapsulated packet in dst.
-    fn handle_data<'a>(
-        &mut self,
-        packet: PacketData,
-        dst: &'a mut [u8],
-        now: Instant,
-    ) -> Result<TunnelResult<'a>, Error> {
-        let remote_idx = Index::from_peer(packet.receiver_idx);
-
-        // Get the (probably) right session
-        let decapsulated_packet = {
-            let session = self.sessions[remote_idx].as_mut();
-            let session = session.ok_or_else(|| {
-                tracing::trace!(%remote_idx, "No current session available");
-                Error::NoCurrentSession
-            })?;
-            session.receive_packet_data(packet, dst)?
-        };
-
-        self.set_current_session(remote_idx);
-
-        self.timer_tick(TimerName::TimeLastPacketReceived, now);
-
-        self.validate_decapsulated_packet(decapsulated_packet, now)
-    }
-
     /// Formats a new handshake initiation message and store it in dst. If force_resend is true will send
     /// a new handshake, even if a handshake is already in progress (for example when a handshake times out)
     ///
@@ -505,9 +525,9 @@ impl Tunnel {
         &mut self,
         packet: &'a mut [u8],
         now: Instant,
-    ) -> Result<TunnelResult<'a>, Error> {
+    ) -> Result<Option<Plaintext<'a>>, Error> {
         let computed_len = match packet.len() {
-            0 => return Ok(TunnelResult::Done), // This is keepalive, and not an error
+            0 => return Ok(None), // This is keepalive, and not an error
             _ if packet[0] >> 4 == 4 && packet.len() >= IPV4_MIN_HEADER_SIZE => {
                 let len_bytes: [u8; IP_LEN_SZ] = packet[IPV4_LEN_OFF..IPV4_LEN_OFF + IP_LEN_SZ]
                     .try_into()
@@ -529,8 +549,6 @@ impl Tunnel {
 
         self.timer_tick(TimerName::TimeLastDataPacketReceived, now);
 
-        Ok(TunnelResult::WriteToTunnel(Plaintext(
-            &mut packet[..computed_len],
-        )))
+        Ok(Some(Plaintext(&mut packet[..computed_len])))
     }
 }

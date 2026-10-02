@@ -2,8 +2,11 @@
 //! happen on the `Tunnel`, in order, while the AEAD work may run later, in any
 //! order and on any thread.
 
-use crate::harness::{ipv4_packet, Outcome as _, Peer::A, Peer::B, Sim, DATA_OVERHEAD};
-use sanstun::Error;
+use crate::harness::{
+    ipv4_packet, Outcome as _, Peer::A, Peer::B, Sim, DATA_OVERHEAD, REPLAY_WINDOW,
+};
+use sanstun::{Error, Opened, Packet, PendingOpen, PendingSeal, Tunnel};
+use std::time::Instant;
 
 const BUF: usize = 4096;
 
@@ -78,6 +81,130 @@ fn seal_into_a_short_buffer_fails() {
         seal.seal_into(&ip_packet, &mut buf),
         Err(Error::DestinationBufferTooSmall)
     ));
+}
+
+#[test]
+fn open_runs_on_another_thread() {
+    let mut sim = Sim::connected();
+    let ip_packet = ipv4_packet(b"opened elsewhere");
+    let datagram = sim.encapsulate(A, &ip_packet);
+    let now = sim.now;
+
+    let open = prepare_open(sim.tunn(B), &datagram).unwrap();
+    let mut buf = vec![0u8; BUF];
+    let opened = std::thread::scope(|s| {
+        s.spawn(|| open.open_into(&datagram, &mut buf))
+            .join()
+            .unwrap()
+    });
+
+    assert_eq!(
+        finish_open(sim.tunn_mut(B), opened, &mut buf, now).unwrap(),
+        Some(ip_packet)
+    );
+}
+
+#[test]
+fn duplicate_within_one_batch_is_accepted_only_once() {
+    let mut sim = Sim::connected();
+    let ip_packet = ipv4_packet(b"twice");
+    let datagram = sim.encapsulate(A, &ip_packet);
+    let now = sim.now;
+    let tunn = sim.tunn_mut(B);
+
+    let mut first_buf = vec![0u8; BUF];
+    let mut second_buf = vec![0u8; BUF];
+    let first = prepare_open(tunn, &datagram).unwrap();
+    let second = prepare_open(tunn, &datagram).unwrap();
+    let first = first.open_into(&datagram, &mut first_buf);
+    let second = second.open_into(&datagram, &mut second_buf);
+
+    assert_eq!(
+        finish_open(tunn, first, &mut first_buf, now).unwrap(),
+        Some(ip_packet)
+    );
+    assert!(matches!(
+        finish_open(tunn, second, &mut second_buf, now),
+        Err(Error::DuplicateCounter)
+    ));
+}
+
+#[test]
+fn tampered_packet_does_not_advance_the_replay_window() {
+    let mut sim = Sim::connected();
+    let ip_packet = ipv4_packet(b"");
+    let datagrams = (0..REPLAY_WINDOW + 2)
+        .map(|_| sim.encapsulate(A, &ip_packet))
+        .collect::<Vec<_>>();
+    let mut tampered = datagrams.last().unwrap().clone();
+    *tampered.last_mut().unwrap() ^= 1;
+    let now = sim.now;
+
+    let mut buf = vec![0u8; BUF];
+    let opened = prepare_open(sim.tunn(B), &tampered)
+        .unwrap()
+        .open_into(&tampered, &mut buf);
+    let result = finish_open(sim.tunn_mut(B), opened, &mut buf, now);
+
+    assert!(matches!(result, Err(Error::InvalidAeadTag)));
+    assert_eq!(sim.deliver(B, &datagrams[0]).expect_one_ip(), ip_packet);
+}
+
+#[test]
+fn open_into_a_short_buffer_fails() {
+    let mut sim = Sim::connected();
+    let datagram = sim.encapsulate(A, &ipv4_packet(b"too big"));
+    let now = sim.now;
+
+    let mut buf = vec![0u8; datagram.len() - 17];
+    let opened = prepare_open(sim.tunn(B), &datagram)
+        .unwrap()
+        .open_into(&datagram, &mut buf);
+
+    assert!(matches!(
+        finish_open(sim.tunn_mut(B), opened, &mut buf, now),
+        Err(Error::DestinationBufferTooSmall)
+    ));
+}
+
+#[test]
+fn decapsulate_at_leaves_data_messages_to_decapsulate_data() {
+    let mut sim = Sim::connected();
+    let datagram = sim.encapsulate(A, &ipv4_packet(b"data"));
+    let now = sim.now;
+
+    let mut buf = vec![0u8; BUF];
+    let result = sim.tunn_mut(B).decapsulate(None, &datagram, &mut buf, now);
+
+    assert!(matches!(result, Err(Error::UnexpectedPacket)));
+}
+
+#[test]
+fn deferred_work_can_move_to_another_thread() {
+    fn assert_send<T: Send>() {}
+
+    assert_send::<PendingSeal>();
+    assert_send::<PendingOpen>();
+    assert_send::<Opened>();
+}
+
+fn prepare_open(tunn: &Tunnel, datagram: &[u8]) -> Result<PendingOpen, Error> {
+    let Packet::PacketData(data) = Tunnel::parse_incoming_packet(datagram)? else {
+        panic!("expected a data message");
+    };
+
+    tunn.decapsulate_data(data)
+}
+
+fn finish_open(
+    tunn: &mut Tunnel,
+    opened: Opened,
+    buf: &mut [u8],
+    now: Instant,
+) -> Result<Option<Vec<u8>>, Error> {
+    let plaintext = tunn.finish_decapsulate_data_at(opened, buf, now)?;
+
+    Ok(plaintext.map(|p| p.to_vec()))
 }
 
 fn counter(datagram: &[u8]) -> u64 {

@@ -490,10 +490,23 @@ impl Sim {
         let mut outs = Vec::new();
 
         let mut buf = vec![0u8; BUF];
+        if let Ok(Packet::PacketData(data)) = Tunnel::parse_incoming_packet(datagram) {
+            let result = node.tunn.decapsulate_data(data).and_then(|open| {
+                let opened = open.open_into(datagram, &mut buf);
+                node.tunn.finish_decapsulate_data_at(opened, &mut buf, now)
+            });
+            match result {
+                Ok(None) => {}
+                Ok(Some(packet)) => outs.push(Out::Ip(packet.to_vec())),
+                Err(e) => outs.push(Out::Err(e)),
+            }
+
+            return outs;
+        }
+
         match node.tunn.decapsulate(src, datagram, &mut buf, now) {
             Ok(TunnelResult::Done) => {}
             Err(e) => outs.push(Out::Err(e)),
-            Ok(TunnelResult::WriteToTunnel(packet)) => outs.push(Out::Ip(packet.to_vec())),
             Ok(TunnelResult::WriteToNetwork(packet)) => {
                 outs.push(Out::Net(packet.to_vec()));
             }
