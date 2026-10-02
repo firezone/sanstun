@@ -540,14 +540,16 @@ impl Handshake {
         // initiator.hash = HASH(initiator.hash || msg.encrypted_timestamp)
         hash = b2s_hash(&hash, packet.encrypted_timestamp);
 
-        Ok(self.format_handshake_response(
+        let response = self.format_handshake_response(
             hash,
             chaining_key,
             peer_ephemeral_public,
             peer_index,
             rng,
             now,
-        ))
+        );
+
+        Ok(response)
     }
 
     pub(super) fn receive_handshake_response(

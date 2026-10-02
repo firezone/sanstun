@@ -3,6 +3,7 @@
 mod errors;
 mod handshake;
 mod index;
+mod message;
 mod rate_limiter;
 mod session;
 mod timers;
@@ -10,6 +11,9 @@ mod timers;
 pub use errors::Error;
 pub use handshake::{parse_handshake_anon, HalfHandshake};
 pub use index::Index;
+pub use message::{
+    CookieReplyMessage, HandshakeInitiationMessage, HandshakeResponseMessage, KeepaliveMessage,
+};
 pub use rate_limiter::RateLimiter;
 pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
 pub use x25519_dalek::{PublicKey, StaticSecret};
@@ -71,55 +75,6 @@ pub enum TimerAction {
 #[derive(Debug)]
 #[must_use = "a keepalive is due; send it with `Tunnel::encapsulate_keepalive`"]
 pub struct Keepalive;
-
-macro_rules! owned_message {
-    ($(#[$doc:meta])* $name:ident, $len:expr) => {
-        $(#[$doc])*
-        #[derive(Debug, Clone)]
-        pub struct $name([u8; $len]);
-
-        impl $name {
-            pub fn into_inner(self) -> [u8; $len] {
-                self.0
-            }
-        }
-
-        impl Deref for $name {
-            type Target = [u8];
-
-            fn deref(&self) -> &[u8] {
-                &self.0
-            }
-        }
-
-        impl AsRef<[u8]> for $name {
-            fn as_ref(&self) -> &[u8] {
-                &self.0
-            }
-        }
-    };
-}
-
-owned_message!(
-    /// A handshake initiation to send to the network.
-    HandshakeInitiationMessage,
-    HANDSHAKE_INIT_SZ
-);
-owned_message!(
-    /// A handshake response to send to the network.
-    HandshakeResponseMessage,
-    HANDSHAKE_RESP_SZ
-);
-owned_message!(
-    /// A cookie reply to send to the network.
-    CookieReplyMessage,
-    COOKIE_REPLY_SZ
-);
-owned_message!(
-    /// A keepalive, i.e. an encrypted empty data message, to send to the network.
-    KeepaliveMessage,
-    DATA_OVERHEAD_SZ
-);
 
 /// An encrypted data message to send to the network, in the buffer it was written into.
 #[derive(Debug)]
