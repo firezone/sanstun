@@ -8,13 +8,13 @@ use std::time::{Duration, Instant};
 
 // Some constants, represent time in seconds
 // https://www.wireguard.com/papers/wireguard.pdf#page=14
-pub(crate) const REKEY_AFTER_TIME: Duration = Duration::from_secs(120);
+const REKEY_AFTER_TIME: Duration = Duration::from_secs(120);
 pub(crate) const REJECT_AFTER_TIME: Duration = Duration::from_secs(180);
 const REKEY_ATTEMPT_TIME: Duration = Duration::from_secs(90);
-pub(crate) const REKEY_TIMEOUT: Duration = Duration::from_secs(5);
-pub(crate) const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
+const REKEY_TIMEOUT: Duration = Duration::from_secs(5);
+const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const COOKIE_EXPIRATION_TIME: Duration = Duration::from_secs(120);
-pub(crate) const MAX_JITTER: Duration = Duration::from_millis(333);
+const MAX_JITTER: Duration = Duration::from_millis(333);
 
 /// Time-period after which a session should no longer be used for new packets.
 ///
@@ -63,8 +63,6 @@ pub(crate) struct Timers {
     /// If `Some`, the new-handshake deadline is derived from it on demand.
     first_data_sent_without_reply: Option<Instant>,
     persistent_keepalive: usize,
-    /// Should this timer call reset rr function (if not a shared rr instance)
-    pub(super) should_reset_rr: bool,
     /// When we should sent a scheduled handshake.
     send_handshake_at: Option<Instant>,
 
@@ -74,14 +72,13 @@ pub(crate) struct Timers {
 }
 
 impl Timers {
-    pub(super) fn new(persistent_keepalive: Option<u16>, reset_rr: bool, now: Instant) -> Timers {
+    pub(super) fn new(persistent_keepalive: Option<u16>, now: Instant) -> Timers {
         Timers {
             is_initiator: false,
             timers: [now; TimerName::Top as usize],
             last_data_received_without_reply: Default::default(),
             first_data_sent_without_reply: Default::default(),
             persistent_keepalive: usize::from(persistent_keepalive.unwrap_or(0)),
-            should_reset_rr: reset_rr,
             send_handshake_at: None,
             rekey_attempt_time: REKEY_ATTEMPT_TIME,
             keepalive_timeout: KEEPALIVE_TIMEOUT,
@@ -94,7 +91,7 @@ impl Timers {
     }
 
     pub(crate) fn is_responder(&self) -> bool {
-        !self.is_initiator()
+        !self.is_initiator
     }
 
     /// After `REJECT_AFTER_TIME * 3` without a new handshake, all ephemeral and
@@ -187,6 +184,66 @@ impl Timers {
         self.last_data_received_without_reply = None;
     }
 
+    pub(crate) fn tick(&mut self, timer_name: TimerName, now: Instant) {
+        match timer_name {
+            TimeLastPacketReceived => {
+                self.first_data_sent_without_reply = None;
+            }
+            TimeLastPacketSent => {
+                self.last_data_received_without_reply = None;
+            }
+            TimeLastDataPacketReceived => {
+                self.last_data_received_without_reply = Some(now);
+            }
+            TimeLastDataPacketSent => {
+                match self.first_data_sent_without_reply {
+                    Some(_) => {
+                        // This isn't the first timer tick (i.e. not the first packet)
+                        // we haven't received a response to.
+                    }
+                    None => {
+                        // We sent a packet and haven't heard back yet.
+                        // Remember when, so we can derive the new-handshake deadline.
+                        self.first_data_sent_without_reply = Some(now)
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        self[timer_name] = now;
+    }
+
+    pub(crate) fn session_established(&mut self, is_initiator: bool, now: Instant) {
+        self.tick(TimeSessionEstablished, now);
+        self.is_initiator = is_initiator;
+    }
+
+    /// The [`Instant`] at which an unanswered handshake initiation sent at `sent_at` is retried.
+    fn rekey_timeout(&self, sent_at: Instant) -> Instant {
+        sent_at + self.rekey_timeout
+    }
+
+    fn scheduled_handshake(&self) -> Option<Instant> {
+        self.send_handshake_at
+    }
+
+    fn schedule_handshake(&mut self, at: Instant) {
+        let existing = self.send_handshake_at.replace(at);
+        debug_assert!(
+            existing.is_none(),
+            "Should never override existing handshake"
+        );
+    }
+
+    fn take_scheduled_handshake(&mut self) {
+        self.send_handshake_at = None;
+    }
+
+    fn consume_passive_keepalive(&mut self) {
+        self.last_data_received_without_reply = None;
+    }
+
     pub(crate) fn set_rekey_attempt_time(&mut self, rekey_attempt_time: Duration) {
         self.rekey_attempt_time = rekey_attempt_time;
     }
@@ -214,41 +271,6 @@ impl IndexMut<TimerName> for Timers {
 }
 
 impl Tunnel {
-    pub(super) fn timer_tick(&mut self, timer_name: TimerName, now: Instant) {
-        match timer_name {
-            TimeLastPacketReceived => {
-                self.timers.first_data_sent_without_reply = None;
-            }
-            TimeLastPacketSent => {
-                self.timers.last_data_received_without_reply = None;
-            }
-            TimeLastDataPacketReceived => {
-                self.timers.last_data_received_without_reply = Some(now);
-            }
-            TimeLastDataPacketSent => {
-                match self.timers.first_data_sent_without_reply {
-                    Some(_) => {
-                        // This isn't the first timer tick (i.e. not the first packet)
-                        // we haven't received a response to.
-                    }
-                    None => {
-                        // We sent a packet and haven't heard back yet.
-                        // Remember when, so we can derive the new-handshake deadline.
-                        self.timers.first_data_sent_without_reply = Some(now)
-                    }
-                }
-            }
-            _ => {}
-        }
-
-        self.timers[timer_name] = now;
-    }
-
-    pub(super) fn timer_tick_session_established(&mut self, is_initiator: bool, now: Instant) {
-        self.timer_tick(TimeSessionEstablished, now);
-        self.timers.is_initiator = is_initiator;
-    }
-
     /// Drops all sessions and resets the timers to `now`.
     fn clear_all(&mut self, now: Instant) {
         for session in &mut self.sessions {
@@ -307,16 +329,16 @@ impl Tunnel {
     fn handshake_rekey_timeout(&self) -> Option<(Instant, super::Index)> {
         let (time_sent, local_index) = self.handshake.in_flight_initiation()?;
 
-        Some((time_sent + self.timers.rekey_timeout, local_index))
+        Some((self.timers.rekey_timeout(time_sent), local_index))
     }
 
     pub fn update_timers(&mut self, now: Instant) -> Result<Option<TimerAction>, Error> {
-        self.timers[TimeLastUpdate] = now;
+        self.timers.tick(TimeLastUpdate, now);
 
-        if let Some(scheduled_handshake_at) = self.timers.send_handshake_at {
+        if let Some(scheduled_handshake_at) = self.timers.scheduled_handshake() {
             // If we have scheduled a handshake and the deadline expired, send it immediately.
             if now >= scheduled_handshake_at {
-                self.timers.send_handshake_at = None;
+                self.timers.take_scheduled_handshake();
                 return Ok(self
                     .format_handshake_initiation(true, now)
                     .map(TimerAction::HandshakeInitiation));
@@ -337,10 +359,6 @@ impl Tunnel {
 
         let mut handshake_initiation_required = false;
         let mut keepalive_required = false;
-
-        if self.timers.should_reset_rr {
-            self.rate_limiter.reset_count(now);
-        }
 
         // Both peers derive a session's lifetime from the same handshake, so the remote
         // discards it at the same moment we do. A session that carried data was due a
@@ -457,7 +475,7 @@ impl Tunnel {
                     tracing::debug!("KEEPALIVE(KEEPALIVE_TIMEOUT)");
                     // Consume the deadline now; the send below may fail and nothing else
                     // would clear it.
-                    self.timers.last_data_received_without_reply = None;
+                    self.timers.consume_passive_keepalive();
                     keepalive_required = true;
                 }
 
@@ -468,7 +486,7 @@ impl Tunnel {
                     .is_some_and(|deadline| now >= deadline)
                 {
                     tracing::debug!("KEEPALIVE(PERSISTENT_KEEPALIVE)");
-                    self.timer_tick(TimePersistentKeepalive, now);
+                    self.timers.tick(TimePersistentKeepalive, now);
                     keepalive_required = true;
                 }
             }
@@ -477,11 +495,7 @@ impl Tunnel {
         if handshake_initiation_required {
             let jitter = self.rng.random_range(Duration::ZERO..=MAX_JITTER);
 
-            let existing = self.timers.send_handshake_at.replace(now + jitter);
-            debug_assert!(
-                existing.is_none(),
-                "Should never override existing handshake"
-            );
+            self.timers.schedule_handshake(now + jitter);
 
             tracing::debug!(?jitter, "Scheduling new handshake");
 
@@ -515,7 +529,7 @@ impl Tunnel {
 
     fn next_timer_update_internal(&self) -> Option<(Instant, &'static str)> {
         // Mimic `update_timers`: if we have a handshake scheduled, no other timer matters.
-        if let Some(scheduled_handshake) = self.timers.send_handshake_at {
+        if let Some(scheduled_handshake) = self.timers.scheduled_handshake() {
             return Some((scheduled_handshake, "scheduled handshake"));
         }
 

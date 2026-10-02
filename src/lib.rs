@@ -252,7 +252,7 @@ impl Tunnel {
             ),
             sessions: Default::default(),
             current: Default::default(),
-            timers: Timers::new(persistent_keepalive, rate_limiter.is_none(), now),
+            timers: Timers::new(persistent_keepalive, now),
 
             rate_limiter: rate_limiter.unwrap_or_else(|| {
                 Arc::new(RateLimiter::new(
@@ -308,8 +308,8 @@ impl Tunnel {
             .sending_session(now)
             .ok_or(Error::NoCurrentSession)?
             .prepare_packet_data();
-        self.timer_tick(TimerName::TimeLastPacketSent, now);
-        self.timer_tick(TimerName::TimeLastDataPacketSent, now);
+        self.timers.tick(TimerName::TimeLastPacketSent, now);
+        self.timers.tick(TimerName::TimeLastDataPacketSent, now);
 
         Ok(pending)
     }
@@ -328,7 +328,7 @@ impl Tunnel {
             .ok_or(Error::NoCurrentSession)?
             .prepare_packet_data()
             .encrypt_payload(&[], &mut message)?;
-        self.timer_tick(TimerName::TimeLastPacketSent, now);
+        self.timers.tick(TimerName::TimeLastPacketSent, now);
 
         Ok(KeepaliveMessage(message))
     }
@@ -394,12 +394,12 @@ impl Tunnel {
         let len = session.finish_receive_packet_data(counter, plaintext_len)?;
 
         self.set_current_session(remote_idx);
-        self.timer_tick(TimerName::TimeLastPacketReceived, now);
+        self.timers.tick(TimerName::TimeLastPacketReceived, now);
 
         if len == 0 {
             return Ok(Committed::Keepalive);
         }
-        self.timer_tick(TimerName::TimeLastDataPacketReceived, now);
+        self.timers.tick(TimerName::TimeLastDataPacketReceived, now);
 
         Ok(Committed::Data { buffer, len })
     }
@@ -421,9 +421,9 @@ impl Tunnel {
         let local_idx = session.local_index();
         self.sessions[local_idx] = Some(session);
 
-        self.timer_tick(TimerName::TimeLastPacketReceived, now);
-        self.timer_tick(TimerName::TimeLastPacketSent, now);
-        self.timer_tick_session_established(false, now); // New session established, we are not the initiator
+        self.timers.tick(TimerName::TimeLastPacketReceived, now);
+        self.timers.tick(TimerName::TimeLastPacketSent, now);
+        self.timers.session_established(false, now); // New session established, we are not the initiator
 
         tracing::debug!(%local_idx, %remote_idx, "Sending handshake_response");
 
@@ -449,8 +449,8 @@ impl Tunnel {
         let local_idx = session.local_index();
         self.sessions[local_idx] = Some(session);
 
-        self.timer_tick(TimerName::TimeLastPacketReceived, now);
-        self.timer_tick_session_established(true, now); // New session established, we are the initiator
+        self.timers.tick(TimerName::TimeLastPacketReceived, now);
+        self.timers.session_established(true, now); // New session established, we are the initiator
         self.set_current_session(local_idx);
 
         // The keepalive confirms the session to the responder.
@@ -467,7 +467,7 @@ impl Tunnel {
         tracing::debug!(%local_idx, "Received cookie_reply");
 
         self.handshake.receive_cookie_reply(p, now)?;
-        self.timer_tick(TimerName::TimeLastPacketReceived, now);
+        self.timers.tick(TimerName::TimeLastPacketReceived, now);
 
         tracing::debug!(%local_idx, "Did set cookie");
 
@@ -535,9 +535,9 @@ impl Tunnel {
         tracing::debug!(%local_idx, "Sending handshake_initiation");
 
         if starting_new_handshake {
-            self.timer_tick(TimerName::TimeLastHandshakeStarted, now);
+            self.timers.tick(TimerName::TimeLastHandshakeStarted, now);
         }
-        self.timer_tick(TimerName::TimeLastPacketSent, now);
+        self.timers.tick(TimerName::TimeLastPacketSent, now);
 
         Some(HandshakeInitiationMessage(packet))
     }
