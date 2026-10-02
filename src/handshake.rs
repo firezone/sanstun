@@ -464,13 +464,12 @@ impl Handshake {
         self.cookies.write_cookie = None;
     }
 
-    pub(super) fn receive_handshake_initialization<'a>(
+    pub(super) fn receive_handshake_initialization(
         &mut self,
         packet: HandshakeInit,
-        dst: &'a mut [u8],
         rng: &mut StdRng,
         now: Instant,
-    ) -> Result<(&'a mut [u8], Session), Error> {
+    ) -> Result<([u8; super::HANDSHAKE_RESP_SZ], Session), Error> {
         // initiator.chaining_key = HASH(CONSTRUCTION)
         let mut chaining_key = INITIAL_CHAIN_KEY;
         // initiator.hash = HASH(HASH(initiator.chaining_key || IDENTIFIER) || responder.static_public)
@@ -541,15 +540,14 @@ impl Handshake {
         // initiator.hash = HASH(initiator.hash || msg.encrypted_timestamp)
         hash = b2s_hash(&hash, packet.encrypted_timestamp);
 
-        self.format_handshake_response(
+        Ok(self.format_handshake_response(
             hash,
             chaining_key,
             peer_ephemeral_public,
             peer_index,
-            dst,
             rng,
             now,
-        )
+        ))
     }
 
     pub(super) fn receive_handshake_response(
@@ -672,7 +670,7 @@ impl Handshake {
     }
 
     // Compute and append mac1 and mac2 to a handshake message
-    fn append_mac1_and_mac2<'a>(&mut self, local_index: Index, dst: &'a mut [u8]) -> &'a mut [u8] {
+    fn append_mac1_and_mac2(&mut self, local_index: Index, dst: &mut [u8]) {
         let mac1_off = dst.len() - 32;
         let mac2_off = dst.len() - 16;
 
@@ -693,22 +691,14 @@ impl Handshake {
 
         self.cookies.index = local_index;
         self.cookies.last_mac1 = Some(msg_mac1);
-
-        dst
     }
 
-    pub(super) fn format_handshake_initiation<'a>(
+    pub(super) fn format_handshake_initiation(
         &mut self,
-        dst: &'a mut [u8],
         rng: &mut StdRng,
         now: Instant,
-    ) -> Result<(&'a mut [u8], Index), Error> {
-        let buf_len = dst.len();
-        if buf_len < super::HANDSHAKE_INIT_SZ {
-            tracing::warn!(%buf_len, msg_len = %super::HANDSHAKE_INIT_SZ, "Destination buffer too small for handshake init message");
-
-            return Err(Error::DestinationBufferTooSmall);
-        }
+    ) -> ([u8; super::HANDSHAKE_INIT_SZ], Index) {
+        let mut dst = [0u8; super::HANDSHAKE_INIT_SZ];
 
         let (message_type, rest) = dst.split_at_mut(4);
         let (sender_index, rest) = rest.split_at_mut(4);
@@ -777,28 +767,21 @@ impl Handshake {
             }),
         );
 
-        let packet = self.append_mac1_and_mac2(local_index, &mut dst[..super::HANDSHAKE_INIT_SZ]);
+        self.append_mac1_and_mac2(local_index, &mut dst);
 
-        Ok((packet, local_index))
+        (dst, local_index)
     }
 
-    #[expect(clippy::too_many_arguments, reason = "We don't care that much.")]
-    fn format_handshake_response<'a>(
+    fn format_handshake_response(
         &mut self,
         mut hash: [u8; KEY_LEN],
         mut chaining_key: [u8; KEY_LEN],
         peer_ephemeral_public: PublicKey,
         peer_index: u32,
-        dst: &'a mut [u8],
         rng: &mut StdRng,
         now: Instant,
-    ) -> Result<(&'a mut [u8], Session), Error> {
-        let buf_len = dst.len();
-        if dst.len() < super::HANDSHAKE_RESP_SZ {
-            tracing::warn!(%buf_len, msg_len = %super::HANDSHAKE_RESP_SZ, "Destination buffer too small for handshake init message");
-
-            return Err(Error::DestinationBufferTooSmall);
-        }
+    ) -> ([u8; super::HANDSHAKE_RESP_SZ], Session) {
+        let mut dst = [0u8; super::HANDSHAKE_RESP_SZ];
 
         let (message_type, rest) = dst.split_at_mut(4);
         let (sender_index, rest) = rest.split_at_mut(4);
@@ -863,12 +846,12 @@ impl Handshake {
         let temp2 = b2s_hmac(&temp1, &[0x01]);
         let temp3 = b2s_hmac2(&temp1, &temp2, &[0x02]);
 
-        let dst = self.append_mac1_and_mac2(local_index, &mut dst[..super::HANDSHAKE_RESP_SZ]);
+        self.append_mac1_and_mac2(local_index, &mut dst);
 
-        Ok((
+        (
             dst,
             Session::new(local_index, Index::from_peer(peer_index), temp2, temp3, now),
-        ))
+        )
     }
 }
 

@@ -422,8 +422,7 @@ impl Sim {
 
     fn poll(&mut self, peer: Peer) {
         let now = self.now;
-        let mut buf = vec![0u8; BUF];
-        let outgoing = match self.node_mut(peer).tunn.update_timers(&mut buf, now) {
+        let outgoing = match self.node_mut(peer).tunn.update_timers(now) {
             Ok(None) => None,
             Err(e) => {
                 self.node_mut(peer).errors.push(e);
@@ -491,14 +490,13 @@ impl Sim {
         let mut outs = Vec::new();
 
         let mut buf = vec![0u8; BUF];
-        let result = Packet::parse(datagram)
-            .and_then(|packet| node.tunn.decapsulate(src, packet, &mut buf, now));
+        let result =
+            Packet::parse(datagram).and_then(|packet| node.tunn.decapsulate(src, packet, now));
         match result {
             Ok(Decapsulated::CookieReceived) => {}
             Err(e) => outs.push(Out::Err(e)),
-            Ok(Decapsulated::HandshakeResponse(packet) | Decapsulated::CookieReply(packet)) => {
-                outs.push(Out::Net(packet.to_vec()));
-            }
+            Ok(Decapsulated::HandshakeResponse(packet)) => outs.push(Out::Net(packet.to_vec())),
+            Ok(Decapsulated::CookieReply(packet)) => outs.push(Out::Net(packet.to_vec())),
             Ok(Decapsulated::Data(pending)) => {
                 let decrypted = pending.decrypt(datagram, vec![0u8; BUF]);
                 match node.tunn.commit_decrypted(decrypted, now) {
@@ -538,15 +536,10 @@ impl Sim {
 
     fn handshake_initiation(&mut self, peer: Peer, force: bool) -> Option<Vec<u8>> {
         let now = self.now;
-        let mut buf = vec![0u8; BUF];
-        match self
-            .node_mut(peer)
+        self.node_mut(peer)
             .tunn
-            .format_handshake_initiation(&mut buf, force, now)
-        {
-            Ok(packet) => packet.map(|p| p.to_vec()),
-            Err(e) => panic!("unexpected error from format_handshake_initiation: {e:?}"),
-        }
+            .format_handshake_initiation(force, now)
+            .map(|p| p.to_vec())
     }
 
     /// Complete a full handshake initiated by `A`.

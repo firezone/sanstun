@@ -21,26 +21,24 @@ fn scheduled_handshake_honours_next_timer_update() {
 
     let deadline = sim.now + KEEPALIVE_TIMEOUT + REKEY_TIMEOUT;
     let tunn = sim.tunn_mut(A);
-    let mut buf = [0u8; 256];
 
     // Nothing is due before the deadline.
     assert!(matches!(
-        tunn.update_timers(&mut buf, deadline - Duration::from_millis(1)),
+        tunn.update_timers(deadline - Duration::from_millis(1)),
         Ok(None)
     ));
 
     // At the deadline, the handshake is only *scheduled* ...
-    assert!(matches!(tunn.update_timers(&mut buf, deadline), Ok(None)));
+    assert!(matches!(tunn.update_timers(deadline), Ok(None)));
     let (wake, _reason) = tunn.next_timer_update().expect("a scheduled handshake");
     assert!(wake >= deadline && wake <= deadline + MAX_JITTER);
 
     // ... and emitted exactly once when the announced instant is polled.
-    let Ok(Some(TimerAction::HandshakeInitiation(packet))) = tunn.update_timers(&mut buf, wake)
-    else {
+    let Ok(Some(TimerAction::HandshakeInitiation(packet))) = tunn.update_timers(wake) else {
         panic!("expected the scheduled handshake initiation");
     };
     assert_eq!(classify(&packet), Kind::Init);
-    assert!(matches!(tunn.update_timers(&mut buf, wake), Ok(None)));
+    assert!(matches!(tunn.update_timers(wake), Ok(None)));
 }
 
 #[test]
@@ -58,11 +56,11 @@ fn next_timer_update_predicts_the_passive_keepalive() {
 
     let mut buf = [0u8; 256];
     assert!(matches!(
-        tunn.update_timers(&mut buf, wake - Duration::from_millis(1)),
+        tunn.update_timers(wake - Duration::from_millis(1)),
         Ok(None)
     ));
     assert!(matches!(
-        tunn.update_timers(&mut buf, wake),
+        tunn.update_timers(wake),
         Ok(Some(TimerAction::KeepaliveDue))
     ));
     let packet = tunn
@@ -112,8 +110,7 @@ fn a_single_late_poll_observes_the_expiry() {
     let mut sim = Sim::connected();
 
     let late = sim.now + 4 * REJECT_AFTER_TIME;
-    let mut buf = [0u8; 256];
-    let result = sim.tunn_mut(A).update_timers(&mut buf, late);
+    let result = sim.tunn_mut(A).update_timers(late);
 
     assert!(matches!(result, Err(Error::ConnectionExpired)));
     assert!(sim.tunn(A).is_expired());
@@ -145,9 +142,8 @@ fn different_seeds_produce_different_jitter() {
 
         // Once REKEY_TIMEOUT passes, a retry is scheduled `jitter` in the future.
         let retry_due = sim.now + REKEY_TIMEOUT;
-        let mut buf = [0u8; 256];
         let tunn = sim.tunn_mut(A);
-        assert!(matches!(tunn.update_timers(&mut buf, retry_due), Ok(None)));
+        assert!(matches!(tunn.update_timers(retry_due), Ok(None)));
 
         tunn.next_timer_update()
             .expect("a scheduled retry")
@@ -184,20 +180,19 @@ fn encapsulate_data_at_has_no_side_effects_without_a_session() {
 #[test]
 fn the_announced_session_expiry_is_actionable() {
     let mut sim = Sim::connected();
-    let mut buf = [0u8; 256];
 
     // Drain the earlier timers so the session expiry is the next deadline.
     sim.advance(REJECT_AFTER_TIME - secs(1));
     let now = sim.now;
     let tunn = sim.tunn_mut(A);
-    let _ = tunn.update_timers(&mut buf, now);
+    let _ = tunn.update_timers(now);
 
     let Some((wake, "next expired session")) = tunn.next_timer_update() else {
         panic!("expected the session expiry to be the next deadline");
     };
 
     // Poll exactly when told to, then ask again.
-    let _ = tunn.update_timers(&mut buf, wake);
+    let _ = tunn.update_timers(wake);
 
     assert_ne!(
         tunn.next_timer_update().map(|(instant, _)| instant),
@@ -242,16 +237,13 @@ fn identical_seeds_produce_identical_handshakes() {
             unix,
         );
 
-        let mut init = [0u8; 256];
         let init = a
-            .format_handshake_initiation(&mut init, false, now)
-            .unwrap()
+            .format_handshake_initiation(false, now)
             .expect("a handshake initiation")
             .to_vec();
 
-        let mut response = [0u8; 256];
         let Decapsulated::HandshakeResponse(response) = b
-            .decapsulate(None, Packet::parse(&init).unwrap(), &mut response, now)
+            .decapsulate(None, Packet::parse(&init).unwrap(), now)
             .unwrap()
         else {
             panic!("expected a handshake response");

@@ -311,20 +311,16 @@ impl Tunnel {
         Some((time_sent + self.timers.rekey_timeout, local_index))
     }
 
-    pub fn update_timers<'a>(
-        &mut self,
-        dst: &'a mut [u8],
-        now: Instant,
-    ) -> Result<Option<TimerAction<'a>>, Error> {
+    pub fn update_timers(&mut self, now: Instant) -> Result<Option<TimerAction>, Error> {
         self.timers[TimeLastUpdate] = now;
 
         if let Some(scheduled_handshake_at) = self.timers.send_handshake_at {
             // If we have scheduled a handshake and the deadline expired, send it immediately.
             if now >= scheduled_handshake_at {
                 self.timers.send_handshake_at = None;
-                let initiation = self.format_handshake_initiation(dst, true, now)?;
-
-                return Ok(initiation.map(TimerAction::HandshakeInitiation));
+                return Ok(self
+                    .format_handshake_initiation(true, now)
+                    .map(TimerAction::HandshakeInitiation));
             }
 
             debug_assert!(
