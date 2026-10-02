@@ -34,7 +34,7 @@ fn chacha20poly1305_non_ring(key_bytes: &[u8], buf: &mut [u8]) {
     buf[n..].copy_from_slice(tag.as_ref());
 }
 
-pub fn bench_chacha20poly1305(c: &mut Criterion) {
+fn bench_chacha20poly1305(c: &mut Criterion) {
     let mut group = c.benchmark_group("chacha20poly1305");
 
     group.sample_size(1000);
@@ -77,3 +77,6 @@ pub fn bench_chacha20poly1305(c: &mut Criterion) {
 
     group.finish();
 }
+
+criterion::criterion_group!(benches, bench_chacha20poly1305);
+criterion::criterion_main!(benches);

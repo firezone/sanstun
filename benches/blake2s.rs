@@ -4,7 +4,7 @@ use criterion::{BenchmarkId, Criterion, Throughput};
 use ring::rand::{SecureRandom, SystemRandom};
 use typenum::U16;
 
-pub fn bench_blake2s_hash(c: &mut Criterion) {
+fn bench_blake2s_hash(c: &mut Criterion) {
     let mut group = c.benchmark_group("blake2s_hash");
 
     group.sample_size(1000);
@@ -26,7 +26,7 @@ pub fn bench_blake2s_hash(c: &mut Criterion) {
     group.finish();
 }
 
-pub fn bench_blake2s_hmac(c: &mut Criterion) {
+fn bench_blake2s_hmac(c: &mut Criterion) {
     let mut group = c.benchmark_group("blake2s_hmac");
 
     group.sample_size(1000);
@@ -59,7 +59,7 @@ pub fn bench_blake2s_hmac(c: &mut Criterion) {
     group.finish();
 }
 
-pub fn bench_blake2s_keyed(c: &mut Criterion) {
+fn bench_blake2s_keyed(c: &mut Criterion) {
     let mut group = c.benchmark_group("blake2s_keyed_mac");
 
     group.sample_size(1000);
@@ -89,3 +89,11 @@ pub fn bench_blake2s_keyed(c: &mut Criterion) {
 
     group.finish();
 }
+
+criterion::criterion_group!(
+    benches,
+    bench_blake2s_hash,
+    bench_blake2s_hmac,
+    bench_blake2s_keyed
+);
+criterion::criterion_main!(benches);
