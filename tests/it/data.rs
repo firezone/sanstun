@@ -4,7 +4,7 @@
 use crate::harness::{
     DATA_OVERHEAD, KEEPALIVE_SIZE, Outcome as _, Peer::A, Peer::B, Sim, ipv4_packet, ipv6_packet,
 };
-use sanstun::{Error, Event, Keepalive};
+use sanstun::{Committed, Error, Event, Keepalive};
 
 #[test]
 fn ipv4_packets_round_trip() {
@@ -23,14 +23,35 @@ fn ipv6_packets_round_trip() {
     assert_eq!(sim.take_inbox(B), [ip_packet]);
 }
 
+// §5.4.6: the plaintext is zero-padded to a multiple of 16 bytes. The padding
+// is returned with the payload; the caller strips it when parsing the IP packet.
 #[test]
-fn data_messages_have_32_bytes_of_overhead() {
+fn data_messages_are_zero_padded_to_a_multiple_of_16_bytes() {
     let mut sim = Sim::connected();
-    let ip_packet = ipv4_packet(b"some payload");
 
-    let datagram = sim.encapsulate(A, &ip_packet);
+    for len in [1, 15, 16, 17, 100] {
+        let plaintext = vec![0xff; len];
+        let datagram = sim.encapsulate(A, &plaintext);
+        let now = sim.now;
+        let packet = sim.receive(B, &datagram);
+        let Ok(Some(pending)) = sim.tunn_mut(B).decapsulate(packet, now) else {
+            panic!("expected a data message");
+        };
+        let decrypted = pending.decrypt(&datagram, vec![0u8; 4096]);
+        let Ok(Committed::Data {
+            buffer,
+            len: decrypted_len,
+        }) = sim.tunn_mut(B).commit_decrypted(decrypted, now)
+        else {
+            panic!("expected a data payload");
+        };
 
-    assert_eq!(datagram.len(), ip_packet.len() + DATA_OVERHEAD);
+        let padded_len = 16 * len.div_ceil(16);
+        let mut padded = plaintext;
+        padded.resize(padded_len, 0);
+        assert_eq!(datagram.len(), padded_len + DATA_OVERHEAD);
+        assert_eq!(buffer[..decrypted_len], padded);
+    }
 }
 
 // §6.1: a keepalive is a data message with a zero-length payload; it proves
@@ -113,19 +134,4 @@ fn data_with_wrong_receiver_index_is_rejected() {
     datagram[4..8].copy_from_slice(&(index + 6).to_le_bytes());
     let error = sim.deliver(B, &datagram).expect_err();
     assert!(matches!(error, Error::NoCurrentSession));
-}
-
-// §5.4.6: encrypted packets may be padded; the caller parses the IP packet and
-// truncates the padding, so the whole decrypted payload is returned.
-#[test]
-fn decrypted_payload_is_returned_with_its_padding() {
-    let mut sim = Sim::connected();
-
-    let mut padded = ipv4_packet(b"payload");
-    padded.extend_from_slice(&[0u8; 13]);
-    let datagram = sim.encapsulate(A, &padded);
-
-    let received = sim.deliver(B, &datagram).expect_one_ip();
-
-    assert_eq!(received, padded);
 }
