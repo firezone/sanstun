@@ -206,7 +206,7 @@ impl Tunnel {
             Packet::HandshakeInit(p) => self.handle_handshake_init(p, now)?,
             Packet::HandshakeResponse(p) => self.handle_handshake_response(p, now)?,
             Packet::PacketCookieReply(p) => self.handle_cookie_reply(p, now)?,
-            Packet::PacketData(p) => return self.handle_data(p).map(Some),
+            Packet::PacketData(p) => return self.handle_data(p, now).map(Some),
         }
 
         Ok(None)
@@ -237,6 +237,10 @@ impl Tunnel {
             tracing::trace!(%remote_idx, "Session was replaced during decryption");
             return Err(Error::NoCurrentSession);
         };
+        if session.expired_at(now) {
+            tracing::trace!(%remote_idx, "Session expired during decryption");
+            return Err(Error::NoCurrentSession);
+        }
         let len = session.finish_receive_packet_data(counter, plaintext_len)?;
 
         self.sessions.set_current(remote_idx);
@@ -313,13 +317,17 @@ impl Tunnel {
         Ok(())
     }
 
-    fn handle_data(&self, packet: PacketData) -> Result<PendingDecapsulate, Error> {
+    fn handle_data(&self, packet: PacketData, now: Instant) -> Result<PendingDecapsulate, Error> {
         let remote_idx = Index::from_peer(packet.receiver_idx);
 
         let session = self.sessions.in_slot_of(remote_idx).ok_or_else(|| {
             tracing::trace!(%remote_idx, "No current session available");
             Error::NoCurrentSession
         })?;
+        if session.expired_at(now) {
+            tracing::trace!(%remote_idx, "Session expired");
+            return Err(Error::NoCurrentSession);
+        }
 
         session.prepare_receive_packet_data(packet)
     }
