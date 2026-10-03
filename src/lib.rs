@@ -82,8 +82,6 @@ impl Tunnel {
     /// Create a new tunnel using own private key and the peer public key
     ///
     /// `rng_seed` must come from a cryptographically secure source because key material is derived from it.
-    ///
-    /// Returns `Err(Error::LowOrderPoint)` if `peer_static_public` is a low-order point.
     #[expect(clippy::too_many_arguments, reason = "We don't care that much.")]
     pub fn new(
         static_private: StaticSecret,
@@ -95,10 +93,10 @@ impl Tunnel {
         now: Instant,
         unix_instant: Instant,
         unix: Duration,
-    ) -> Result<Self, Error> {
+    ) -> Self {
         let static_public = PublicKey::from(&static_private);
 
-        Ok(Tunnel {
+        Tunnel {
             handshake: Handshake::new(
                 static_private,
                 static_public,
@@ -107,12 +105,12 @@ impl Tunnel {
                 preshared_key,
                 unix_instant,
                 unix,
-            )?,
+            ),
             sessions: Sessions::default(),
             timers: Timers::new(persistent_keepalive, now),
             rng: StdRng::from_seed(rng_seed),
             events: VecDeque::new(),
-        })
+        }
     }
 
     pub fn remote_static_public(&self) -> PublicKey {
@@ -337,14 +335,15 @@ impl Tunnel {
     /// Formats a new handshake initiation message. If force_resend is true will send
     /// a new handshake, even if a handshake is already in progress (for example when a handshake times out)
     ///
-    /// Returns `None` if no handshake initiation needs to be sent.
+    /// Returns `None` if no handshake initiation needs to be sent and `Err(Error::LowOrderPoint)` if
+    /// the peer's static public key is a low-order point.
     pub fn format_handshake_initiation(
         &mut self,
         force_resend: bool,
         now: Instant,
-    ) -> Option<HandshakeInitiationMessage> {
+    ) -> Result<Option<HandshakeInitiationMessage>, Error> {
         if self.handshake.is_in_progress() && !force_resend {
-            return None;
+            return Ok(None);
         }
 
         if self.handshake.is_expired() {
@@ -355,7 +354,7 @@ impl Tunnel {
 
         let (packet, local_idx) = self
             .handshake
-            .format_handshake_initiation(&mut self.rng, now);
+            .format_handshake_initiation(&mut self.rng, now)?;
 
         tracing::debug!(%local_idx, "Sending handshake_initiation");
 
@@ -364,6 +363,6 @@ impl Tunnel {
         }
         self.timers.tick(TimerName::TimeLastPacketSent, now);
 
-        Some(HandshakeInitiationMessage(packet))
+        Ok(Some(HandshakeInitiationMessage(packet)))
     }
 }

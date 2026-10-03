@@ -160,7 +160,7 @@ fn malformed_datagrams_are_rejected() {
 // A low-order peer static key makes DH(static, static) all zeros, which
 // WireGuard rejects so that a peer without a PSK cannot be impersonated.
 #[test]
-fn tunnel_rejects_low_order_peer_static_key() {
+fn handshake_with_low_order_peer_static_key_fails() {
     let p_minus_1 = {
         let mut p = [0xff; 32];
         p[0] = 0xec;
@@ -189,7 +189,7 @@ fn tunnel_rejects_low_order_peer_static_key() {
     let now = Instant::now();
 
     for point in low_order_points {
-        let tunnel = Tunnel::new(
+        let mut tunnel = Tunnel::new(
             StaticSecret::from([1; 32]),
             PublicKey::from(point),
             None,
@@ -201,6 +201,11 @@ fn tunnel_rejects_low_order_peer_static_key() {
             Duration::from_secs(1_700_000_000),
         );
 
-        assert!(matches!(tunnel, Err(Error::LowOrderPoint)), "{point:x?}");
+        let initiation = tunnel.format_handshake_initiation(false, now);
+
+        assert!(
+            matches!(initiation, Err(Error::LowOrderPoint)),
+            "{point:x?}"
+        );
     }
 }

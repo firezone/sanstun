@@ -1,5 +1,9 @@
 use criterion::{BatchSize, Criterion};
 
+#[expect(
+    clippy::disallowed_methods,
+    reason = "Benchmarks the raw X25519 operation."
+)]
 fn bench_x25519_shared_key(c: &mut Criterion) {
     let mut group = c.benchmark_group("x25519_shared_key");
 

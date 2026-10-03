@@ -293,9 +293,12 @@ impl Tunnel {
         self.timers.tick(TimeLastUpdate, now);
 
         if self.timers.take_due_handshake(now).is_some() {
-            if let Some(initiation) = self.format_handshake_initiation(true, now) {
-                self.events
-                    .push_back(Event::HandshakeInitiation(initiation));
+            match self.format_handshake_initiation(true, now) {
+                Ok(Some(initiation)) => self
+                    .events
+                    .push_back(Event::HandshakeInitiation(initiation)),
+                Ok(None) => {}
+                Err(e) => tracing::debug!("Failed to format handshake initiation: {e}"),
             }
             return;
         }

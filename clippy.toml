@@ -1,0 +1,4 @@
+disallowed-methods = [
+    { path = "x25519_dalek::StaticSecret::diffie_hellman", reason = "Use `crypto::dh`, which rejects low-order public keys." },
+    { path = "x25519_dalek::ReusableSecret::diffie_hellman", reason = "Use `crypto::dh`, which rejects low-order public keys." },
+]
