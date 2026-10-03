@@ -298,7 +298,10 @@ impl Tunnel {
                     .events
                     .push_back(Event::HandshakeInitiation(initiation)),
                 Ok(None) => {}
-                Err(e) => tracing::debug!("Failed to format handshake initiation: {e}"),
+                Err(e) => {
+                    tracing::debug!("CONNECTION_EXPIRED({e})");
+                    self.expire(now);
+                }
             }
             return;
         }
