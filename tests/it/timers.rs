@@ -244,6 +244,19 @@ fn responder_discards_the_session_after_reject_after_time() {
     );
 }
 
+/// A session past `REJECT_AFTER_TIME` rejects data even before
+/// `handle_timeout` gets to discard it.
+#[test]
+fn data_for_an_expired_session_is_rejected_before_timers_run() {
+    let mut sim = Sim::connected();
+    let datagram = sim.encapsulate(A, &ipv4_packet(b"too late"));
+
+    sim.suspend(REJECT_AFTER_TIME);
+
+    let error = sim.deliver(B, &datagram).expect_err();
+    assert!(matches!(error, Error::NoCurrentSession));
+}
+
 /// When the expired session was initiated by us, sanstun starts a new
 /// handshake right away instead of waiting for the next outgoing packet.
 #[test]

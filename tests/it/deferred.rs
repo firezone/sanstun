@@ -3,8 +3,8 @@
 //! order and on any thread.
 
 use crate::harness::{
-    BUF, DATA_OVERHEAD, Outcome as _, Peer::A, Peer::B, REPLAY_WINDOW, Sim, counter, ipv4_packet,
-    receiver_index,
+    BUF, DATA_OVERHEAD, Outcome as _, Peer::A, Peer::B, REJECT_AFTER_TIME, REPLAY_WINDOW, Sim,
+    counter, ipv4_packet, receiver_index,
 };
 use sanstun::{Committed, Decrypted, Error, PendingDecapsulate, PendingEncapsulate};
 use std::time::Duration;
@@ -169,6 +169,23 @@ fn decrypted_message_is_not_committed_to_a_later_session_with_the_same_index() {
         Err(Error::NoCurrentSession)
     ));
     assert_eq!(sim.deliver(B, &fresh).expect_one_ip(), ip_packet);
+}
+
+#[test]
+fn decryption_straddling_the_session_expiry_is_rejected() {
+    let mut sim = Sim::connected();
+    let datagram = sim.encapsulate(A, &ipv4_packet(b"too late"));
+
+    let decrypted = sim
+        .prepare_decrypt(B, &datagram)
+        .unwrap()
+        .decrypt(&datagram, vec![0u8; BUF]);
+    sim.suspend(REJECT_AFTER_TIME);
+
+    assert!(matches!(
+        sim.commit(B, decrypted),
+        Err(Error::NoCurrentSession)
+    ));
 }
 
 #[test]
