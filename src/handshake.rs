@@ -1,8 +1,7 @@
 use super::index::Index;
 use super::timers::COOKIE_EXPIRATION_TIME;
 use crate::crypto::{
-    SharedKey, aead_chacha20_open, aead_chacha20_seal, b2s_hash, b2s_hmac, b2s_hmac2,
-    b2s_keyed_mac_16, dh,
+    aead_chacha20_open, aead_chacha20_seal, b2s_hash, b2s_hmac, b2s_hmac2, b2s_keyed_mac_16, dh,
 };
 use crate::errors::Error;
 use crate::message::{
@@ -44,10 +43,6 @@ struct NoiseParams {
     static_private: StaticSecret,
     /// Static public key of the other party
     peer_static_public: PublicKey,
-    /// A shared key = DH(static_private, peer_static_public)
-    ///
-    /// `None` if `peer_static_public` is a low-order point.
-    static_shared: Option<SharedKey>,
     /// A pre-computation of HASH("mac1----", peer_static_public) for this peer
     sending_mac1_key: [u8; KEY_LEN],
     /// A preshared key.
@@ -62,7 +57,6 @@ impl std::fmt::Debug for NoiseParams {
             .field("static_public", &self.static_public)
             .field("static_private", &"<redacted>")
             .field("peer_static_public", &self.peer_static_public)
-            .field("static_shared", &"<redacted>")
             .field("sending_mac1_key", &self.sending_mac1_key)
             .field("preshared_key", &"<redacted>")
             .finish()
@@ -201,15 +195,12 @@ impl NoiseParams {
         peer_static_public: PublicKey,
         preshared_key: Option<StaticSecret>,
     ) -> NoiseParams {
-        let static_shared = dh(&static_private, &peer_static_public).ok();
-
         let initial_sending_mac_key = b2s_hash(LABEL_MAC1, peer_static_public.as_bytes());
 
         NoiseParams {
             static_public,
             static_private,
             peer_static_public,
-            static_shared,
             sending_mac1_key: initial_sending_mac_key,
             preshared_key: preshared_key.unwrap_or_else(|| StaticSecret::from([0u8; 32])),
         }
@@ -311,11 +302,7 @@ impl Handshake {
         }
 
         // temp = HMAC(initiator.chaining_key, DH(initiator.static_private, responder.static_public))
-        let static_shared = self
-            .params
-            .static_shared
-            .as_ref()
-            .ok_or(Error::LowOrderPoint)?;
+        let static_shared = dh(&self.params.static_private, &self.params.peer_static_public)?;
         let temp = b2s_hmac(&chaining_key, static_shared.as_bytes());
         // initiator.chaining_key = HMAC(temp, 0x1)
         chaining_key = b2s_hmac(&temp, &[0x01]);
@@ -533,11 +520,7 @@ impl Handshake {
         // initiator.hash = HASH(initiator.hash || msg.encrypted_static)
         hash = b2s_hash(&hash, encrypted_static);
         // temp = HMAC(initiator.chaining_key, DH(initiator.static_private, responder.static_public))
-        let static_shared = self
-            .params
-            .static_shared
-            .as_ref()
-            .ok_or(Error::LowOrderPoint)?;
+        let static_shared = dh(&self.params.static_private, &self.params.peer_static_public)?;
         let temp = b2s_hmac(&chaining_key, static_shared.as_bytes());
         // initiator.chaining_key = HMAC(temp, 0x1)
         chaining_key = b2s_hmac(&temp, &[0x01]);
