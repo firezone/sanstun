@@ -1,9 +1,11 @@
 use crate::errors::Error;
+use crate::timers::REJECT_AFTER_MESSAGES;
 
 // Receiving buffer constants
 const WORD_SIZE: u64 = 64;
 const N_WORDS: u64 = 128; // Suffice to reorder 128*16 = 8192 packets; can be increased at will
 const N_BITS: u64 = WORD_SIZE * N_WORDS;
+const _: () = assert!(REJECT_AFTER_MESSAGES <= u64::MAX - N_BITS);
 
 #[derive(Debug, Clone)]
 pub(crate) struct ReceivingKeyCounterValidator {
@@ -59,6 +61,9 @@ impl ReceivingKeyCounterValidator {
     /// Returns true if the counter was not yet received, and is not too far back
     #[inline(always)]
     pub(crate) fn will_accept(&self, counter: u64) -> Result<(), Error> {
+        if counter >= REJECT_AFTER_MESSAGES {
+            return Err(Error::InvalidCounter);
+        }
         if counter >= self.next {
             // As long as the counter is growing no replay took place for sure
             return Ok(());
@@ -78,6 +83,9 @@ impl ReceivingKeyCounterValidator {
     /// decryption something changed)
     #[inline(always)]
     pub(crate) fn mark_did_receive(&mut self, counter: u64) -> Result<(), Error> {
+        if counter >= REJECT_AFTER_MESSAGES {
+            return Err(Error::InvalidCounter);
+        }
         if counter + N_BITS < self.next {
             // Drop if too far back
             return Err(Error::InvalidCounter);
@@ -124,5 +132,29 @@ impl ReceivingKeyCounterValidator {
         self.set_bit(counter);
         self.next = counter + 1;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counters_at_or_above_the_limit_are_rejected() {
+        let mut window = ReceivingKeyCounterValidator::default();
+
+        for counter in [REJECT_AFTER_MESSAGES, u64::MAX - N_BITS, u64::MAX] {
+            assert!(matches!(
+                window.will_accept(counter),
+                Err(Error::InvalidCounter)
+            ));
+            assert!(matches!(
+                window.mark_did_receive(counter),
+                Err(Error::InvalidCounter)
+            ));
+        }
+
+        assert_eq!(window.next, 0);
+        assert!(window.will_accept(0).is_ok());
     }
 }

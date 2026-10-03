@@ -183,10 +183,16 @@ impl Tunnel {
     /// The session that data messages are sent on, if one is usable.
     fn sending_session(&mut self, now: Instant) -> Option<&mut session::Session> {
         let is_responder = self.timers.is_responder();
+        let session = self.sessions.current_mut()?;
 
-        self.sessions
-            .current_mut()
-            .filter(|s| s.should_use_at(now) || is_responder)
+        if session.sending_counter_exhausted() {
+            return None;
+        }
+        if !session.should_use_at(now) && !is_responder {
+            return None;
+        }
+
+        Some(session)
     }
 
     /// Handles a message received from the network, as returned by [`Ingress::receive`].

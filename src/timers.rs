@@ -14,6 +14,10 @@ const REKEY_TIMEOUT: Duration = Duration::from_secs(5);
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const COOKIE_EXPIRATION_TIME: Duration = Duration::from_secs(120);
 const MAX_JITTER: Duration = Duration::from_millis(333);
+pub(crate) const REKEY_AFTER_MESSAGES: u64 = 1 << 60;
+/// Counters at or above this are neither sent nor accepted, so the replay window's arithmetic
+/// never overflows.
+pub(crate) const REJECT_AFTER_MESSAGES: u64 = u64::MAX - (1 << 13);
 
 /// Time-period after which a session should no longer be used for new packets.
 ///
@@ -391,6 +395,14 @@ impl Tunnel {
                 handshake_initiation_required = true;
             }
 
+            if self
+                .rekey_after_messages()
+                .is_some_and(|deadline| now >= deadline)
+            {
+                tracing::debug!("HANDSHAKE(REKEY_AFTER_MESSAGES)");
+                handshake_initiation_required = true;
+            }
+
             // After receiving a packet, if the receiver was the original initiator
             // of the handshake and if the current session key is REJECT_AFTER_TIME
             // - KEEPALIVE_TIMEOUT - REKEY_TIMEOUT ms old, we initiate a new
@@ -529,6 +541,10 @@ impl Tunnel {
                         .map(|instant| (instant, "rekey-after-time (on send)")),
                 )
                 .chain(
+                    self.rekey_after_messages()
+                        .map(|instant| (instant, "rekey-after-messages")),
+                )
+                .chain(
                     self.timers
                         .reject_after_time_on_receive()
                         .map(|instant| (instant, "reject-after-time (on receive)")),
@@ -546,6 +562,16 @@ impl Tunnel {
                 .chain(persistent_keepalive.map(|instant| (instant, "persistent keep-alive")))
                 .min_by_key(|(instant, _)| *instant)
         }
+    }
+
+    /// Either peer starts a new handshake once the current session has sent
+    /// `REKEY_AFTER_MESSAGES`; that became due with the last packet sent.
+    fn rekey_after_messages(&self) -> Option<Instant> {
+        self.sessions
+            .current()
+            .filter(|s| s.rekey_after_messages_reached())?;
+
+        Some(self.timers[TimeLastPacketSent])
     }
 
     fn expire(&mut self, now: Instant) {
