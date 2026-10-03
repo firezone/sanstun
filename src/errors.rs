@@ -14,6 +14,7 @@ pub enum Error {
     InvalidPacket,
     NoCurrentSession,
     EmptyPlaintext,
+    LowOrderPoint,
 }
 
 impl Display for Error {
@@ -55,6 +56,10 @@ impl Display for Error {
             Error::EmptyPlaintext => write!(
                 f,
                 "an empty data message is a keepalive; send it with `Tunnel::encapsulate_keepalive`"
+            ),
+            Error::LowOrderPoint => write!(
+                f,
+                "public key is a low-order point, so the X25519 result is all zeros"
             ),
         }
     }
