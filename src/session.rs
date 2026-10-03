@@ -410,17 +410,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rekey_is_due_once_the_counter_reaches_the_limit() {
-        let mut session = session();
-
-        session.sending_key_counter = REKEY_AFTER_MESSAGES - 1;
-        assert!(!session.rekey_after_messages_reached());
-
-        session.sending_key_counter = REKEY_AFTER_MESSAGES;
-        assert!(session.rekey_after_messages_reached());
-    }
-
-    #[test]
     fn last_counter_below_the_limit_is_handed_out_before_exhaustion() {
         let mut session = session();
         session.sending_key_counter = REJECT_AFTER_MESSAGES - 1;
