@@ -281,16 +281,6 @@ impl Tunnel {
         self.timers.clear(now);
     }
 
-    /// Either peer starts a new handshake once the current session has sent
-    /// `REKEY_AFTER_MESSAGES`; that became due with the last packet sent.
-    fn rekey_after_messages(&self) -> Option<Instant> {
-        self.sessions
-            .current()
-            .filter(|s| s.sent_messages() >= REKEY_AFTER_MESSAGES)?;
-
-        Some(self.timers[TimeLastPacketSent])
-    }
-
     /// The [`Instant`] at which we need to retransmit our handshake initiation,
     /// together with the local index of the in-flight handshake.
     ///
@@ -572,6 +562,16 @@ impl Tunnel {
                 .chain(persistent_keepalive.map(|instant| (instant, "persistent keep-alive")))
                 .min_by_key(|(instant, _)| *instant)
         }
+    }
+
+    /// Either peer starts a new handshake once the current session has sent
+    /// `REKEY_AFTER_MESSAGES`; that became due with the last packet sent.
+    fn rekey_after_messages(&self) -> Option<Instant> {
+        self.sessions
+            .current()
+            .filter(|s| s.sent_messages() >= REKEY_AFTER_MESSAGES)?;
+
+        Some(self.timers[TimeLastPacketSent])
     }
 
     fn expire(&mut self, now: Instant) {

@@ -368,6 +368,76 @@ mod tests {
     const BUF: usize = 256;
     const SRC_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 51820);
 
+    #[test]
+    fn responder_rekeys_after_messages() {
+        let mut now = Instant::now();
+        let (mut a, mut b) = connected(now);
+        set_sent_messages(&mut b.tunn, REKEY_AFTER_MESSAGES - 1);
+
+        assert_ne!(b.tunn.poll_timeout().unwrap().1, "rekey-after-messages");
+        let datagram = send(&mut b.tunn, now).unwrap();
+        receive(&mut a, &datagram, now).unwrap();
+        assert_eq!(
+            b.tunn.poll_timeout().unwrap(),
+            (now, "rekey-after-messages")
+        );
+
+        b.tunn.handle_timeout(now);
+        assert!(b.tunn.poll_event().is_none());
+        now += MAX_JITTER;
+        b.tunn.handle_timeout(now);
+        let Some(Event::HandshakeInitiation(init)) = b.tunn.poll_event() else {
+            panic!("expected a handshake initiation");
+        };
+
+        let response = expect_response(&mut a, &init, now);
+        assert!(decapsulate(&mut b, &response, now).unwrap().is_none());
+        let Some(Event::KeepaliveDue(_)) = b.tunn.poll_event() else {
+            panic!("expected a due keepalive");
+        };
+        let datagram = send(&mut b.tunn, now).unwrap();
+        assert_eq!(u64::from_le_bytes(datagram[8..16].try_into().unwrap()), 0);
+        receive(&mut a, &datagram, now).unwrap();
+    }
+
+    #[test]
+    fn exhausted_session_refuses_to_send() {
+        let now = Instant::now();
+        let (mut a, mut b) = connected(now);
+        set_sent_messages(&mut a.tunn, REJECT_AFTER_MESSAGES - 1);
+
+        let last = send(&mut a.tunn, now).unwrap();
+        receive(&mut b, &last, now).unwrap();
+
+        assert!(matches!(
+            send(&mut a.tunn, now),
+            Err(Error::NoCurrentSession)
+        ));
+        assert!(matches!(
+            a.tunn.encapsulate_keepalive(Keepalive, now),
+            Err(Error::NoCurrentSession)
+        ));
+    }
+
+    #[test]
+    fn data_message_with_a_counter_beyond_the_limit_is_rejected() {
+        let now = Instant::now();
+        let (mut a, mut b) = connected(now);
+
+        for counter in [REJECT_AFTER_MESSAGES, u64::MAX] {
+            let mut datagram = send(&mut a.tunn, now).unwrap();
+            datagram[8..16].copy_from_slice(&counter.to_le_bytes());
+
+            assert!(matches!(
+                receive(&mut b, &datagram, now),
+                Err(Error::InvalidCounter)
+            ));
+        }
+
+        let datagram = send(&mut a.tunn, now).unwrap();
+        receive(&mut b, &datagram, now).unwrap();
+    }
+
     /// A [`Tunnel`] together with the [`Ingress`] for its static key.
     struct Peer {
         tunn: Tunnel,
@@ -457,75 +527,5 @@ mod tests {
 
     fn set_sent_messages(tunn: &mut Tunnel, sent: u64) {
         tunn.sessions.current_mut().unwrap().set_sent_messages(sent);
-    }
-
-    #[test]
-    fn responder_rekeys_after_messages() {
-        let mut now = Instant::now();
-        let (mut a, mut b) = connected(now);
-        set_sent_messages(&mut b.tunn, REKEY_AFTER_MESSAGES - 1);
-
-        assert_ne!(b.tunn.poll_timeout().unwrap().1, "rekey-after-messages");
-        let datagram = send(&mut b.tunn, now).unwrap();
-        receive(&mut a, &datagram, now).unwrap();
-        assert_eq!(
-            b.tunn.poll_timeout().unwrap(),
-            (now, "rekey-after-messages")
-        );
-
-        b.tunn.handle_timeout(now);
-        assert!(b.tunn.poll_event().is_none());
-        now += MAX_JITTER;
-        b.tunn.handle_timeout(now);
-        let Some(Event::HandshakeInitiation(init)) = b.tunn.poll_event() else {
-            panic!("expected a handshake initiation");
-        };
-
-        let response = expect_response(&mut a, &init, now);
-        assert!(decapsulate(&mut b, &response, now).unwrap().is_none());
-        let Some(Event::KeepaliveDue(_)) = b.tunn.poll_event() else {
-            panic!("expected a due keepalive");
-        };
-        let datagram = send(&mut b.tunn, now).unwrap();
-        assert_eq!(u64::from_le_bytes(datagram[8..16].try_into().unwrap()), 0);
-        receive(&mut a, &datagram, now).unwrap();
-    }
-
-    #[test]
-    fn exhausted_session_refuses_to_send() {
-        let now = Instant::now();
-        let (mut a, mut b) = connected(now);
-        set_sent_messages(&mut a.tunn, REJECT_AFTER_MESSAGES - 1);
-
-        let last = send(&mut a.tunn, now).unwrap();
-        receive(&mut b, &last, now).unwrap();
-
-        assert!(matches!(
-            send(&mut a.tunn, now),
-            Err(Error::NoCurrentSession)
-        ));
-        assert!(matches!(
-            a.tunn.encapsulate_keepalive(Keepalive, now),
-            Err(Error::NoCurrentSession)
-        ));
-    }
-
-    #[test]
-    fn data_message_with_a_counter_beyond_the_limit_is_rejected() {
-        let now = Instant::now();
-        let (mut a, mut b) = connected(now);
-
-        for counter in [REJECT_AFTER_MESSAGES, u64::MAX] {
-            let mut datagram = send(&mut a.tunn, now).unwrap();
-            datagram[8..16].copy_from_slice(&counter.to_le_bytes());
-
-            assert!(matches!(
-                receive(&mut b, &datagram, now),
-                Err(Error::InvalidCounter)
-            ));
-        }
-
-        let datagram = send(&mut a.tunn, now).unwrap();
-        receive(&mut b, &datagram, now).unwrap();
     }
 }
