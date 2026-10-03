@@ -263,7 +263,8 @@ impl Builder {
             start,
             start,
             unix,
-        );
+        )
+        .expect("the test keys are valid");
 
         let expected_by_b = if self.responder_expects_different_key {
             PublicKey::from(&StaticSecret::random())
@@ -280,7 +281,8 @@ impl Builder {
             start,
             start,
             unix,
-        );
+        )
+        .expect("the test keys are valid");
 
         Sim {
             start,
@@ -622,7 +624,6 @@ impl Sim {
         self.node_mut(peer)
             .tunn
             .format_handshake_initiation(force, now)
-            .unwrap()
             .map(|p| p.to_vec())
     }
 
