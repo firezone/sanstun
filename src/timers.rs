@@ -1,5 +1,4 @@
-use super::errors::Error;
-use crate::{Keepalive, TimerAction, Tunnel};
+use crate::{Event, Keepalive, Tunnel};
 use std::iter;
 use std::ops::{Index, IndexMut};
 
@@ -236,8 +235,9 @@ impl Timers {
         );
     }
 
-    fn take_scheduled_handshake(&mut self) {
-        self.send_handshake_at = None;
+    /// Clears the scheduled handshake if it is due at `now`.
+    fn take_due_handshake(&mut self, now: Instant) -> Option<Instant> {
+        self.send_handshake_at.take_if(|at| now >= *at)
     }
 
     fn consume_passive_keepalive(&mut self) {
@@ -288,18 +288,19 @@ impl Tunnel {
         Some((self.timers.rekey_timeout(time_sent), local_index))
     }
 
-    pub fn update_timers(&mut self, now: Instant) -> Result<Option<TimerAction>, Error> {
+    /// Advances the timers to `now`, queuing whatever is due for [`Tunnel::poll_event`].
+    pub fn handle_timeout(&mut self, now: Instant) {
         self.timers.tick(TimeLastUpdate, now);
 
-        if let Some(scheduled_handshake_at) = self.timers.scheduled_handshake() {
-            // If we have scheduled a handshake and the deadline expired, send it immediately.
-            if now >= scheduled_handshake_at {
-                self.timers.take_scheduled_handshake();
-                return Ok(self
-                    .format_handshake_initiation(true, now)
-                    .map(TimerAction::HandshakeInitiation));
+        if self.timers.take_due_handshake(now).is_some() {
+            if let Some(initiation) = self.format_handshake_initiation(true, now) {
+                self.events
+                    .push_back(Event::HandshakeInitiation(initiation));
             }
+            return;
+        }
 
+        if let Some(scheduled_handshake_at) = self.timers.scheduled_handshake() {
             debug_assert!(
                 scheduled_handshake_at
                     .checked_duration_since(now)
@@ -310,7 +311,7 @@ impl Tunnel {
             // We have a handshake scheduled but the deadline is not expired yet.
             // Don't do anything to avoid repeated printing of logs.
             // The below logic would still evaluate that we need to send another handshake.
-            return Ok(None);
+            return;
         }
 
         let mut handshake_initiation_required = false;
@@ -322,9 +323,8 @@ impl Tunnel {
         // landed and there is no shared state left to reach.
         if self.sessions.expire(now) && self.timers.current_session_carried_data() {
             tracing::debug!("CONNECTION_EXPIRED(REJECT_AFTER_TIME)");
-            self.handshake.set_expired();
-            self.clear_all(now);
-            return Err(Error::ConnectionExpired);
+            self.expire(now);
+            return;
         }
 
         // In case our session expired, create a new one iff we initiated the previous one.
@@ -336,7 +336,7 @@ impl Tunnel {
         }
 
         if self.handshake.is_expired() {
-            return Err(Error::ConnectionExpired);
+            return;
         }
 
         // Clear cookie after COOKIE_EXPIRATION_TIME
@@ -353,9 +353,8 @@ impl Tunnel {
         // (REJECT_AFTER_TIME * 3) ms if no new keys have been exchanged.
         if now >= self.timers.reject_after_time() {
             tracing::debug!("CONNECTION_EXPIRED(REJECT_AFTER_TIME * 3)");
-            self.handshake.set_expired();
-            self.clear_all(now);
-            return Err(Error::ConnectionExpired);
+            self.expire(now);
+            return;
         }
 
         if let Some((rekey_timeout, local_idx)) = self.handshake_rekey_timeout() {
@@ -366,9 +365,8 @@ impl Tunnel {
                 // up to be sent. If a packet is explicitly queued up to be sent, then
                 // this timer is reset.
                 tracing::debug!(%local_idx, "CONNECTION_EXPIRED(REKEY_ATTEMPT_TIME)");
-                self.handshake.set_expired();
-                self.clear_all(now);
-                return Err(Error::ConnectionExpired);
+                self.expire(now);
+                return;
             }
 
             if now >= rekey_timeout {
@@ -455,27 +453,30 @@ impl Tunnel {
 
             tracing::debug!(?jitter, "Scheduling new handshake");
 
-            return Ok(None);
+            return;
         }
 
         // A keepalive is only ever sent on an established session; there is no need to queue it
         // or start a handshake.
         if keepalive_required && self.sending_session(now).is_some() {
-            return Ok(Some(TimerAction::KeepaliveDue(Keepalive)));
+            self.events.push_back(Event::KeepaliveDue(Keepalive));
         }
-
-        Ok(None)
     }
 
-    /// Returns the [`Instant`] at which [`Tunnel::update_timers`] next needs to
+    /// Returns the next [`Event`] queued by [`Tunnel::handle_timeout`] or [`Tunnel::decapsulate`].
+    pub fn poll_event(&mut self) -> Option<Event> {
+        self.events.pop_front()
+    }
+
+    /// Returns the [`Instant`] at which [`Tunnel::handle_timeout`] next needs to
     /// be called, together with a human-readable reason for debugging.
     ///
     /// Calling it earlier than the given [`Instant`] is safe but unlikely to
     /// have any effect. Driving the state machine by repeatedly polling at the
     /// returned [`Instant`] is sufficient: there is no need to call
-    /// [`Tunnel::update_timers`] on a fixed interval.
-    pub fn next_timer_update(&self) -> Option<(Instant, &'static str)> {
-        let (next, reason) = self.next_timer_update_internal()?;
+    /// [`Tunnel::handle_timeout`] on a fixed interval.
+    pub fn poll_timeout(&self) -> Option<(Instant, &'static str)> {
+        let (next, reason) = self.next_deadline()?;
         let last_update = self.timers[TimeLastUpdate];
 
         // Never announce an [`Instant`] in the past: a deadline may already have
@@ -483,8 +484,8 @@ impl Tunnel {
         Some((next.max(last_update), reason))
     }
 
-    fn next_timer_update_internal(&self) -> Option<(Instant, &'static str)> {
-        // Mimic `update_timers`: if we have a handshake scheduled, no other timer matters.
+    fn next_deadline(&self) -> Option<(Instant, &'static str)> {
+        // Mimic `handle_timeout`: if we have a handshake scheduled, no other timer matters.
         if let Some(scheduled_handshake) = self.timers.scheduled_handshake() {
             return Some((scheduled_handshake, "scheduled handshake"));
         }
@@ -545,6 +546,12 @@ impl Tunnel {
                 .chain(persistent_keepalive.map(|instant| (instant, "persistent keep-alive")))
                 .min_by_key(|(instant, _)| *instant)
         }
+    }
+
+    fn expire(&mut self, now: Instant) {
+        self.handshake.set_expired();
+        self.clear_all(now);
+        self.events.push_back(Event::ConnectionExpired);
     }
 
     pub fn time_since_last_handshake(&self, now: Instant) -> Option<Duration> {

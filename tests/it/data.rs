@@ -4,7 +4,7 @@
 use crate::harness::{
     DATA_OVERHEAD, KEEPALIVE_SIZE, Outcome as _, Peer::A, Peer::B, Sim, ipv4_packet, ipv6_packet,
 };
-use sanstun::{Decapsulated, Error, Keepalive};
+use sanstun::{Error, Event, Keepalive};
 
 #[test]
 fn ipv4_packets_round_trip() {
@@ -68,10 +68,13 @@ fn handshake_response_leaves_the_keepalive_to_the_caller() {
     let now = sim.now;
 
     let packet = sim.receive(A, &response);
-    let result = sim.tunn_mut(A).decapsulate(packet, now);
-    let Ok(Decapsulated::KeepaliveDue(keepalive)) = result else {
-        panic!("expected a due keepalive, got {result:?}");
+    let tunn = sim.tunn_mut(A);
+    assert!(tunn.decapsulate(packet, now).unwrap().is_none());
+    let event = tunn.poll_event();
+    let Some(Event::KeepaliveDue(keepalive)) = event else {
+        panic!("expected a due keepalive, got {event:?}");
     };
+    assert!(tunn.poll_event().is_none());
 
     let keepalive = sim
         .tunn_mut(A)

@@ -1,19 +1,19 @@
 //! Contracts specific to the sans-IO design: callers inject time explicitly,
-//! learn when to call back via `next_timer_update`, and must get identical
+//! learn when to call back via `poll_timeout`, and must get identical
 //! behaviour for identical inputs.
 
 use crate::harness::{
     KEEPALIVE_SIZE, KEEPALIVE_TIMEOUT, Kind, MAX_JITTER, Outcome as _, Peer::A, Peer::B,
     REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_TIMEOUT, Sim, classify, ipv4_packet, secs,
 };
-use sanstun::{Error, TimerAction};
+use sanstun::{Error, Event};
 use std::time::Duration;
 
 /// A handshake triggered by a timer is not sent immediately: it is scheduled
-/// with a random jitter of up to 333ms, announced via `next_timer_update` and
+/// with a random jitter of up to 333ms, announced via `poll_timeout` and
 /// emitted exactly once when that deadline is polled.
 #[test]
-fn scheduled_handshake_honours_next_timer_update() {
+fn scheduled_handshake_honours_poll_timeout() {
     let mut sim = Sim::connected();
     sim.advance(secs(1));
     sim.cut_link();
@@ -23,26 +23,27 @@ fn scheduled_handshake_honours_next_timer_update() {
     let tunn = sim.tunn_mut(A);
 
     // Nothing is due before the deadline.
-    assert!(matches!(
-        tunn.update_timers(deadline - Duration::from_millis(1)),
-        Ok(None)
-    ));
+    tunn.handle_timeout(deadline - Duration::from_millis(1));
+    assert!(tunn.poll_event().is_none());
 
     // At the deadline, the handshake is only *scheduled* ...
-    assert!(matches!(tunn.update_timers(deadline), Ok(None)));
-    let (wake, _reason) = tunn.next_timer_update().expect("a scheduled handshake");
+    tunn.handle_timeout(deadline);
+    assert!(tunn.poll_event().is_none());
+    let (wake, _reason) = tunn.poll_timeout().expect("a scheduled handshake");
     assert!(wake >= deadline && wake <= deadline + MAX_JITTER);
 
     // ... and emitted exactly once when the announced instant is polled.
-    let Ok(Some(TimerAction::HandshakeInitiation(packet))) = tunn.update_timers(wake) else {
+    tunn.handle_timeout(wake);
+    let Some(Event::HandshakeInitiation(packet)) = tunn.poll_event() else {
         panic!("expected the scheduled handshake initiation");
     };
     assert_eq!(classify(&packet), Kind::Init);
-    assert!(matches!(tunn.update_timers(wake), Ok(None)));
+    tunn.handle_timeout(wake);
+    assert!(tunn.poll_event().is_none());
 }
 
 #[test]
-fn next_timer_update_predicts_the_passive_keepalive() {
+fn poll_timeout_predicts_the_passive_keepalive() {
     let mut sim = Sim::connected();
     sim.advance(secs(1));
 
@@ -51,14 +52,13 @@ fn next_timer_update_predicts_the_passive_keepalive() {
     let received_at = sim.now;
 
     let tunn = sim.tunn_mut(B);
-    let (wake, _reason) = tunn.next_timer_update().expect("a pending keepalive");
+    let (wake, _reason) = tunn.poll_timeout().expect("a pending keepalive");
     assert_eq!(wake, received_at + KEEPALIVE_TIMEOUT);
 
-    assert!(matches!(
-        tunn.update_timers(wake - Duration::from_millis(1)),
-        Ok(None)
-    ));
-    let Ok(Some(TimerAction::KeepaliveDue(keepalive))) = tunn.update_timers(wake) else {
+    tunn.handle_timeout(wake - Duration::from_millis(1));
+    assert!(tunn.poll_event().is_none());
+    tunn.handle_timeout(wake);
+    let Some(Event::KeepaliveDue(keepalive)) = tunn.poll_event() else {
         panic!("expected the keepalive");
     };
     let packet = tunn.encapsulate_keepalive(keepalive, wake).unwrap();
@@ -67,17 +67,17 @@ fn next_timer_update_predicts_the_passive_keepalive() {
     // The passive keepalive has been answered, so it must not re-arm; the only
     // thing left on the clock is the eventual session expiry.
     let (_wake, reason) = tunn
-        .next_timer_update()
+        .poll_timeout()
         .expect("a session that still expires eventually");
     assert_eq!(reason, "next expired session");
 }
 
-/// `next_timer_update` must never announce an instant in the past. Timers are
+/// `poll_timeout` must never announce an instant in the past. Timers are
 /// anchored to the session start, so sending on a session already older than
 /// `REKEY_AFTER_TIME` arms the rekey-on-send timer with a deadline that has
 /// already elapsed; the caller must still be handed a usable (not past) instant.
 #[test]
-fn next_timer_update_never_points_into_the_past() {
+fn poll_timeout_never_points_into_the_past() {
     let mut sim = Sim::connected();
 
     // Age the session past REKEY_AFTER_TIME. With no traffic, nothing rekeys, so
@@ -89,25 +89,30 @@ fn next_timer_update_never_points_into_the_past() {
     // REKEY_AFTER_TIME) is already behind us.
     sim.send_ip(A, &ipv4_packet(b"traffic after a long silence"));
 
-    let (wake, _reason) = sim.tunn(A).next_timer_update().expect("a rekey is now due");
+    let (wake, _reason) = sim.tunn(A).poll_timeout().expect("a rekey is now due");
     assert!(
         wake >= sim.now,
-        "next_timer_update returned an instant {:?} before now",
+        "poll_timeout returned an instant {:?} before now",
         sim.now.duration_since(wake),
     );
 }
 
 /// Callers may poll arbitrarily rarely; a single call after a long gap must
 /// still observe the (by then) expired state instead of panicking or hanging.
+/// Polling again reports nothing new.
 #[test]
 fn a_single_late_poll_observes_the_expiry() {
     let mut sim = Sim::connected();
 
     let late = sim.now + 4 * REJECT_AFTER_TIME;
-    let result = sim.tunn_mut(A).update_timers(late);
+    let tunn = sim.tunn_mut(A);
+    tunn.handle_timeout(late);
 
-    assert!(matches!(result, Err(Error::ConnectionExpired)));
-    assert!(sim.tunn(A).is_expired());
+    assert!(matches!(tunn.poll_event(), Some(Event::ConnectionExpired)));
+    assert!(tunn.is_expired());
+
+    tunn.handle_timeout(late + secs(1));
+    assert!(tunn.poll_event().is_none());
 }
 
 /// The only source of randomness in timer behaviour is the seeded jitter RNG:
@@ -137,9 +142,10 @@ fn different_seeds_produce_different_jitter() {
         // Once REKEY_TIMEOUT passes, a retry is scheduled `jitter` in the future.
         let retry_due = sim.now + REKEY_TIMEOUT;
         let tunn = sim.tunn_mut(A);
-        assert!(matches!(tunn.update_timers(retry_due), Ok(None)));
+        tunn.handle_timeout(retry_due);
+        assert!(tunn.poll_event().is_none());
 
-        tunn.next_timer_update()
+        tunn.poll_timeout()
             .expect("a scheduled retry")
             .0
             .duration_since(retry_due)
@@ -164,8 +170,8 @@ fn encapsulate_data_has_no_side_effects_without_a_session() {
 }
 
 /// Polling exactly at the announced instant must change something. A deadline
-/// the caller cannot action is a busy-loop: `next_timer_update` keeps handing
-/// back the same instant and `update_timers` keeps finding nothing to do.
+/// the caller cannot action is a busy-loop: `poll_timeout` keeps handing
+/// back the same instant and `handle_timeout` keeps finding nothing to do.
 ///
 /// The session expiry is the case that got this wrong: it was announced at
 /// `established_at + REJECT_AFTER_TIME` while the session was only discarded
@@ -179,17 +185,17 @@ fn the_announced_session_expiry_is_actionable() {
     sim.advance(REJECT_AFTER_TIME - secs(1));
     let now = sim.now;
     let tunn = sim.tunn_mut(A);
-    let _ = tunn.update_timers(now);
+    tunn.handle_timeout(now);
 
-    let Some((wake, "next expired session")) = tunn.next_timer_update() else {
+    let Some((wake, "next expired session")) = tunn.poll_timeout() else {
         panic!("expected the session expiry to be the next deadline");
     };
 
     // Poll exactly when told to, then ask again.
-    let _ = tunn.update_timers(wake);
+    tunn.handle_timeout(wake);
 
     assert_ne!(
-        tunn.next_timer_update().map(|(instant, _)| instant),
+        tunn.poll_timeout().map(|(instant, _)| instant),
         Some(wake),
         "polling at the announced instant left the same deadline outstanding"
     );

@@ -11,9 +11,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use sanstun::Error;
-use sanstun::{
-    Committed, Decapsulated, Decrypted, Index, Packet, PendingDecapsulate, TimerAction, Tunnel,
-};
+use sanstun::{Committed, Decrypted, Index, Packet, PendingDecapsulate, Tunnel};
 use sanstun::{Ingress, Received};
 use sanstun::{PublicKey, StaticSecret};
 
@@ -179,6 +177,7 @@ struct Node {
     addr: SocketAddr,
     inbox: Vec<Vec<u8>>,
     errors: Vec<Error>,
+    expirations: usize,
     drop_outgoing: bool,
 }
 
@@ -293,6 +292,7 @@ impl Builder {
                     addr: "10.0.0.1:51820".parse().unwrap(),
                     inbox: Vec::new(),
                     errors: Vec::new(),
+                    expirations: 0,
                     drop_outgoing: false,
                 },
                 Node {
@@ -301,6 +301,7 @@ impl Builder {
                     addr: "10.0.0.2:51820".parse().unwrap(),
                     inbox: Vec::new(),
                     errors: Vec::new(),
+                    expirations: 0,
                     drop_outgoing: false,
                 },
             ],
@@ -376,6 +377,11 @@ impl Sim {
         &self.node(peer).errors
     }
 
+    /// How often `peer` emitted [`sanstun::Event::ConnectionExpired`].
+    pub fn expirations(&self, peer: Peer) -> usize {
+        self.node(peer).expirations
+    }
+
     pub fn take_inbox(&mut self, peer: Peer) -> Vec<Vec<u8>> {
         std::mem::take(&mut self.node_mut(peer).inbox)
     }
@@ -404,11 +410,11 @@ impl Sim {
     }
 
     /// Advance the virtual clock, driving both peers purely by the instants they
-    /// announce via `next_timer_update` and routing whatever they emit.
+    /// announce via `poll_timeout` and routing whatever they emit.
     ///
     /// Rather than polling on a fixed interval, we jump straight to the earliest
     /// instant either peer asked to be called back at. That asserts two things
-    /// about `next_timer_update` on every test that advances time.
+    /// about `poll_timeout` on every test that advances time.
     ///
     /// It is *complete*: a caller that only ever polls at the announced instants
     /// observes exactly the same behaviour as one polling once a second.
@@ -423,7 +429,7 @@ impl Sim {
         while self.now < end {
             let next = [Peer::A, Peer::B]
                 .into_iter()
-                .filter_map(|peer| self.tunn(peer).next_timer_update())
+                .filter_map(|peer| self.tunn(peer).poll_timeout())
                 .map(|(at, _reason)| at)
                 .min()
                 // Never move backwards: a deadline may have elapsed already.
@@ -452,23 +458,9 @@ impl Sim {
 
     fn poll(&mut self, peer: Peer) {
         let now = self.now;
-        let outgoing = match self.node_mut(peer).tunn.update_timers(now) {
-            Ok(None) => None,
-            Err(e) => {
-                self.node_mut(peer).errors.push(e);
-                None
-            }
-            Ok(Some(TimerAction::HandshakeInitiation(packet))) => Some(packet.to_vec()),
-            Ok(Some(TimerAction::KeepaliveDue(keepalive))) => Some(
-                self.node_mut(peer)
-                    .tunn
-                    .encapsulate_keepalive(keepalive, now)
-                    .expect("a keepalive is only due on a usable session")
-                    .to_vec(),
-            ),
-        };
+        self.tunn_mut(peer).handle_timeout(now);
 
-        if let Some(datagram) = outgoing {
+        for datagram in self.drain_events(peer) {
             self.route(peer, datagram);
         }
     }
@@ -542,10 +534,9 @@ impl Sim {
         };
 
         match node.tunn.decapsulate(packet, now) {
-            Ok(Decapsulated::CookieReceived) => {}
+            Ok(None) => {}
             Err(e) => outs.push(Out::Err(e)),
-            Ok(Decapsulated::HandshakeResponse(packet)) => outs.push(Out::Net(packet.to_vec())),
-            Ok(Decapsulated::Data(pending)) => {
+            Ok(Some(pending)) => {
                 let decrypted = pending.decrypt(datagram, vec![0u8; BUF]);
                 match self.commit(to, decrypted) {
                     Ok(None) => {}
@@ -553,16 +544,33 @@ impl Sim {
                     Err(e) => outs.push(Out::Err(e)),
                 }
             }
-            Ok(Decapsulated::KeepaliveDue(keepalive)) => {
-                let keepalive = self
-                    .tunn_mut(to)
-                    .encapsulate_keepalive(keepalive, now)
-                    .expect("a keepalive is only due on a usable session");
-                outs.push(Out::Net(keepalive.to_vec()));
+        }
+        outs.extend(self.drain_events(to).into_iter().map(Out::Net));
+
+        outs
+    }
+
+    /// Drain the events of `peer`, returning the datagrams it needs to send.
+    fn drain_events(&mut self, peer: Peer) -> Vec<Vec<u8>> {
+        let now = self.now;
+        let node = self.node_mut(peer);
+        let mut outgoing = Vec::new();
+
+        while let Some(event) = node.tunn.poll_event() {
+            match event {
+                sanstun::Event::HandshakeInitiation(packet) => outgoing.push(packet.to_vec()),
+                sanstun::Event::HandshakeResponse(packet) => outgoing.push(packet.to_vec()),
+                sanstun::Event::KeepaliveDue(keepalive) => outgoing.push(
+                    node.tunn
+                        .encapsulate_keepalive(keepalive, now)
+                        .expect("a keepalive is only due on a usable session")
+                        .to_vec(),
+                ),
+                sanstun::Event::ConnectionExpired => node.expirations += 1,
             }
         }
 
-        outs
+        outgoing
     }
 
     /// Feed a data message into `to`, stopping before its decryption.
@@ -574,10 +582,9 @@ impl Sim {
     ) -> Result<PendingDecapsulate, Error> {
         let now = self.now;
         let packet = self.receive(to, datagram);
-        match self.tunn_mut(to).decapsulate(packet, now)? {
-            Decapsulated::Data(pending) => Ok(pending),
-            other => panic!("expected a data message, got {other:?}"),
-        }
+        let pending = self.tunn_mut(to).decapsulate(packet, now)?;
+
+        Ok(pending.expect("a data message"))
     }
 
     /// Complete a decryption on `to`, yielding the IP packet, or `None` for a
