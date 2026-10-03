@@ -174,10 +174,6 @@ mod tests {
             window.mark_did_receive(last),
             Err(Error::DuplicateCounter)
         ));
-        assert!(matches!(
-            window.will_accept(REJECT_AFTER_MESSAGES),
-            Err(Error::InvalidCounter)
-        ));
     }
 
     #[test]

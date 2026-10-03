@@ -1,6 +1,8 @@
 use super::{
     index::Index,
-    timers::{REJECT_AFTER_MESSAGES, REJECT_AFTER_TIME, SHOULD_NOT_USE_AFTER_TIME},
+    timers::{
+        REJECT_AFTER_MESSAGES, REJECT_AFTER_TIME, REKEY_AFTER_MESSAGES, SHOULD_NOT_USE_AFTER_TIME,
+    },
 };
 use crate::crypto::nonce;
 use crate::errors::Error;
@@ -75,24 +77,22 @@ impl Session {
         Arc::ptr_eq(&self.receiver, key)
     }
 
-    /// The number of messages sent with this session's sending key.
-    pub(crate) fn sent_messages(&self) -> u64 {
-        self.sending_key_counter
+    /// Whether the sending counter reached [`REKEY_AFTER_MESSAGES`].
+    pub(crate) fn rekey_after_messages_reached(&self) -> bool {
+        self.sending_key_counter >= REKEY_AFTER_MESSAGES
     }
 
-    /// Whether the sending key may protect another message.
-    pub(crate) fn can_send(&self) -> bool {
-        self.sending_key_counter < REJECT_AFTER_MESSAGES
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_sent_messages(&mut self, sent: u64) {
-        self.sending_key_counter = sent;
+    /// Whether the sending counter reached [`REJECT_AFTER_MESSAGES`].
+    pub(crate) fn sending_counter_exhausted(&self) -> bool {
+        self.sending_key_counter >= REJECT_AFTER_MESSAGES
     }
 
     /// Assigns the next counter to a data message, deferring writing and encrypting it.
     pub(super) fn prepare_packet_data(&mut self) -> PendingEncapsulate {
-        debug_assert!(self.can_send(), "the sending key is exhausted");
+        debug_assert!(
+            !self.sending_counter_exhausted(),
+            "the sending key is exhausted"
+        );
         let counter = self.sending_key_counter;
         self.sending_key_counter += 1;
 
@@ -404,3 +404,41 @@ pub struct Decrypted<B> {
 ///
 /// Threads that only read the key then never contend with the thread updating the count.
 pub(crate) type Key = CachePadded<LessSafeKey>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rekey_is_due_once_the_counter_reaches_the_limit() {
+        let mut session = session();
+
+        session.sending_key_counter = REKEY_AFTER_MESSAGES - 1;
+        assert!(!session.rekey_after_messages_reached());
+
+        session.sending_key_counter = REKEY_AFTER_MESSAGES;
+        assert!(session.rekey_after_messages_reached());
+    }
+
+    #[test]
+    fn last_counter_below_the_limit_is_handed_out_before_exhaustion() {
+        let mut session = session();
+        session.sending_key_counter = REJECT_AFTER_MESSAGES - 1;
+        assert!(!session.sending_counter_exhausted());
+
+        let pending = session.prepare_packet_data();
+
+        assert_eq!(pending.counter, REJECT_AFTER_MESSAGES - 1);
+        assert!(session.sending_counter_exhausted());
+    }
+
+    fn session() -> Session {
+        Session::new(
+            Index::new_local(0),
+            Index::from_peer(0),
+            [0; 32],
+            [0; 32],
+            Instant::now(),
+        )
+    }
+}

@@ -13,7 +13,7 @@ const REKEY_ATTEMPT_TIME: Duration = Duration::from_secs(90);
 const REKEY_TIMEOUT: Duration = Duration::from_secs(5);
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const COOKIE_EXPIRATION_TIME: Duration = Duration::from_secs(120);
-pub(crate) const MAX_JITTER: Duration = Duration::from_millis(333);
+const MAX_JITTER: Duration = Duration::from_millis(333);
 pub(crate) const REKEY_AFTER_MESSAGES: u64 = 1 << 60;
 /// Counters at or above this are neither sent nor accepted, so the replay window's arithmetic
 /// never overflows.
@@ -569,7 +569,7 @@ impl Tunnel {
     fn rekey_after_messages(&self) -> Option<Instant> {
         self.sessions
             .current()
-            .filter(|s| s.sent_messages() >= REKEY_AFTER_MESSAGES)?;
+            .filter(|s| s.rekey_after_messages_reached())?;
 
         Some(self.timers[TimeLastPacketSent])
     }
