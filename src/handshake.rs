@@ -424,6 +424,7 @@ impl Handshake {
             Index::from_peer(peer_index),
             &temp3,
             &temp2,
+            true,
             now,
         ))
     }
@@ -609,6 +610,7 @@ impl Handshake {
                 Index::from_peer(peer_index),
                 &temp2,
                 &temp3,
+                false,
                 now,
             ),
         ))

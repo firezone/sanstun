@@ -15,6 +15,7 @@ use std::time::Instant;
 
 pub(crate) struct Session {
     established_at: Instant,
+    is_initiator: bool,
     pub(crate) receiving_index: Index,
     sending_index: Index,
     receiver: Arc<Key>,
@@ -42,10 +43,12 @@ impl Session {
         peer_index: Index,
         receiving_key: &[u8; 32],
         sending_key: &[u8; 32],
+        is_initiator: bool,
         now: Instant,
     ) -> Session {
         Session {
             established_at: now,
+            is_initiator,
             receiving_index: local_index,
             sending_index: peer_index,
             receiver: Arc::new(Key::new(LessSafeKey::new(
@@ -61,6 +64,11 @@ impl Session {
 
     pub(crate) fn established_at(&self) -> Instant {
         self.established_at
+    }
+
+    /// Whether we initiated the handshake that established this session.
+    pub(crate) fn is_initiator(&self) -> bool {
+        self.is_initiator
     }
 
     pub(crate) fn expires_at(&self) -> Instant {
@@ -245,30 +253,29 @@ impl Sessions {
 
     /// Discards every session past [`REJECT_AFTER_TIME`].
     ///
-    /// Returns whether the current session was among them.
-    pub(crate) fn expire(&mut self, now: Instant) -> bool {
-        let mut current_expired = false;
+    /// Returns the current session if it was among them.
+    pub(crate) fn expire(&mut self, now: Instant) -> Option<Session> {
+        let mut expired_current = None;
 
         for maybe_session in self.slots.iter_mut() {
-            let Some(session) = maybe_session else {
+            let Some(session) = maybe_session.take_if(|session| session.expired_at(now)) else {
                 continue;
             };
 
             let is_current = self.current == session.receiving_index;
 
-            if session.expired_at(now) {
-                tracing::debug!(
-                    session = %session.receiving_index,
-                    %is_current,
-                    "SESSION_EXPIRED(REJECT_AFTER_TIME)"
-                );
-                *maybe_session = None;
+            tracing::debug!(
+                session = %session.receiving_index,
+                %is_current,
+                "SESSION_EXPIRED(REJECT_AFTER_TIME)"
+            );
 
-                current_expired |= is_current;
+            if is_current {
+                expired_current = Some(session);
             }
         }
 
-        current_expired
+        expired_current
     }
 
     /// The earliest [`Instant`] at which one of our sessions expires.
@@ -487,6 +494,7 @@ mod tests {
             Index::from_peer(0),
             &[0; 32],
             &[0; 32],
+            true,
             Instant::now(),
         )
     }

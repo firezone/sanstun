@@ -185,13 +185,12 @@ impl Tunnel {
 
     /// The session that data messages are sent on, if one is usable.
     fn sending_session(&mut self, now: Instant) -> Option<&mut session::Session> {
-        let is_responder = self.timers.is_responder();
         let session = self.sessions.current_mut()?;
 
         if session.sending_counter_exhausted() || session.expired_at(now) {
             return None;
         }
-        if !session.should_use_at(now) && !is_responder {
+        if !session.should_use_at(now) && session.is_initiator() {
             return None;
         }
 
@@ -277,7 +276,7 @@ impl Tunnel {
 
         self.timers.tick(TimerName::TimeLastPacketReceived, now);
         self.timers.tick(TimerName::TimeLastPacketSent, now);
-        self.timers.session_established(false, now); // New session established, we are not the initiator
+        self.timers.tick(TimerName::TimeLastHandshakeCompleted, now);
 
         tracing::debug!(%local_idx, %remote_idx, "Sending handshake_response");
 
@@ -305,7 +304,7 @@ impl Tunnel {
         self.sessions.insert(session);
 
         self.timers.tick(TimerName::TimeLastPacketReceived, now);
-        self.timers.session_established(true, now); // New session established, we are the initiator
+        self.timers.tick(TimerName::TimeLastHandshakeCompleted, now);
         self.sessions.set_current(local_idx);
 
         // The keepalive confirms the session to the responder.
