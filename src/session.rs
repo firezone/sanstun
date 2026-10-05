@@ -390,7 +390,6 @@ impl PendingDecapsulate {
 
 /// A data message decrypted by [`PendingDecapsulate::decrypt`], to be committed to the
 /// [`Tunnel`](crate::Tunnel) with [`Tunnel::commit_decrypted`](crate::Tunnel::commit_decrypted).
-#[derive(Debug)]
 #[must_use = "the data message is not accepted until it is committed to the `Tunnel`"]
 pub struct Decrypted<B> {
     pub(crate) receiving_index: Index,
@@ -404,6 +403,16 @@ pub struct Decrypted<B> {
     /// message leaves the reference count of the key to the thread that owns the
     /// [`Tunnel`](crate::Tunnel).
     pub(crate) key: Arc<Key>,
+}
+
+impl<B> std::fmt::Debug for Decrypted<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Decrypted")
+            .field("receiving_index", &self.receiving_index)
+            .field("counter", &self.counter)
+            .field("plaintext_len", &self.plaintext_len)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A session key on a cache line of its own, apart from the reference count of its [`Arc`].
