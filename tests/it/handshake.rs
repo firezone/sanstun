@@ -2,12 +2,12 @@
 //! failures and replay of handshake messages.
 
 use crate::harness::{
-    HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, Outcome as _, Peer::A, Peer::B, Sim,
+    HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, Outcome as _, Peer::A, Peer::B, Sim, TICK,
     classify,
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use sanstun::{Error, Interface, PublicKey};
+use sanstun::{Error, Event, Interface, Packet, PublicKey};
 use std::time::{Duration, Instant};
 
 #[test]
@@ -112,6 +112,40 @@ fn delayed_response_to_a_superseded_initiation_is_accepted() {
     assert!(sim.is_established(A));
     assert!(sim.is_established(B));
     sim.assert_connectivity();
+}
+
+/// Initiations arriving faster than the responder's events are drained leave
+/// only the response to the newest one queued.
+#[test]
+fn only_the_response_to_the_newest_initiation_is_queued() {
+    let mut sim = Sim::new();
+
+    let mut newest_sender_idx = None;
+    for _ in 0..5 {
+        let init = sim.force_handshake_initiation(A);
+        let now = sim.now;
+        let packet = sim.receive(B, &init);
+        let Packet::HandshakeInit(p) = &packet else {
+            panic!("expected a handshake initiation, got {packet:?}");
+        };
+        newest_sender_idx = Some(p.sender_idx());
+        sim.tunn_mut(B).decapsulate(packet, now).unwrap();
+        sim.suspend(TICK);
+    }
+
+    let responses = std::iter::from_fn(|| sim.tunn_mut(B).poll_event())
+        .map(|event| match event {
+            Event::HandshakeResponse(response) => response.to_vec(),
+            other => panic!("expected a handshake response, got {other:?}"),
+        })
+        .collect::<Vec<_>>();
+    let [response] = responses.as_slice() else {
+        panic!("expected one handshake response, got {}", responses.len());
+    };
+    let Packet::HandshakeResponse(response) = sim.receive(A, response) else {
+        panic!("expected a handshake response");
+    };
+    assert_eq!(Some(response.receiver_idx()), newest_sender_idx);
 }
 
 #[test]

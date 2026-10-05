@@ -298,8 +298,7 @@ impl Tunnel {
 
         if self.timers.take_due_handshake(now).is_some() {
             if let Some(initiation) = self.format_handshake_initiation(true, now) {
-                self.events
-                    .push_back(Event::HandshakeInitiation(initiation));
+                self.queue_event(Event::HandshakeInitiation(initiation));
             }
             return;
         }
@@ -472,7 +471,7 @@ impl Tunnel {
         // A keepalive is only ever sent on an established session; there is no need to queue it
         // or start a handshake.
         if keepalive_required && self.sending_session(now).is_some() {
-            self.events.push_back(Event::KeepaliveDue(Keepalive));
+            self.queue_event(Event::KeepaliveDue(Keepalive));
         }
     }
 

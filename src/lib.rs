@@ -34,6 +34,8 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 /// What the caller needs to do, as returned by [`Tunnel::poll_event`].
+///
+/// A newer message to send replaces a queued one of the same kind, which it supersedes.
 #[derive(Debug)]
 pub enum Event {
     /// Send this handshake initiation to the peer.
@@ -284,8 +286,7 @@ impl Tunnel {
 
         tracing::debug!(%local_idx, %remote_idx, "Sending handshake_response");
 
-        self.events
-            .push_back(Event::HandshakeResponse(HandshakeResponseMessage(packet)));
+        self.queue_event(Event::HandshakeResponse(HandshakeResponseMessage(packet)));
 
         Ok(())
     }
@@ -311,7 +312,7 @@ impl Tunnel {
         self.sessions.set_current(local_idx);
 
         // The keepalive confirms the session to the responder.
-        self.events.push_back(Event::KeepaliveDue(Keepalive));
+        self.queue_event(Event::KeepaliveDue(Keepalive));
 
         Ok(())
     }
@@ -374,5 +375,15 @@ impl Tunnel {
         self.timers.tick(TimerName::TimeLastPacketSent, now);
 
         Some(HandshakeInitiationMessage(packet))
+    }
+
+    /// Queues `event` for [`Tunnel::poll_event`], replacing any queued event of the same kind,
+    /// which it supersedes.
+    fn queue_event(&mut self, event: Event) {
+        let kind = std::mem::discriminant(&event);
+        self.events
+            .retain(|queued| std::mem::discriminant(queued) != kind);
+
+        self.events.push_back(event);
     }
 }
