@@ -6,6 +6,7 @@ mod handshake;
 mod index;
 mod interface;
 mod message;
+mod ratelimiter;
 mod replay;
 mod ring_buffer;
 mod session;

@@ -6,6 +6,7 @@ use crate::message::{
     HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeInit, HandshakeResponse, Macs, Packet,
     PacketCookieReply, PacketData,
 };
+use crate::ratelimiter::RateLimiter;
 use crate::tai64n::TimeStamper;
 use crate::{CookieReplyMessage, Error, PublicKey, StaticSecret, Tunnel};
 
@@ -34,9 +35,9 @@ type Cookie = [u8; COOKIE_SIZE];
 
 /// The entry point for every datagram received from the network for one static key.
 ///
-/// [`Interface::receive`] verifies the MACs of handshake messages and applies the cookie mechanism
-/// under load before any expensive work, and is the only way to obtain a [`Packet`] for
-/// [`Tunnel::decapsulate`].
+/// [`Interface::receive`] verifies the MACs of handshake messages and, under load, applies the
+/// cookie mechanism and a per-source rate limit before any expensive work. It is the only way to
+/// obtain a [`Packet`] for [`Tunnel::decapsulate`].
 pub struct Interface {
     static_private: StaticSecret,
     static_public: PublicKey,
@@ -54,6 +55,8 @@ pub struct Interface {
     last_reset: Instant,
     stamper: TimeStamper,
     indices: IndexLfsr,
+    /// Limits the handshake messages with a valid cookie per source while under load
+    rate_limiter: RateLimiter,
 }
 
 impl Interface {
@@ -88,6 +91,7 @@ impl Interface {
             last_reset: now,
             stamper: TimeStamper::new(now, unix),
             indices,
+            rate_limiter: RateLimiter::new(now),
         }
     }
 
@@ -143,6 +147,9 @@ impl Interface {
     /// Parses and verifies a datagram received from the network.
     ///
     /// This is the only entry point for inbound datagrams and enforces WireGuard's cookie mechanism.
+    /// Under load, handshake messages with a valid cookie are additionally limited to 20 per
+    /// second with a burst of 5 per source, where a source is an IPv4 address or an IPv6 /64.
+    /// Messages over that budget are rejected with [`Error::RateLimited`] and should be dropped.
     ///
     /// `src_addr` is the address and port the datagram came from, which cookies are bound to.
     pub fn receive<'a>(
@@ -242,6 +249,10 @@ impl Interface {
             return Ok(Some(CookieReplyMessage(
                 self.format_cookie_reply(sender_idx, cookie, mac1),
             )));
+        }
+
+        if !self.rate_limiter.allow(src_addr.ip(), now) {
+            return Err(Error::RateLimited);
         }
 
         Ok(None)
