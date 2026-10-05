@@ -353,8 +353,9 @@ impl Tunnel {
             self.handshake.clear_cookie();
         }
 
-        // All ephemeral private keys and symmetric session keys are zeroed out after
-        // (REJECT_AFTER_TIME * 3) ms if no new keys have been exchanged.
+        // Handshake state and sessions are discarded after (REJECT_AFTER_TIME * 3) ms
+        // if no new keys have been exchanged. Handshake secrets are zeroized on drop,
+        // session keys are only dropped.
         if now >= self.timers.reject_after_time() {
             tracing::debug!("CONNECTION_EXPIRED(REJECT_AFTER_TIME * 3)");
             self.expire(now);

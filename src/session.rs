@@ -40,8 +40,8 @@ impl Session {
     pub(super) fn new(
         local_index: Index,
         peer_index: Index,
-        receiving_key: [u8; 32],
-        sending_key: [u8; 32],
+        receiving_key: &[u8; 32],
+        sending_key: &[u8; 32],
         now: Instant,
     ) -> Session {
         Session {
@@ -49,10 +49,10 @@ impl Session {
             receiving_index: local_index,
             sending_index: peer_index,
             receiver: Arc::new(Key::new(LessSafeKey::new(
-                UnboundKey::new(&CHACHA20_POLY1305, &receiving_key).unwrap(),
+                UnboundKey::new(&CHACHA20_POLY1305, receiving_key).unwrap(),
             ))),
             sender: Arc::new(Key::new(LessSafeKey::new(
-                UnboundKey::new(&CHACHA20_POLY1305, &sending_key).unwrap(),
+                UnboundKey::new(&CHACHA20_POLY1305, sending_key).unwrap(),
             ))),
             sending_key_counter: 0,
             receiving_key_counter: Default::default(),
@@ -431,8 +431,8 @@ mod tests {
         Session::new(
             Index::new_local(0),
             Index::from_peer(0),
-            [0; 32],
-            [0; 32],
+            &[0; 32],
+            &[0; 32],
             Instant::now(),
         )
     }
