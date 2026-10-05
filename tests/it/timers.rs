@@ -257,6 +257,20 @@ fn data_for_an_expired_session_is_rejected_before_timers_run() {
     assert!(matches!(error, Error::NoCurrentSession));
 }
 
+/// A session past `REJECT_AFTER_TIME` refuses to encrypt even before
+/// `handle_timeout` gets to discard it, also on the responder.
+#[test]
+fn responder_does_not_encrypt_on_an_expired_session_before_timers_run() {
+    let mut sim = Sim::connected();
+
+    sim.suspend(REJECT_AFTER_TIME);
+
+    assert!(matches!(
+        sim.try_encapsulate(B, &ipv4_packet(b"too late")),
+        Err(Error::NoCurrentSession)
+    ));
+}
+
 /// When the expired session was initiated by us, sanstun starts a new
 /// handshake right away instead of waiting for the next outgoing packet.
 #[test]
