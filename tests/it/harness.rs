@@ -250,39 +250,37 @@ impl Builder {
         } else {
             HANDSHAKE_RATE_LIMIT
         };
-        let ingress_a = Ingress::new(secret_a.clone(), HANDSHAKE_RATE_LIMIT, [3; 32], start);
-        let ingress_b = Ingress::new(secret_b.clone(), limit_b, [4; 32], start);
+        let mut ingress_a = Ingress::new(secret_a, HANDSHAKE_RATE_LIMIT, self.seed_a, start);
+        let mut ingress_b = Ingress::new(secret_b, limit_b, self.seed_b, start);
 
-        let a = Tunnel::new(
-            secret_a,
-            public_b,
-            self.psk_a.map(StaticSecret::from),
-            None,
-            Index::new_local(1),
-            self.seed_a,
-            start,
-            start,
-            unix,
-        )
-        .expect("the test keys are valid");
+        let a = ingress_a
+            .new_tunnel(
+                public_b,
+                self.psk_a.map(StaticSecret::from),
+                None,
+                Index::new_local(1),
+                start,
+                start,
+                unix,
+            )
+            .expect("the test keys are valid");
 
         let expected_by_b = if self.responder_expects_different_key {
             PublicKey::from(&StaticSecret::random())
         } else {
             public_a
         };
-        let b = Tunnel::new(
-            secret_b,
-            expected_by_b,
-            self.psk_b.map(StaticSecret::from),
-            self.persistent_keepalive_b,
-            Index::new_local(2),
-            self.seed_b,
-            start,
-            start,
-            unix,
-        )
-        .expect("the test keys are valid");
+        let b = ingress_b
+            .new_tunnel(
+                expected_by_b,
+                self.psk_b.map(StaticSecret::from),
+                self.persistent_keepalive_b,
+                Index::new_local(2),
+                start,
+                start,
+                unix,
+            )
+            .expect("the test keys are valid");
 
         Sim {
             start,

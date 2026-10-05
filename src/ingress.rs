@@ -5,7 +5,7 @@ use crate::message::{
     HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeInit, HandshakeResponse, Macs, Packet,
     PacketCookieReply, PacketData,
 };
-use crate::{CookieReplyMessage, Error, PublicKey, StaticSecret};
+use crate::{CookieReplyMessage, Error, Index, PublicKey, StaticSecret, Tunnel};
 
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
@@ -32,7 +32,10 @@ type Cookie = [u8; COOKIE_SIZE];
 ///
 /// [`Ingress::receive`] verifies the MACs of handshake messages and applies the cookie mechanism
 /// under load before any expensive work, and is the only way to obtain a [`Packet`] for
-/// [`Tunnel::decapsulate`](crate::Tunnel::decapsulate).
+/// [`Tunnel::decapsulate`].
+///
+/// [`Ingress::new_tunnel`] is the only way to create a [`Tunnel`], which ties every tunnel to the
+/// static key of its `Ingress`.
 pub struct Ingress {
     static_private: StaticSecret,
     static_public: PublicKey,
@@ -53,10 +56,11 @@ pub struct Ingress {
 impl Ingress {
     /// Creates the entry point for datagrams addressed to our `static_private` key.
     ///
-    /// Use one instance for all [`Tunnel`](crate::Tunnel)s of that key, so that `limit`
+    /// Use one instance for all [`Tunnel`]s of that key, so that `limit`
     /// handshake messages per second apply to all of them together.
     ///
-    /// `rng_seed` must come from a cryptographically secure source because the cookie secrets are derived from it.
+    /// `rng_seed` must come from a cryptographically secure source because the cookie secrets and
+    /// the key material of every tunnel are derived from it.
     pub fn new(static_private: StaticSecret, limit: u64, rng_seed: [u8; 32], now: Instant) -> Self {
         let mut rng = StdRng::from_seed(rng_seed);
         let static_public = PublicKey::from(&static_private);
@@ -75,6 +79,35 @@ impl Ingress {
             count: 0,
             last_reset: now,
         }
+    }
+
+    /// Creates a [`Tunnel`] between our static key and `peer_static_public`.
+    ///
+    /// The tunnel's RNG is seeded from this `Ingress`, so every tunnel derives distinct ephemeral keys.
+    ///
+    /// Fails with [`Error::LowOrderPoint`] if `peer_static_public` is a low-order point.
+    #[expect(clippy::too_many_arguments, reason = "We don't care that much.")]
+    pub fn new_tunnel(
+        &mut self,
+        peer_static_public: PublicKey,
+        preshared_key: Option<StaticSecret>,
+        persistent_keepalive: Option<u16>,
+        index: Index,
+        now: Instant,
+        unix_instant: Instant,
+        unix: Duration,
+    ) -> Result<Tunnel, Error> {
+        Tunnel::new(
+            self.static_private.clone(),
+            peer_static_public,
+            preshared_key,
+            persistent_keepalive,
+            index,
+            self.rng.random(),
+            now,
+            unix_instant,
+            unix,
+        )
     }
 
     /// Parses and verifies a datagram received from the network.
@@ -277,7 +310,7 @@ impl Ingress {
 #[derive(Debug)]
 pub enum Received<'a> {
     /// Route the packet to its [`Tunnel`](crate::Tunnel) and hand it to
-    /// [`Tunnel::decapsulate`](crate::Tunnel::decapsulate).
+    /// [`Tunnel::decapsulate`].
     Packet(Packet<'a>),
     /// Send this cookie reply to the peer: we are under load and its handshake message needs
     /// a valid cookie.

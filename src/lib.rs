@@ -63,6 +63,8 @@ pub enum Committed<B> {
 }
 
 /// Tunnel represents a point-to-point WireGuard connection
+///
+/// Created with [`Ingress::new_tunnel`].
 pub struct Tunnel {
     /// The handshake currently in progress
     handshake: handshake::Handshake,
@@ -79,11 +81,8 @@ impl Tunnel {
         self.handshake.is_expired()
     }
 
-    /// Create a new tunnel using own private key and the peer public key
-    ///
-    /// `rng_seed` must come from a cryptographically secure source because key material is derived from it.
     #[expect(clippy::too_many_arguments, reason = "We don't care that much.")]
-    pub fn new(
+    pub(crate) fn new(
         static_private: StaticSecret,
         peer_static_public: PublicKey,
         preshared_key: Option<StaticSecret>,
