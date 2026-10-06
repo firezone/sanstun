@@ -34,7 +34,7 @@ use std::time::{Duration, Instant};
 
 /// What the caller needs to do, as returned by [`Tunnel::poll_event`].
 ///
-/// A newer event replaces a queued one of the same kind, which it supersedes.
+/// At most 16 events are queued; when full, the oldest is dropped.
 #[derive(Debug)]
 pub enum Event {
     /// Send this handshake initiation to the peer.
@@ -48,9 +48,6 @@ pub enum Event {
     /// Emitted once per expiry, see [`Tunnel::is_expired`].
     ConnectionExpired,
 }
-
-/// The number of variants of [`Event`], which bounds how many can be queued.
-const EVENT_KINDS: usize = 4;
 
 /// A keepalive to send with [`Tunnel::encapsulate_keepalive`], e.g. when probing a path.
 #[derive(Debug)]
@@ -77,8 +74,7 @@ pub struct Tunnel {
     timers: timers::Timers,
     /// Source of the ephemeral keys and the handshake jitter
     rng: StdRng,
-    /// At most one event of each kind, oldest first.
-    events: [Option<Event>; EVENT_KINDS],
+    events: EventQueue,
 }
 
 impl Tunnel {
@@ -289,7 +285,8 @@ impl Tunnel {
 
         tracing::debug!(%local_idx, %remote_idx, "Sending handshake_response");
 
-        self.queue_event(Event::HandshakeResponse(HandshakeResponseMessage(packet)));
+        self.events
+            .push(Event::HandshakeResponse(HandshakeResponseMessage(packet)));
 
         Ok(())
     }
@@ -315,7 +312,7 @@ impl Tunnel {
         self.sessions.set_current(local_idx);
 
         // The keepalive confirms the session to the responder.
-        self.queue_event(Event::KeepaliveDue(Keepalive));
+        self.events.push(Event::KeepaliveDue(Keepalive));
 
         Ok(())
     }
@@ -379,26 +376,41 @@ impl Tunnel {
 
         Some(HandshakeInitiationMessage(packet))
     }
+}
 
-    /// Queues `event` for [`Tunnel::poll_event`], replacing any queued event of the same kind,
-    /// which it supersedes.
-    fn queue_event(&mut self, event: Event) {
-        let kind = std::mem::discriminant(&event);
+/// How many events are queued before the oldest is dropped.
+const MAX_QUEUED_EVENTS: usize = 16;
 
-        if let Some(i) = self.events.iter().position(|queued| {
-            queued
-                .as_ref()
-                .is_some_and(|queued| std::mem::discriminant(queued) == kind)
-        }) {
-            self.events[i] = None;
-            self.events[i..].rotate_left(1);
+/// A ring buffer of the newest [`MAX_QUEUED_EVENTS`] events.
+#[derive(Default)]
+struct EventQueue {
+    slots: [Option<Event>; MAX_QUEUED_EVENTS],
+    head: usize,
+    len: usize,
+}
+
+impl EventQueue {
+    /// Appends `event`, overwriting the oldest one when full.
+    fn push(&mut self, event: Event) {
+        self.slots[(self.head + self.len) % MAX_QUEUED_EVENTS] = Some(event);
+
+        if self.len == MAX_QUEUED_EVENTS {
+            self.head = (self.head + 1) % MAX_QUEUED_EVENTS;
+        } else {
+            self.len += 1;
+        }
+    }
+
+    /// Removes the oldest event.
+    fn pop(&mut self) -> Option<Event> {
+        if self.len == 0 {
+            return None;
         }
 
-        let free = self
-            .events
-            .iter_mut()
-            .find(|slot| slot.is_none())
-            .expect("there is a slot for every kind of event");
-        *free = Some(event);
+        let event = self.slots[self.head].take();
+        self.head = (self.head + 1) % MAX_QUEUED_EVENTS;
+        self.len -= 1;
+
+        event
     }
 }

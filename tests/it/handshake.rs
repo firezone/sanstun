@@ -115,20 +115,20 @@ fn delayed_response_to_a_superseded_initiation_is_accepted() {
 }
 
 /// Initiations arriving faster than the responder's events are drained leave
-/// only the response to the newest one queued.
+/// only the responses to the 16 newest ones queued.
 #[test]
-fn only_the_response_to_the_newest_initiation_is_queued() {
+fn only_the_16_newest_events_are_queued() {
     let mut sim = Sim::new();
 
-    let mut newest_sender_idx = None;
-    for _ in 0..5 {
+    let mut sender_indices = Vec::new();
+    for _ in 0..20 {
         let init = sim.force_handshake_initiation(A);
         let now = sim.now;
         let packet = sim.receive(B, &init);
         let Packet::HandshakeInit(p) = &packet else {
             panic!("expected a handshake initiation, got {packet:?}");
         };
-        newest_sender_idx = Some(p.sender_idx());
+        sender_indices.push(p.sender_idx());
         sim.tunn_mut(B).decapsulate(packet, now).unwrap();
         sim.suspend(TICK);
     }
@@ -139,13 +139,16 @@ fn only_the_response_to_the_newest_initiation_is_queued() {
             other => panic!("expected a handshake response, got {other:?}"),
         })
         .collect::<Vec<_>>();
-    let [response] = responses.as_slice() else {
-        panic!("expected one handshake response, got {}", responses.len());
-    };
-    let Packet::HandshakeResponse(response) = sim.receive(A, response) else {
-        panic!("expected a handshake response");
-    };
-    assert_eq!(Some(response.receiver_idx()), newest_sender_idx);
+    assert_eq!(responses.len(), 16);
+    for (response, sender_idx) in [
+        (responses.first(), sender_indices[4]),
+        (responses.last(), sender_indices[19]),
+    ] {
+        let Packet::HandshakeResponse(response) = sim.receive(A, response.unwrap()) else {
+            panic!("expected a handshake response");
+        };
+        assert_eq!(response.receiver_idx(), sender_idx);
+    }
 }
 
 #[test]

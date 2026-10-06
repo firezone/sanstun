@@ -298,7 +298,7 @@ impl Tunnel {
 
         if self.timers.take_due_handshake(now).is_some() {
             if let Some(initiation) = self.format_handshake_initiation(true, now) {
-                self.queue_event(Event::HandshakeInitiation(initiation));
+                self.events.push(Event::HandshakeInitiation(initiation));
             }
             return;
         }
@@ -471,16 +471,13 @@ impl Tunnel {
         // A keepalive is only ever sent on an established session; there is no need to queue it
         // or start a handshake.
         if keepalive_required && self.sending_session(now).is_some() {
-            self.queue_event(Event::KeepaliveDue(Keepalive));
+            self.events.push(Event::KeepaliveDue(Keepalive));
         }
     }
 
     /// Returns the next [`Event`] queued by [`Tunnel::handle_timeout`] or [`Tunnel::decapsulate`].
     pub fn poll_event(&mut self) -> Option<Event> {
-        let event = self.events[0].take()?;
-        self.events.rotate_left(1);
-
-        Some(event)
+        self.events.pop()
     }
 
     /// Returns the [`Instant`] at which [`Tunnel::handle_timeout`] next needs to
@@ -580,7 +577,7 @@ impl Tunnel {
     fn expire(&mut self, now: Instant) {
         self.handshake.set_expired();
         self.clear_all(now);
-        self.queue_event(Event::ConnectionExpired);
+        self.events.push(Event::ConnectionExpired);
     }
 
     pub fn time_since_last_handshake(&self, now: Instant) -> Option<Duration> {
