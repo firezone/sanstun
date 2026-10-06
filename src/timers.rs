@@ -64,7 +64,7 @@ pub(crate) struct Timers {
     ///
     /// If `Some`, the new-handshake deadline is derived from it on demand.
     first_data_sent_without_reply: Option<Instant>,
-    persistent_keepalive: usize,
+    persistent_keepalive: Option<Duration>,
     /// When we should sent a scheduled handshake.
     send_handshake_at: Option<Instant>,
 
@@ -74,12 +74,12 @@ pub(crate) struct Timers {
 }
 
 impl Timers {
-    pub(super) fn new(persistent_keepalive: Option<u16>, now: Instant) -> Timers {
+    pub(super) fn new(persistent_keepalive: Option<Duration>, now: Instant) -> Timers {
         Timers {
             timers: [now; TimerName::Top as usize],
             last_data_received_without_reply: Default::default(),
             first_data_sent_without_reply: Default::default(),
-            persistent_keepalive: usize::from(persistent_keepalive.unwrap_or(0)),
+            persistent_keepalive,
             send_handshake_at: None,
             rekey_attempt_time: REKEY_ATTEMPT_TIME,
             keepalive_timeout: KEEPALIVE_TIMEOUT,
@@ -115,15 +115,9 @@ impl Timers {
         Some(last_data_received_without_reply + self.keepalive_timeout)
     }
 
-    /// If configured, we send a keepalive every `persistent_keepalive` seconds.
+    /// If configured, we send a keepalive every `persistent_keepalive`.
     pub(crate) fn next_persistent_keepalive(&self) -> Option<Instant> {
-        let keepalive = Duration::from_secs(self.persistent_keepalive as u64);
-
-        if keepalive.is_zero() {
-            return None;
-        }
-
-        Some(self[TimePersistentKeepalive] + keepalive)
+        Some(self[TimePersistentKeepalive] + self.persistent_keepalive?)
     }
 
     pub(crate) fn clear(&mut self, now: Instant) {

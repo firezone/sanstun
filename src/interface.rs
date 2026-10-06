@@ -118,7 +118,9 @@ impl Interface {
             self.static_private.clone(),
             peer_static_public,
             preshared_key,
-            persistent_keepalive,
+            persistent_keepalive
+                .filter(|secs| *secs != 0)
+                .map(|secs| Duration::from_secs(secs.into())),
             index,
             index_lease,
             &mut self.rng,

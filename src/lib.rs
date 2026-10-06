@@ -113,7 +113,7 @@ impl Tunnel {
         static_private: StaticSecret,
         peer_static_public: PublicKey,
         preshared_key: Option<StaticSecret>,
-        persistent_keepalive: Option<u16>,
+        persistent_keepalive: Option<Duration>,
         index: Index,
         index_lease: Arc<()>,
         rng: &mut impl CryptoRng,
