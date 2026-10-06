@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::fmt;
+use std::sync::{Arc, Weak};
 
 use rand::RngExt;
 use rand::rngs::StdRng;
@@ -46,25 +48,68 @@ impl Index {
     }
 }
 
+/// Hands out the indices of new tunnels, skipping those of tunnels that are still alive.
+pub(crate) struct TunnelIndices {
+    lfsr: IndexLfsr,
+    in_use: HashMap<u32, Weak<()>>,
+}
+
+impl TunnelIndices {
+    pub(crate) fn new(rng: &mut StdRng) -> Self {
+        TunnelIndices {
+            lfsr: IndexLfsr::new(rng),
+            in_use: HashMap::new(),
+        }
+    }
+
+    /// The index of a new tunnel, which stays reserved until the returned lease is dropped.
+    pub(crate) fn next(&mut self) -> (Index, Arc<()>) {
+        if self.in_use.len() == self.in_use.capacity() {
+            for _ in self
+                .in_use
+                .extract_if(|_, tunnel| tunnel.strong_count() == 0)
+            {}
+        }
+
+        loop {
+            let index = self.lfsr.next();
+
+            if self
+                .in_use
+                .get(&index.global())
+                .is_some_and(|tunnel| tunnel.strong_count() > 0)
+            {
+                continue;
+            }
+
+            let lease = Arc::new(());
+            self.in_use.insert(index.global(), Arc::downgrade(&lease));
+
+            return (index, lease);
+        }
+    }
+}
+
 /// Hands out the global part of local indices in a pseudorandom order, so that they reveal
 /// neither how many tunnels exist nor which index comes next.
 ///
 /// A linear-feedback shift register visits every non-zero 24-bit value once before repeating, so
 /// indices only repeat after 2^24 - 1 tunnels.
-pub(crate) struct IndexLfsr {
+#[derive(Clone)]
+struct IndexLfsr {
     lfsr: u32,
     mask: u32,
 }
 
 impl IndexLfsr {
-    pub(crate) fn new(rng: &mut StdRng) -> Self {
+    fn new(rng: &mut StdRng) -> Self {
         IndexLfsr {
             lfsr: random_index(rng),
             mask: random_index(rng),
         }
     }
 
-    pub(crate) fn next(&mut self) -> Index {
+    fn next(&mut self) -> Index {
         const LFSR_POLY: u32 = 0xd80000;
 
         let value = self.lfsr - 1;
@@ -111,6 +156,22 @@ mod tests {
             assert!(!seen[global as usize], "{global} handed out twice");
             seen[global as usize] = true;
         }
+    }
+
+    #[test]
+    fn tunnel_indices_skip_live_tunnels_and_reuse_dropped_ones() {
+        use rand::SeedableRng as _;
+
+        let mut indices = TunnelIndices::new(&mut StdRng::from_seed([1; 32]));
+        let start = indices.lfsr.clone();
+        let (taken, lease) = indices.next();
+
+        indices.lfsr = start.clone();
+        assert_ne!(indices.next().0, taken);
+
+        drop(lease);
+        indices.lfsr = start;
+        assert_eq!(indices.next().0, taken);
     }
 
     #[test]

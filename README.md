@@ -12,7 +12,7 @@ It features a re-designed API and internals that are tuned for maximising throug
 
 - Fully sans-IO, including time and RNG seeds
 - No internal buffering
-- No internal locks or atomics
+- No locks or atomic counters in the protocol state
 - Multi-core friendly API: Encapsulating and decapsulating packets performs only the minimal book-keeping necessary.
   The actual crypto operations can be deferred to other threads and thus parallelized when processing packets in batches.
 
