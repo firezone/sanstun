@@ -13,7 +13,6 @@ mod tai64n;
 mod timers;
 
 pub use errors::Error;
-use index::Index;
 pub use interface::{Interface, Received};
 pub use message::{
     CookieReplyMessage, DataMessage, HandshakeInit, HandshakeInitiationMessage, HandshakeResponse,
@@ -23,6 +22,7 @@ pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
 pub use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::handshake::Handshake;
+use crate::index::Index;
 use crate::message::DATA_OVERHEAD_SZ;
 use crate::ring_buffer::RingBuffer;
 use crate::session::Sessions;
