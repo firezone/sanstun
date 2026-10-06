@@ -1,11 +1,6 @@
 //! <https://www.wireguard.com/papers/wireguard.pdf#page=14>
 
-use crate::session::Role;
-use crate::{Event, Keepalive, Tunnel};
-use std::iter;
 use std::ops::{Index, IndexMut};
-
-use rand::RngExt;
 use std::time::{Duration, Instant};
 
 pub(crate) const REKEY_AFTER_TIME: Duration = Duration::from_secs(120);
@@ -14,7 +9,7 @@ const REKEY_ATTEMPT_TIME: Duration = Duration::from_secs(90);
 const REKEY_TIMEOUT: Duration = Duration::from_secs(5);
 const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const COOKIE_EXPIRATION_TIME: Duration = Duration::from_secs(120);
-const MAX_JITTER: Duration = Duration::from_millis(333);
+pub(crate) const MAX_JITTER: Duration = Duration::from_millis(333);
 pub(crate) const REKEY_AFTER_MESSAGES: u64 = 1 << 60;
 /// Counters at or above this are neither sent nor accepted, so the replay window's arithmetic
 /// never overflows.
@@ -69,8 +64,8 @@ pub(crate) struct Timers {
     send_handshake_at: Option<Instant>,
 
     rekey_attempt_time: Duration,
-    keepalive_timeout: Duration,
-    rekey_timeout: Duration,
+    pub(crate) keepalive_timeout: Duration,
+    pub(crate) rekey_timeout: Duration,
 }
 
 impl Timers {
@@ -155,15 +150,15 @@ impl Timers {
     }
 
     /// The [`Instant`] at which an unanswered handshake initiation sent at `sent_at` is retried.
-    fn rekey_timeout(&self, sent_at: Instant) -> Instant {
+    pub(crate) fn rekey_timeout(&self, sent_at: Instant) -> Instant {
         sent_at + self.rekey_timeout
     }
 
-    fn scheduled_handshake(&self) -> Option<Instant> {
+    pub(crate) fn scheduled_handshake(&self) -> Option<Instant> {
         self.send_handshake_at
     }
 
-    fn schedule_handshake(&mut self, at: Instant) {
+    pub(crate) fn schedule_handshake(&mut self, at: Instant) {
         let existing = self.send_handshake_at.replace(at);
         debug_assert!(
             existing.is_none(),
@@ -172,11 +167,11 @@ impl Timers {
     }
 
     /// Clears the scheduled handshake if it is due at `now`.
-    fn take_due_handshake(&mut self, now: Instant) -> Option<Instant> {
+    pub(crate) fn take_due_handshake(&mut self, now: Instant) -> Option<Instant> {
         self.send_handshake_at.take_if(|at| now >= *at)
     }
 
-    fn consume_passive_keepalive(&mut self) {
+    pub(crate) fn consume_passive_keepalive(&mut self) {
         self.last_data_received_without_reply = None;
     }
 
@@ -222,324 +217,5 @@ impl Index<TimerName> for Timers {
 impl IndexMut<TimerName> for Timers {
     fn index_mut(&mut self, index: TimerName) -> &mut Self::Output {
         &mut self.timers[index as usize]
-    }
-}
-
-impl Tunnel {
-    /// Drops all sessions and resets the timers to `now`.
-    fn clear_all(&mut self, now: Instant) {
-        self.sessions.clear();
-        self.timers.clear(now);
-    }
-
-    /// The [`Instant`] at which we need to retransmit our handshake initiation,
-    /// together with the local index of the in-flight handshake.
-    ///
-    /// Returns `None` unless we are currently the initiator of an in-progress
-    /// handshake.
-    fn handshake_rekey_timeout(&self) -> Option<(Instant, super::Index)> {
-        let (time_sent, local_index) = self.handshake.in_flight_initiation()?;
-
-        Some((self.timers.rekey_timeout(time_sent), local_index))
-    }
-
-    /// Advances the timers to `now`, queuing whatever is due for [`Tunnel::poll_event`].
-    pub fn handle_timeout(&mut self, now: Instant) {
-        self.timers.tick(TimeLastUpdate, now);
-
-        if self.timers.take_due_handshake(now).is_some() {
-            if let Some(initiation) = self.format_handshake_initiation(true, now) {
-                self.events
-                    .push_back(Event::HandshakeInitiation(initiation));
-            }
-            return;
-        }
-
-        if let Some(scheduled_handshake_at) = self.timers.scheduled_handshake() {
-            debug_assert!(
-                scheduled_handshake_at
-                    .checked_duration_since(now)
-                    .is_some_and(|remaining| remaining <= MAX_JITTER),
-                "Should never suspend for longer than jitter duration"
-            );
-
-            // We have a handshake scheduled but the deadline is not expired yet.
-            // Don't do anything to avoid repeated printing of logs.
-            // The below logic would still evaluate that we need to send another handshake.
-            return;
-        }
-
-        let mut handshake_initiation_required = false;
-        let mut keepalive_required = false;
-
-        // Both peers derive a session's lifetime from the same handshake, so the remote
-        // discards it at the same moment we do. A session that carried data was due a
-        // re-key at REKEY_AFTER_TIME, so reaching its expiry means that re-key never
-        // landed and there is no shared state left to reach.
-        if let Some(expired_current) = self.sessions.expire(now) {
-            if expired_current.sent_data() {
-                tracing::debug!("CONNECTION_EXPIRED(REJECT_AFTER_TIME)");
-                self.expire(now);
-                return;
-            }
-
-            // In case our session expired, create a new one iff we initiated it.
-            if expired_current.role() == Role::Initiator && !self.handshake.is_in_progress() {
-                handshake_initiation_required = true;
-            }
-        }
-
-        if self.handshake.is_expired() {
-            return;
-        }
-
-        // Clear cookie after COOKIE_EXPIRATION_TIME
-        if self
-            .handshake
-            .cookie_expiration()
-            .is_some_and(|deadline| now >= deadline)
-        {
-            tracing::debug!("COOKIE_EXPIRED");
-            self.handshake.clear_cookie();
-        }
-
-        // Handshake state and sessions are discarded after (REJECT_AFTER_TIME * 3) ms
-        // if no new keys have been exchanged. Handshake secrets are zeroized on drop,
-        // session keys are only dropped.
-        if now >= self.timers.reject_after_time() {
-            tracing::debug!("CONNECTION_EXPIRED(REJECT_AFTER_TIME * 3)");
-            self.expire(now);
-            return;
-        }
-
-        if let Some((rekey_timeout, local_idx)) = self.handshake_rekey_timeout() {
-            // Handshake Initiation Retransmission
-            if now >= self.timers.rekey_attempt_time() {
-                // After REKEY_ATTEMPT_TIME ms of trying to initiate a new handshake,
-                // the retries give up and cease, and clear all existing packets queued
-                // up to be sent. If a packet is explicitly queued up to be sent, then
-                // this timer is reset.
-                tracing::debug!(%local_idx, "CONNECTION_EXPIRED(REKEY_ATTEMPT_TIME)");
-                self.expire(now);
-                return;
-            }
-
-            if now >= rekey_timeout {
-                // A handshake initiation is retried after REKEY_TIMEOUT + jitter ms,
-                // if a response has not been received, where jitter is some random
-                // value between 0 and 333 ms (`MAX_JITTER`).
-                tracing::debug!(%local_idx, "HANDSHAKE(REKEY_TIMEOUT)");
-                handshake_initiation_required = true;
-            }
-        } else {
-            // After sending a packet, if the sender was the original initiator
-            // of the handshake and if the current session key is REKEY_AFTER_TIME
-            // ms old, we initiate a new handshake. If the sender was the original
-            // responder of the handshake, it does not re-initiate a new handshake
-            // after REKEY_AFTER_TIME ms like the original initiator does.
-            if self
-                .rekey_after_time_on_send()
-                .is_some_and(|deadline| now >= deadline)
-            {
-                tracing::debug!("HANDSHAKE(REKEY_AFTER_TIME (on send))");
-                handshake_initiation_required = true;
-            }
-
-            if self
-                .rekey_after_messages()
-                .is_some_and(|deadline| now >= deadline)
-            {
-                tracing::debug!("HANDSHAKE(REKEY_AFTER_MESSAGES)");
-                handshake_initiation_required = true;
-            }
-
-            // After receiving a packet, if the receiver was the original initiator
-            // of the handshake and if the current session key is REJECT_AFTER_TIME
-            // - KEEPALIVE_TIMEOUT - REKEY_TIMEOUT ms old, we initiate a new
-            // handshake.
-            if self
-                .reject_after_time_on_receive()
-                .is_some_and(|deadline| now >= deadline)
-            {
-                tracing::debug!(
-                    "HANDSHAKE(REJECT_AFTER_TIME - KEEPALIVE_TIMEOUT - REKEY_TIMEOUT (on receive))"
-                );
-                handshake_initiation_required = true;
-            }
-
-            // If we have sent a packet to a given peer but have not received a
-            // packet after from that peer for (KEEPALIVE + REKEY_TIMEOUT) ms,
-            // we initiate a new handshake.
-            if self
-                .timers
-                .rekey_after_time_without_response()
-                .is_some_and(|deadline| now >= deadline)
-            {
-                tracing::debug!("HANDSHAKE(KEEPALIVE + REKEY_TIMEOUT)");
-                handshake_initiation_required = true;
-            }
-
-            if !handshake_initiation_required {
-                // If a packet has been received from a given peer, but we have not sent one back
-                // to the given peer in KEEPALIVE ms, we send an empty packet.
-                if self
-                    .timers
-                    .keepalive_after_time_without_send()
-                    .is_some_and(|deadline| now >= deadline)
-                {
-                    tracing::debug!("KEEPALIVE(KEEPALIVE_TIMEOUT)");
-                    // Consume the deadline now; the send below may fail and nothing else
-                    // would clear it.
-                    self.timers.consume_passive_keepalive();
-                    keepalive_required = true;
-                }
-
-                // Persistent KEEPALIVE
-                if self
-                    .timers
-                    .next_persistent_keepalive()
-                    .is_some_and(|deadline| now >= deadline)
-                {
-                    tracing::debug!("KEEPALIVE(PERSISTENT_KEEPALIVE)");
-                    self.timers.tick(TimePersistentKeepalive, now);
-                    keepalive_required = true;
-                }
-            }
-        }
-
-        if handshake_initiation_required {
-            let jitter = self.rng.random_range(Duration::ZERO..=MAX_JITTER);
-
-            self.timers.schedule_handshake(now + jitter);
-
-            tracing::debug!(?jitter, "Scheduling new handshake");
-
-            return;
-        }
-
-        // A keepalive is only ever sent on an established session; there is no need to queue it
-        // or start a handshake.
-        if keepalive_required && self.sending_session(now).is_some() {
-            self.events.push_back(Event::KeepaliveDue(Keepalive));
-        }
-    }
-
-    /// Returns the next [`Event`] queued by [`Tunnel::handle_timeout`] or [`Tunnel::decapsulate`].
-    pub fn poll_event(&mut self) -> Option<Event> {
-        self.events.pop_front()
-    }
-
-    /// Returns the [`Instant`] at which [`Tunnel::handle_timeout`] next needs to
-    /// be called, together with a human-readable reason for debugging.
-    ///
-    /// Calling it earlier than the given [`Instant`] is safe but unlikely to
-    /// have any effect. Driving the state machine by repeatedly polling at the
-    /// returned [`Instant`] is sufficient: there is no need to call
-    /// [`Tunnel::handle_timeout`] on a fixed interval.
-    pub fn poll_timeout(&self) -> Option<(Instant, &'static str)> {
-        let (next, reason) = self.next_deadline()?;
-        let last_update = self.timers[TimeLastUpdate];
-
-        // Never announce an [`Instant`] in the past: a deadline may already have
-        // elapsed by the time the caller polls us.
-        Some((next.max(last_update), reason))
-    }
-
-    fn next_deadline(&self) -> Option<(Instant, &'static str)> {
-        // Mimic `handle_timeout`: if we have a handshake scheduled, no other timer matters.
-        if let Some(scheduled_handshake) = self.timers.scheduled_handshake() {
-            return Some((scheduled_handshake, "scheduled handshake"));
-        }
-
-        let common_timers = iter::empty()
-            .chain(
-                self.sessions
-                    .next_expiry()
-                    .map(|instant| (instant, "next expired session")),
-            )
-            .chain(
-                self.handshake
-                    .cookie_expiration()
-                    .map(|instant| (instant, "cookie expiration")),
-            )
-            .chain(iter::once((
-                self.timers.reject_after_time(),
-                "reject-after-time",
-            )));
-
-        if let Some((rekey_timeout, _)) = self.handshake_rekey_timeout() {
-            // While a handshake is in progress, only the handshake timers matter.
-            common_timers
-                .chain(iter::once((rekey_timeout, "rekey-timeout")))
-                .chain(iter::once((
-                    self.timers.rekey_attempt_time(),
-                    "rekey-attempt",
-                )))
-                .min_by_key(|(instant, _)| *instant)
-        } else {
-            // Persistent keep-alive only makes sense if the current session is active.
-            let persistent_keepalive = self
-                .sessions
-                .current()
-                .and_then(|_| self.timers.next_persistent_keepalive());
-
-            common_timers
-                .chain(
-                    self.rekey_after_time_on_send()
-                        .map(|instant| (instant, "rekey-after-time (on send)")),
-                )
-                .chain(
-                    self.rekey_after_messages()
-                        .map(|instant| (instant, "rekey-after-messages")),
-                )
-                .chain(
-                    self.reject_after_time_on_receive()
-                        .map(|instant| (instant, "reject-after-time (on receive)")),
-                )
-                .chain(
-                    self.timers
-                        .rekey_after_time_without_response()
-                        .map(|instant| (instant, "rekey-after-time (without response)")),
-                )
-                .chain(
-                    self.timers
-                        .keepalive_after_time_without_send()
-                        .map(|instant| (instant, "keepalive-after-time (without send)")),
-                )
-                .chain(persistent_keepalive.map(|instant| (instant, "persistent keep-alive")))
-                .min_by_key(|(instant, _)| *instant)
-        }
-    }
-
-    /// Either peer starts a new handshake once the current session has sent
-    /// `REKEY_AFTER_MESSAGES`; that became due with the last packet sent.
-    fn rekey_after_messages(&self) -> Option<Instant> {
-        self.sessions
-            .current()
-            .filter(|s| s.rekey_after_messages_reached())?;
-
-        Some(self.timers[TimeLastPacketSent])
-    }
-
-    fn rekey_after_time_on_send(&self) -> Option<Instant> {
-        self.sessions.current()?.rekey_after_time_on_send()
-    }
-
-    fn reject_after_time_on_receive(&self) -> Option<Instant> {
-        self.sessions
-            .current()?
-            .reject_after_time_on_receive(self.timers.keepalive_timeout, self.timers.rekey_timeout)
-    }
-
-    fn expire(&mut self, now: Instant) {
-        self.handshake.set_expired();
-        self.clear_all(now);
-        self.events.push_back(Event::ConnectionExpired);
-    }
-
-    pub fn time_since_last_handshake(&self, now: Instant) -> Option<Duration> {
-        let current = self.sessions.current()?;
-
-        Some(now.duration_since(current.established_at()))
     }
 }
