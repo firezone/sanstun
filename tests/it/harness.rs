@@ -505,6 +505,16 @@ impl Sim {
     /// Run a datagram through the [`Interface`] of `to`, as if sent by its peer.
     pub fn try_receive<'a>(&mut self, to: Peer, datagram: &'a [u8]) -> Result<Received<'a>, Error> {
         let src = self.node(to.other()).addr;
+        self.try_receive_from(to, datagram, src)
+    }
+
+    /// Run a datagram through the [`Interface`] of `to`, as if sent from `src`.
+    pub fn try_receive_from<'a>(
+        &mut self,
+        to: Peer,
+        datagram: &'a [u8],
+        src: SocketAddr,
+    ) -> Result<Received<'a>, Error> {
         let now = self.now;
         self.node_mut(to).interface.receive(src, datagram, now)
     }

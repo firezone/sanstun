@@ -15,6 +15,7 @@ pub enum Error {
     NoCurrentSession,
     EmptyPlaintext,
     LowOrderPoint,
+    RateLimited,
 }
 
 impl Display for Error {
@@ -60,6 +61,10 @@ impl Display for Error {
             Error::LowOrderPoint => write!(
                 f,
                 "public key is a low-order point, so the X25519 result is all zeros"
+            ),
+            Error::RateLimited => write!(
+                f,
+                "too many handshake messages from this source while under load"
             ),
         }
     }

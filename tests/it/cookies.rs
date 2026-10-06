@@ -8,6 +8,7 @@ use crate::harness::{
     Peer::B, Sim, classify, secs,
 };
 use sanstun::{Error, Received};
+use std::net::SocketAddr;
 use std::time::Duration;
 
 #[test]
@@ -157,6 +158,106 @@ fn cookie_reply_out_of_the_blue_is_rejected() {
     let error = sim.deliver(B, &cookie_reply).expect_err();
 
     assert!(matches!(error, Error::UnexpectedPacket));
+}
+
+/// Under load, a source with a valid cookie gets a burst of 5 handshake
+/// messages before further ones are rejected, ahead of any Diffie-Hellman.
+#[test]
+fn valid_cookies_are_rate_limited_per_source() {
+    let mut sim = Sim::builder().responder_under_load().build();
+    let src = addr("192.0.2.1:51820");
+    fetch_cookie(&mut sim, src);
+
+    for _ in 0..5 {
+        assert!(passes(&mut sim, src));
+    }
+    assert!(!passes(&mut sim, src));
+}
+
+/// A rate-limited source regains one handshake message every 50ms, up to the
+/// burst of 5.
+#[test]
+fn rate_limited_source_regains_a_handshake_every_50ms() {
+    let mut sim = Sim::builder().responder_under_load().build();
+    let src = addr("192.0.2.1:51820");
+    exhaust(&mut sim, src);
+
+    sim.now += Duration::from_millis(50);
+    assert!(passes(&mut sim, src));
+    assert!(!passes(&mut sim, src));
+
+    sim.now += secs(1);
+    for _ in 0..5 {
+        assert!(passes(&mut sim, src));
+    }
+    assert!(!passes(&mut sim, src));
+}
+
+#[test]
+fn ipv4_sources_are_rate_limited_per_address_regardless_of_port() {
+    let mut sim = Sim::builder().responder_under_load().build();
+    exhaust(&mut sim, addr("192.0.2.1:51820"));
+
+    let other_port = addr("192.0.2.1:51821");
+    fetch_cookie(&mut sim, other_port);
+    assert!(!passes(&mut sim, other_port));
+
+    let other_address = addr("192.0.2.2:51820");
+    fetch_cookie(&mut sim, other_address);
+    assert!(passes(&mut sim, other_address));
+}
+
+#[test]
+fn ipv6_sources_are_rate_limited_per_64() {
+    let mut sim = Sim::builder().responder_under_load().build();
+    exhaust(&mut sim, addr("[2001:db8::1]:51820"));
+
+    let same_64 = addr("[2001:db8::ffff:1]:51820");
+    fetch_cookie(&mut sim, same_64);
+    assert!(!passes(&mut sim, same_64));
+
+    let other_64 = addr("[2001:db8:0:1::1]:51820");
+    fetch_cookie(&mut sim, other_64);
+    assert!(passes(&mut sim, other_64));
+}
+
+fn addr(s: &str) -> SocketAddr {
+    s.parse().unwrap()
+}
+
+/// Has `A` store the cookie that the loaded responder `B` hands out to `src`.
+#[track_caller]
+fn fetch_cookie(sim: &mut Sim, src: SocketAddr) {
+    let init = sim.force_handshake_initiation(A);
+    let result = sim.try_receive_from(B, &init, src);
+    let Ok(Received::CookieReply(reply)) = result else {
+        panic!("expected a cookie reply, got {result:?}");
+    };
+
+    sim.deliver(A, &reply).expect_consumed();
+}
+
+/// Fetches a cookie for `src` and uses up its burst.
+#[track_caller]
+fn exhaust(sim: &mut Sim, src: SocketAddr) {
+    fetch_cookie(sim, src);
+    for _ in 0..5 {
+        assert!(passes(sim, src));
+    }
+    assert!(!passes(sim, src));
+}
+
+/// Whether a handshake initiation from `A`, sent from `src`, passes the
+/// [`Interface`](sanstun::Interface) of `B` rather than being rate-limited.
+#[track_caller]
+fn passes(sim: &mut Sim, src: SocketAddr) -> bool {
+    let init = sim.force_handshake_initiation(A);
+
+    match sim.try_receive_from(B, &init, src) {
+        Ok(Received::Packet(_)) => true,
+        Err(Error::RateLimited) => false,
+        other => panic!("expected a packet or a rate limit, got {other:?}"),
+    }
 }
 
 /// A pair whose responder has just answered the 11th handshake initiation
