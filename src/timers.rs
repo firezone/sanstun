@@ -193,14 +193,33 @@ impl Timers {
     }
 
     pub(crate) fn set_rekey_attempt_time(&mut self, rekey_attempt_time: Duration) {
+        debug_assert!(
+            rekey_attempt_time <= REJECT_AFTER_TIME * 3,
+            "REKEY_ATTEMPT_TIME must be at most REJECT_AFTER_TIME * 3"
+        );
+
         self.rekey_attempt_time = rekey_attempt_time;
     }
 
     pub(crate) fn set_keepalive_timeout(&mut self, keepalive_timeout: Duration) {
+        debug_assert!(
+            keepalive_timeout
+                .checked_add(self.rekey_timeout)
+                .is_some_and(|sum| sum <= REJECT_AFTER_TIME),
+            "KEEPALIVE_TIMEOUT + REKEY_TIMEOUT must be at most REJECT_AFTER_TIME"
+        );
+
         self.keepalive_timeout = keepalive_timeout;
     }
 
     pub(crate) fn set_rekey_timeout(&mut self, rekey_timeout: Duration) {
+        debug_assert!(
+            rekey_timeout
+                .checked_add(self.keepalive_timeout)
+                .is_some_and(|sum| sum <= REJECT_AFTER_TIME),
+            "KEEPALIVE_TIMEOUT + REKEY_TIMEOUT must be at most REJECT_AFTER_TIME"
+        );
+
         self.rekey_timeout = rekey_timeout;
     }
 }

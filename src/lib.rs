@@ -153,14 +153,16 @@ impl Tunnel {
 
     /// Set the `REKEY_ATTEMPT_TIME`.
     ///
-    /// Defaults to 90s.
+    /// Defaults to 90s. Must be at most 540s (`REJECT_AFTER_TIME * 3`), after which the tunnel
+    /// expires without a new handshake anyway.
     pub fn set_rekey_attempt_time(&mut self, rekey_attempt_time: Duration) {
         self.timers.set_rekey_attempt_time(rekey_attempt_time);
     }
 
     /// Set the `KEEPALIVE_TIMEOUT`.
     ///
-    /// Defaults to 10s.
+    /// Defaults to 10s. Together with the `REKEY_TIMEOUT`, must be at most 180s
+    /// (`REJECT_AFTER_TIME`).
     pub fn set_keepalive_timeout(&mut self, keepalive_timeout: Duration) {
         self.timers.set_keepalive_timeout(keepalive_timeout);
     }
@@ -168,7 +170,8 @@ impl Tunnel {
     /// Set the `REKEY_TIMEOUT`, i.e. the interval at which an unanswered
     /// handshake initiation is retried.
     ///
-    /// Defaults to 5s.
+    /// Defaults to 5s. Together with the `KEEPALIVE_TIMEOUT`, must be at most 180s
+    /// (`REJECT_AFTER_TIME`).
     pub fn set_rekey_timeout(&mut self, rekey_timeout: Duration) {
         self.timers.set_rekey_timeout(rekey_timeout);
     }
