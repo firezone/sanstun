@@ -13,7 +13,6 @@ mod tai64n;
 mod timers;
 
 pub use errors::Error;
-pub use index::Index;
 pub use interface::{Interface, Received};
 pub use message::{
     CookieReplyMessage, DataMessage, HandshakeInit, HandshakeInitiationMessage, HandshakeResponse,
@@ -23,6 +22,7 @@ pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
 pub use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::handshake::Handshake;
+use crate::index::Index;
 use crate::message::DATA_OVERHEAD_SZ;
 use crate::ring_buffer::RingBuffer;
 use crate::session::Sessions;
@@ -113,11 +113,10 @@ impl Tunnel {
         })
     }
 
-    /// The index that the peer addresses this tunnel's messages to.
-    ///
-    /// Its [`Index::global`] part identifies the tunnel; the rest varies per session.
-    pub fn index(&self) -> Index {
-        self.index
+    /// Identifies this tunnel among those of its [`Interface`]: route a received [`Packet`] here if
+    /// its [`Packet::tunnel_id`] matches.
+    pub fn id(&self) -> u32 {
+        self.index.global()
     }
 
     pub fn remote_static_public(&self) -> PublicKey {

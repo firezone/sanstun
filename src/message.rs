@@ -1,5 +1,6 @@
 use crate::PublicKey;
 use crate::handshake::InitiatorStatic;
+use crate::index::Index;
 
 use std::ops::Deref;
 
@@ -119,6 +120,23 @@ pub enum Packet<'a> {
     HandshakeResponse(HandshakeResponse<'a>),
     PacketCookieReply(PacketCookieReply<'a>),
     PacketData(PacketData),
+}
+
+impl Packet<'_> {
+    /// The [`Tunnel::id`](crate::Tunnel::id) of the tunnel this message is addressed to.
+    ///
+    /// `None` for a handshake initiation, which is routed by
+    /// [`HandshakeInit::peer_static_public`] instead.
+    pub fn tunnel_id(&self) -> Option<u32> {
+        let receiver_idx = match self {
+            Packet::HandshakeInit(_) => return None,
+            Packet::HandshakeResponse(p) => p.receiver_idx,
+            Packet::PacketCookieReply(p) => p.receiver_idx,
+            Packet::PacketData(p) => p.receiver_idx,
+        };
+
+        Some(Index::from_peer(receiver_idx).global())
+    }
 }
 
 macro_rules! owned_message {

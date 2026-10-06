@@ -135,3 +135,14 @@ fn data_with_wrong_receiver_index_is_rejected() {
     let error = sim.deliver(B, &datagram).expect_err();
     assert!(matches!(error, Error::NoCurrentSession));
 }
+
+#[test]
+fn data_messages_name_the_receiving_tunnel() {
+    let mut sim = Sim::connected();
+    let datagram = sim.encapsulate(A, b"hello");
+
+    let packet = sim.receive(B, &datagram);
+
+    assert_eq!(packet.tunnel_id(), Some(sim.tunn(B).id()));
+    assert_ne!(sim.tunn(A).id(), sim.tunn(B).id());
+}
