@@ -7,6 +7,7 @@ mod index;
 mod interface;
 mod message;
 mod replay;
+mod ring_buffer;
 mod session;
 mod tai64n;
 mod timers;
@@ -23,6 +24,7 @@ pub use x25519_dalek::{PublicKey, StaticSecret};
 
 use crate::handshake::Handshake;
 use crate::message::DATA_OVERHEAD_SZ;
+use crate::ring_buffer::RingBuffer;
 use crate::session::Sessions;
 use crate::tai64n::TimeStamper;
 use crate::timers::{TimerName, Timers};
@@ -30,7 +32,6 @@ use crate::timers::{TimerName, Timers};
 use rand::rngs::StdRng;
 use rand::{CryptoRng, SeedableRng};
 
-use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 /// What the caller needs to do, as returned by [`Tunnel::poll_event`].
@@ -73,7 +74,7 @@ pub struct Tunnel {
     timers: timers::Timers,
     /// Source of the ephemeral keys and the handshake jitter
     rng: StdRng,
-    events: VecDeque<Event>,
+    events: RingBuffer<Event, 16>,
 }
 
 impl Tunnel {
@@ -108,7 +109,7 @@ impl Tunnel {
             sessions: Sessions::default(),
             timers: Timers::new(persistent_keepalive, now),
             rng: StdRng::from_rng(rng),
-            events: VecDeque::new(),
+            events: RingBuffer::new(),
         })
     }
 
