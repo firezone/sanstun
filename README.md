@@ -8,7 +8,7 @@ For a long time, the fork retained 100% API-compatibility with upstream to make 
 The fork at [firezone/boringtun](https://github.com/firezone/boringtun) is now deprecated in favor of `sanstun`.
 
 The `sanstun` project combines our experience of operating WireGuard in production in a sans-IO setting.
-It features a re-design API and internals that are tuned for maximising throughput.
+It features a re-designed API and internals that are tuned for maximising throughput whilst making it easy and safe to use.
 
 - Fully sans-IO, including time and RNG seeds
 - No internal buffering
