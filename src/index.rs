@@ -3,14 +3,14 @@ use std::fmt;
 use rand::RngExt;
 use rand::rngs::StdRng;
 
-/// A unique identifier for an instance of [`Tunnel`](super::Tunnel).
+/// Identifies a session of a [`Tunnel`](super::Tunnel).
 ///
-/// The top 24 bits are used as a unique, global identifier.
+/// The top 24 bits identify the tunnel.
 /// The lower 8 bits are used as a rotating session index with a given peer.
 ///
 /// This allows for ~16M unique peers and 256 sessions per peer.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub struct Index(u32);
+pub(crate) struct Index(u32);
 
 impl Index {
     pub(crate) fn new_local(idx: u32) -> Self {
@@ -19,7 +19,7 @@ impl Index {
         Self(idx << 8)
     }
 
-    pub fn from_peer(peer: u32) -> Self {
+    pub(crate) fn from_peer(peer: u32) -> Self {
         Self(peer)
     }
 
@@ -35,8 +35,9 @@ impl Index {
         self.0.to_le_bytes()
     }
 
-    pub fn global(&self) -> usize {
-        (self.0 >> 8) as usize
+    /// The part of the index that identifies the tunnel.
+    pub(crate) fn global(&self) -> u32 {
+        self.0 >> 8
     }
 
     /// The rotating session part of the index.
@@ -107,8 +108,8 @@ mod tests {
 
         for _ in 0..(1 << 24) - 1 {
             let global = lfsr.next().global();
-            assert!(!seen[global], "{global} handed out twice");
-            seen[global] = true;
+            assert!(!seen[global as usize], "{global} handed out twice");
+            seen[global as usize] = true;
         }
     }
 
