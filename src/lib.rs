@@ -66,7 +66,6 @@ pub enum Committed<B> {
 
 /// Tunnel represents a point-to-point WireGuard connection
 pub struct Tunnel {
-    index: Index,
     /// The handshake currently in progress
     handshake: handshake::Handshake,
     sessions: Sessions,
@@ -103,7 +102,6 @@ impl Tunnel {
         )?;
 
         Ok(Tunnel {
-            index,
             handshake,
             sessions: Sessions::new(index),
             timers: Timers::new(persistent_keepalive, now),
@@ -115,7 +113,7 @@ impl Tunnel {
     /// Identifies this tunnel among those of its [`Interface`]: route a received [`Packet`] here if
     /// its [`Packet::tunnel_id`] matches.
     pub fn id(&self) -> u32 {
-        self.index.global()
+        self.sessions.tunnel_id()
     }
 
     pub fn remote_static_public(&self) -> PublicKey {

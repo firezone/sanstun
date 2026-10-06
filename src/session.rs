@@ -164,6 +164,11 @@ impl Sessions {
         }
     }
 
+    /// The part of every local index that identifies the tunnel.
+    pub(crate) fn tunnel_id(&self) -> u32 {
+        self.last_index.global()
+    }
+
     /// Allocates the local index of a new session.
     ///
     /// The index never maps to the slot of the current session, so storing the new session
