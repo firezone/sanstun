@@ -55,13 +55,24 @@ pub enum Event {
 pub struct Keepalive;
 
 /// What the caller needs to do after [`Tunnel::commit_decrypted`].
-#[derive(Debug)]
 pub enum Committed<B> {
     /// The first `len` bytes of `buffer` hold the decrypted payload: an IP packet for the tunnel,
     /// possibly followed by padding, which the caller strips when parsing it.
     Data { buffer: B, len: usize },
     /// The data message was a keepalive; nothing to write.
     Keepalive,
+}
+
+impl<B> std::fmt::Debug for Committed<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Committed::Data { len, .. } => f
+                .debug_struct("Data")
+                .field("len", len)
+                .finish_non_exhaustive(),
+            Committed::Keepalive => f.write_str("Keepalive"),
+        }
+    }
 }
 
 /// Tunnel represents a point-to-point WireGuard connection
