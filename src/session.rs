@@ -186,12 +186,10 @@ impl Sessions {
         }
     }
 
-    /// Stores a new session, replacing the one in its slot, and returns its index.
-    pub(crate) fn insert(&mut self, session: Session) -> Index {
+    /// Stores a new session, replacing the one in its slot.
+    pub(crate) fn insert(&mut self, session: Session) {
         let index = session.receiving_index;
         *self.slot_mut(index) = Some(session);
-
-        index
     }
 
     /// The most recently used session, if it still exists.

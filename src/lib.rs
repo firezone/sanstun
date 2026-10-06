@@ -268,14 +268,12 @@ impl Tunnel {
 
         tracing::debug!(%remote_idx, "Received handshake_initiation",);
 
-        let (packet, session) = self.handshake.receive_handshake_initialization(
-            p,
-            self.sessions.next_index(),
-            &mut self.rng,
-            now,
-        )?;
+        let local_idx = self.sessions.next_index();
+        let (packet, session) =
+            self.handshake
+                .receive_handshake_initialization(p, local_idx, &mut self.rng, now)?;
 
-        let local_idx = self.sessions.insert(session);
+        self.sessions.insert(session);
 
         self.timers.tick(TimerName::TimeLastPacketReceived, now);
         self.timers.tick(TimerName::TimeLastPacketSent, now);
@@ -294,16 +292,17 @@ impl Tunnel {
         p: HandshakeResponse,
         now: Instant,
     ) -> Result<(), Error> {
+        let local_idx = Index::from_peer(p.receiver_idx);
+
         tracing::debug!(
-            local_idx = %Index::from_peer(p.receiver_idx),
+            %local_idx,
             remote_idx = %Index::from_peer(p.sender_idx),
             "Received handshake_response"
         );
 
         let session = self.handshake.receive_handshake_response(p, now)?;
 
-        // Store new session in ring buffer
-        let local_idx = self.sessions.insert(session);
+        self.sessions.insert(session);
 
         self.timers.tick(TimerName::TimeLastPacketReceived, now);
         self.timers.session_established(true, now); // New session established, we are the initiator
