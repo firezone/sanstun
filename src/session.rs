@@ -1,7 +1,8 @@
 use super::{
     index::Index,
     timers::{
-        REJECT_AFTER_MESSAGES, REJECT_AFTER_TIME, REKEY_AFTER_MESSAGES, SHOULD_NOT_USE_AFTER_TIME,
+        REJECT_AFTER_MESSAGES, REJECT_AFTER_TIME, REKEY_AFTER_MESSAGES, REKEY_AFTER_TIME,
+        SHOULD_NOT_USE_AFTER_TIME,
     },
 };
 use crate::crypto::nonce;
@@ -11,10 +12,13 @@ use crate::replay::ReceivingKeyCounterValidator;
 use crossbeam_utils::CachePadded;
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub(crate) struct Session {
     established_at: Instant,
+    role: Role,
+    sent_data: bool,
+    received_data: bool,
     pub(crate) receiving_index: Index,
     sending_index: Index,
     receiver: Arc<Key>,
@@ -33,6 +37,13 @@ impl std::fmt::Debug for Session {
     }
 }
 
+/// Our role in the handshake that established a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Role {
+    Initiator,
+    Responder,
+}
+
 /// The plaintext of a data message is zero-padded to a multiple of this
 const PADDING_MULTIPLE: usize = 16;
 
@@ -42,10 +53,14 @@ impl Session {
         peer_index: Index,
         receiving_key: &[u8; 32],
         sending_key: &[u8; 32],
+        role: Role,
         now: Instant,
     ) -> Session {
         Session {
             established_at: now,
+            role,
+            sent_data: false,
+            received_data: false,
             receiving_index: local_index,
             sending_index: peer_index,
             receiver: Arc::new(Key::new(LessSafeKey::new(
@@ -61,6 +76,39 @@ impl Session {
 
     pub(crate) fn established_at(&self) -> Instant {
         self.established_at
+    }
+
+    pub(crate) fn role(&self) -> Role {
+        self.role
+    }
+
+    /// Whether we sent a data message, not just keepalives, on this session.
+    pub(crate) fn sent_data(&self) -> bool {
+        self.sent_data
+    }
+
+    /// As its initiator, we start a new handshake `REKEY_AFTER_TIME` after establishing this
+    /// session, if we sent data on it.
+    pub(crate) fn rekey_after_time_on_send(&self) -> Option<Instant> {
+        if self.role != Role::Initiator || !self.sent_data {
+            return None;
+        }
+
+        Some(self.established_at + REKEY_AFTER_TIME)
+    }
+
+    /// As its initiator, we start a new handshake once this session gets close to its expiry,
+    /// if we received data on it.
+    pub(crate) fn reject_after_time_on_receive(
+        &self,
+        keepalive_timeout: Duration,
+        rekey_timeout: Duration,
+    ) -> Option<Instant> {
+        if self.role != Role::Initiator || !self.received_data {
+            return None;
+        }
+
+        Some(self.established_at + REJECT_AFTER_TIME - keepalive_timeout - rekey_timeout)
     }
 
     pub(crate) fn expires_at(&self) -> Instant {
@@ -92,18 +140,13 @@ impl Session {
 
     /// Assigns the next counter to a data message, deferring writing and encrypting it.
     pub(super) fn prepare_packet_data(&mut self) -> PendingEncapsulate {
-        debug_assert!(
-            !self.sending_counter_exhausted(),
-            "the sending key is exhausted"
-        );
-        let counter = self.sending_key_counter;
-        self.sending_key_counter += 1;
+        self.sent_data = true;
+        self.prepare_message()
+    }
 
-        PendingEncapsulate {
-            key: Arc::clone(&self.sender),
-            receiver_index: self.sending_index,
-            counter,
-        }
+    /// Assigns the next counter to a keepalive.
+    pub(super) fn prepare_keepalive(&mut self) -> PendingEncapsulate {
+        self.prepare_message()
     }
 
     /// Checks the counter of a data message, deferring its decryption.
@@ -135,8 +178,24 @@ impl Session {
         // Only an authenticated message may advance the replay window. The check is repeated
         // because a duplicate may have passed the quick check before this one was accepted.
         self.receiving_key_counter.mark_did_receive(counter)?;
+        self.received_data |= plaintext_len > 0;
 
         Ok(plaintext_len)
+    }
+
+    fn prepare_message(&mut self) -> PendingEncapsulate {
+        debug_assert!(
+            !self.sending_counter_exhausted(),
+            "the sending key is exhausted"
+        );
+        let counter = self.sending_key_counter;
+        self.sending_key_counter += 1;
+
+        PendingEncapsulate {
+            key: Arc::clone(&self.sender),
+            receiver_index: self.sending_index,
+            counter,
+        }
     }
 }
 
@@ -245,30 +304,29 @@ impl Sessions {
 
     /// Discards every session past [`REJECT_AFTER_TIME`].
     ///
-    /// Returns whether the current session was among them.
-    pub(crate) fn expire(&mut self, now: Instant) -> bool {
-        let mut current_expired = false;
+    /// Returns the current session if it was among them.
+    pub(crate) fn expire(&mut self, now: Instant) -> Option<Session> {
+        let mut expired_current = None;
 
         for maybe_session in self.slots.iter_mut() {
-            let Some(session) = maybe_session else {
+            let Some(session) = maybe_session.take_if(|session| session.expired_at(now)) else {
                 continue;
             };
 
             let is_current = self.current == session.receiving_index;
 
-            if session.expired_at(now) {
-                tracing::debug!(
-                    session = %session.receiving_index,
-                    %is_current,
-                    "SESSION_EXPIRED(REJECT_AFTER_TIME)"
-                );
-                *maybe_session = None;
+            tracing::debug!(
+                session = %session.receiving_index,
+                %is_current,
+                "SESSION_EXPIRED(REJECT_AFTER_TIME)"
+            );
 
-                current_expired |= is_current;
+            if is_current {
+                expired_current = Some(session);
             }
         }
 
-        current_expired
+        expired_current
     }
 
     /// The earliest [`Instant`] at which one of our sessions expires.
@@ -487,6 +545,7 @@ mod tests {
             Index::from_peer(0),
             &[0; 32],
             &[0; 32],
+            Role::Initiator,
             Instant::now(),
         )
     }

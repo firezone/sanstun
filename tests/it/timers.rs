@@ -136,6 +136,50 @@ fn responder_does_not_rekey_based_on_session_age() {
     assert!(sim.is_established(B));
 }
 
+/// §6.2: a peer acts in the role it holds in the session it sends on. After
+/// crossed initiations, both peers here send on the session they responded
+/// to, so neither stops at the initiator's cutoff.
+#[test]
+fn crossed_handshakes_take_the_role_of_the_session_in_use() {
+    let mut sim = Sim::new();
+
+    let init_a = sim.initiate_handshake(A);
+    let init_b = sim.initiate_handshake(B);
+    let response_from_b = sim.deliver(B, &init_a).expect_one_net();
+    let response_from_a = sim.deliver(A, &init_b).expect_one_net();
+    let keepalive_from_a = sim.deliver(A, &response_from_b).expect_one_net();
+    let keepalive_from_b = sim.deliver(B, &response_from_a).expect_one_net();
+    sim.deliver(B, &keepalive_from_a).expect_consumed();
+    sim.deliver(A, &keepalive_from_b).expect_consumed();
+
+    sim.advance(SHOULD_NOT_USE_AFTER_TIME + secs(1));
+
+    let ip_packet = ipv4_packet(b"past the initiator's cutoff");
+    let from_a = sim.encapsulate(A, &ip_packet);
+    let from_b = sim.encapsulate(B, &ip_packet);
+    assert_eq!(sim.deliver(B, &from_a).expect_one_ip(), ip_packet);
+    assert_eq!(sim.deliver(A, &from_b).expect_one_ip(), ip_packet);
+}
+
+/// §6.2: answering an initiation whose response never arrives leaves the
+/// session in use untouched, so its initiator still rekeys on schedule.
+#[test]
+fn unconfirmed_initiation_keeps_the_role_of_the_session_in_use() {
+    let mut sim = Sim::connected();
+    sim.advance(secs(1));
+    sim.send_ip(A, &ipv4_packet(b"some data"));
+    sim.advance(secs(15)); // Let the passive keepalive settle.
+    sim.cut_link();
+
+    let init = sim.initiate_handshake(B);
+    sim.deliver(A, &init).expect_one_net();
+    sim.advance(secs(105));
+
+    let inits = sim.sent_at(A, Kind::Init);
+    assert_eq!(inits.len(), 1);
+    assert_fires_at(inits[0], REKEY_AFTER_TIME);
+}
+
 /// §6.2: having *received* data on a session older than
 /// `REJECT_AFTER_TIME - KEEPALIVE_TIMEOUT - REKEY_TIMEOUT`, the initiator
 /// starts a new handshake to avoid the session dying mid-conversation.
@@ -276,11 +320,8 @@ fn responder_does_not_encrypt_on_an_expired_session_before_timers_run() {
 #[test]
 fn initiator_renews_an_expired_session_automatically() {
     let mut sim = Sim::connected();
-    sim.assert_connectivity();
-    sim.advance(secs(30));
-    sim.clear_log();
 
-    sim.advance(REJECT_AFTER_TIME - secs(20));
+    sim.advance(REJECT_AFTER_TIME + secs(10));
 
     let inits = sim.sent_at(A, Kind::Init);
     assert_eq!(inits.len(), 1);
@@ -330,6 +371,26 @@ fn tunnel_survives_a_session_a_rekey_left_unused() {
     for peer in [A, B] {
         assert!(!sim.tunn(peer).is_expired());
     }
+    sim.assert_connectivity();
+}
+
+/// Data sent on the previous session while a new one awaits confirmation was not
+/// sent on the new one, so the new session ages out like any unused one.
+#[test]
+fn data_sent_before_confirmation_does_not_count_for_the_new_session() {
+    let mut sim = Sim::connected();
+    sim.advance(secs(1));
+
+    let init = sim.initiate_handshake(A);
+    let response = sim.deliver(B, &init).expect_one_net();
+    let keepalive = sim.deliver(A, &response).expect_one_net();
+    sim.advance(secs(1));
+    sim.encapsulate(B, &ipv4_packet(b"on the previous session"));
+    sim.deliver(B, &keepalive).expect_consumed();
+
+    sim.advance(REJECT_AFTER_TIME + secs(10));
+
+    assert_eq!(sim.expirations(B), 0);
     sim.assert_connectivity();
 }
 

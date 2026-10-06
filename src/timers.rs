@@ -1,3 +1,4 @@
+use crate::session::Role;
 use crate::{Event, Keepalive, Tunnel};
 use std::iter;
 use std::ops::{Index, IndexMut};
@@ -7,7 +8,7 @@ use std::time::{Duration, Instant};
 
 // Some constants, represent time in seconds
 // https://www.wireguard.com/papers/wireguard.pdf#page=14
-const REKEY_AFTER_TIME: Duration = Duration::from_secs(120);
+pub(crate) const REKEY_AFTER_TIME: Duration = Duration::from_secs(120);
 pub(crate) const REJECT_AFTER_TIME: Duration = Duration::from_secs(180);
 const REKEY_ATTEMPT_TIME: Duration = Duration::from_secs(90);
 const REKEY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -31,8 +32,8 @@ pub(crate) const SHOULD_NOT_USE_AFTER_TIME: Duration =
 
 #[derive(Debug)]
 pub(crate) enum TimerName {
-    /// Time when last handshake was completed
-    TimeSessionEstablished,
+    /// Time the last handshake completed, whether or not its session is in use
+    TimeLastHandshakeCompleted,
     /// Time the last attempt for a new handshake began
     TimeLastHandshakeStarted,
     /// Time we last received and authenticated a packet
@@ -54,8 +55,6 @@ use self::TimerName::*;
 
 #[derive(Debug)]
 pub(crate) struct Timers {
-    /// Is the owner of the timer the initiator or the responder for the last handshake?
-    is_initiator: bool,
     timers: [Instant; TimerName::Top as usize],
     /// The last data packet we received without having sent a reply since.
     ///
@@ -77,7 +76,6 @@ pub(crate) struct Timers {
 impl Timers {
     pub(super) fn new(persistent_keepalive: Option<u16>, now: Instant) -> Timers {
         Timers {
-            is_initiator: false,
             timers: [now; TimerName::Top as usize],
             last_data_received_without_reply: Default::default(),
             first_data_sent_without_reply: Default::default(),
@@ -89,65 +87,16 @@ impl Timers {
         }
     }
 
-    fn is_initiator(&self) -> bool {
-        self.is_initiator
-    }
-
-    pub(crate) fn is_responder(&self) -> bool {
-        !self.is_initiator
-    }
-
     /// After `REJECT_AFTER_TIME * 3` without a new handshake, all ephemeral and
     /// symmetric key material is wiped and the connection is considered dead.
     pub(crate) fn reject_after_time(&self) -> Instant {
-        self[TimeSessionEstablished] + REJECT_AFTER_TIME * 3
+        self[TimeLastHandshakeCompleted] + REJECT_AFTER_TIME * 3
     }
 
     /// After `REKEY_ATTEMPT_TIME` of unsuccessfully trying to complete a
     /// handshake, we give up.
     pub(crate) fn rekey_attempt_time(&self) -> Instant {
         self[TimeLastHandshakeStarted] + self.rekey_attempt_time
-    }
-
-    /// Whether data has been sent on the current session since it was established.
-    ///
-    /// Only such a session is ever due a re-key: one that has carried nothing ages
-    /// out without [`Timers::rekey_after_time_on_send`] ever arming.
-    pub(crate) fn current_session_carried_data(&self) -> bool {
-        self[TimeLastDataPacketSent] > self[TimeSessionEstablished]
-    }
-
-    /// As the initiator, we start a new handshake `REKEY_AFTER_TIME` after
-    /// establishing a session on which we have since sent data.
-    pub(crate) fn rekey_after_time_on_send(&self) -> Option<Instant> {
-        if !self.is_initiator {
-            // If we aren't the initiator of the current session, this timer does not matter.
-            return None;
-        }
-
-        if !self.current_session_carried_data() {
-            return None;
-        }
-
-        Some(self[TimeSessionEstablished] + REKEY_AFTER_TIME)
-    }
-
-    /// As the initiator, we start a new handshake once a session on which we
-    /// have since received data gets close to its expiry.
-    pub(crate) fn reject_after_time_on_receive(&self) -> Option<Instant> {
-        if !self.is_initiator {
-            // If we aren't the initiator of the current session, this timer does not matter.
-            return None;
-        }
-
-        let session_established = self[TimeSessionEstablished];
-
-        if session_established >= self[TimeLastDataPacketReceived] {
-            // If we haven't received any data yet, this timer doesn't matter.
-            return None;
-        }
-
-        Some(session_established + REJECT_AFTER_TIME - self.keepalive_timeout - self.rekey_timeout)
     }
 
     /// If we sent data but have not heard back within `KEEPALIVE_TIMEOUT +
@@ -215,11 +164,6 @@ impl Timers {
         }
 
         self[timer_name] = now;
-    }
-
-    pub(crate) fn session_established(&mut self, is_initiator: bool, now: Instant) {
-        self.tick(TimeSessionEstablished, now);
-        self.is_initiator = is_initiator;
     }
 
     /// The [`Instant`] at which an unanswered handshake initiation sent at `sent_at` is retried.
@@ -325,18 +269,17 @@ impl Tunnel {
         // discards it at the same moment we do. A session that carried data was due a
         // re-key at REKEY_AFTER_TIME, so reaching its expiry means that re-key never
         // landed and there is no shared state left to reach.
-        if self.sessions.expire(now) && self.timers.current_session_carried_data() {
-            tracing::debug!("CONNECTION_EXPIRED(REJECT_AFTER_TIME)");
-            self.expire(now);
-            return;
-        }
+        if let Some(expired_current) = self.sessions.expire(now) {
+            if expired_current.sent_data() {
+                tracing::debug!("CONNECTION_EXPIRED(REJECT_AFTER_TIME)");
+                self.expire(now);
+                return;
+            }
 
-        // In case our session expired, create a new one iff we initiated the previous one.
-        if self.sessions.current().is_none()
-            && !self.handshake.is_in_progress()
-            && self.timers.is_initiator()
-        {
-            handshake_initiation_required = true;
+            // In case our session expired, create a new one iff we initiated it.
+            if expired_current.role() == Role::Initiator && !self.handshake.is_in_progress() {
+                handshake_initiation_required = true;
+            }
         }
 
         if self.handshake.is_expired() {
@@ -388,7 +331,6 @@ impl Tunnel {
             // responder of the handshake, it does not re-initiate a new handshake
             // after REKEY_AFTER_TIME ms like the original initiator does.
             if self
-                .timers
                 .rekey_after_time_on_send()
                 .is_some_and(|deadline| now >= deadline)
             {
@@ -409,7 +351,6 @@ impl Tunnel {
             // - KEEPALIVE_TIMEOUT - REKEY_TIMEOUT ms old, we initiate a new
             // handshake.
             if self
-                .timers
                 .reject_after_time_on_receive()
                 .is_some_and(|deadline| now >= deadline)
             {
@@ -537,8 +478,7 @@ impl Tunnel {
 
             common_timers
                 .chain(
-                    self.timers
-                        .rekey_after_time_on_send()
+                    self.rekey_after_time_on_send()
                         .map(|instant| (instant, "rekey-after-time (on send)")),
                 )
                 .chain(
@@ -546,8 +486,7 @@ impl Tunnel {
                         .map(|instant| (instant, "rekey-after-messages")),
                 )
                 .chain(
-                    self.timers
-                        .reject_after_time_on_receive()
+                    self.reject_after_time_on_receive()
                         .map(|instant| (instant, "reject-after-time (on receive)")),
                 )
                 .chain(
@@ -575,6 +514,16 @@ impl Tunnel {
         Some(self.timers[TimeLastPacketSent])
     }
 
+    fn rekey_after_time_on_send(&self) -> Option<Instant> {
+        self.sessions.current()?.rekey_after_time_on_send()
+    }
+
+    fn reject_after_time_on_receive(&self) -> Option<Instant> {
+        self.sessions
+            .current()?
+            .reject_after_time_on_receive(self.timers.keepalive_timeout, self.timers.rekey_timeout)
+    }
+
     fn expire(&mut self, now: Instant) {
         self.handshake.set_expired();
         self.clear_all(now);
@@ -582,12 +531,8 @@ impl Tunnel {
     }
 
     pub fn time_since_last_handshake(&self, now: Instant) -> Option<Duration> {
-        if self.sessions.current().is_some() {
-            let session_established_at = self.timers[TimeSessionEstablished];
+        let current = self.sessions.current()?;
 
-            Some(now.duration_since(session_established_at))
-        } else {
-            None
-        }
+        Some(now.duration_since(current.established_at()))
     }
 }
