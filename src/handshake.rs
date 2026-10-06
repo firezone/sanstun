@@ -13,10 +13,10 @@ use crate::session::{Role, Session};
 use crate::tai64n::{Tai64N, TimeStamper};
 use aead::{AeadInPlace, KeyInit as _};
 use chacha20poly1305::XChaCha20Poly1305;
-use constant_time_eq::constant_time_eq;
 use rand::rngs::StdRng;
 use std::fmt::Debug;
 use std::time::Instant;
+use subtle::ConstantTimeEq as _;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
@@ -311,9 +311,11 @@ impl Handshake {
                 },
         } = packet;
 
-        if !constant_time_eq(
-            self.params.peer_static_public.as_bytes(),
-            peer_static_public.as_bytes(),
+        if !bool::from(
+            self.params
+                .peer_static_public
+                .as_bytes()
+                .ct_eq(peer_static_public.as_bytes()),
         ) {
             return Err(Error::WrongKey);
         }

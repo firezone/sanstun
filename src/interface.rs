@@ -16,9 +16,9 @@ use std::time::{Duration, Instant};
 use aead::generic_array::GenericArray;
 use aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{Key, XChaCha20Poly1305};
-use constant_time_eq::constant_time_eq;
 use rand::rngs::StdRng;
 use rand::{CryptoRng, RngExt, SeedableRng};
+use subtle::ConstantTimeEq as _;
 use zeroize::Zeroizing;
 
 /// How long a cookie secret is used before it is replaced
@@ -216,7 +216,7 @@ impl Interface {
         let Macs { msg, mac1, mac2 } = Macs::new(message);
 
         let computed_mac1 = b2s_keyed_mac_16(&self.mac1_key, msg);
-        if !constant_time_eq(&computed_mac1[..16], mac1) {
+        if !bool::from(computed_mac1[..16].ct_eq(mac1)) {
             return Err(Error::InvalidMac);
         }
 
@@ -227,7 +227,7 @@ impl Interface {
         let cookie = self.current_cookie(src_addr, now);
         let computed_mac2 = b2s_keyed_mac_16_2(&cookie, msg, mac1);
 
-        if !constant_time_eq(&computed_mac2[..16], mac2) {
+        if !bool::from(computed_mac2[..16].ct_eq(mac2)) {
             return Ok(Some(CookieReplyMessage(
                 self.format_cookie_reply(sender_idx, cookie, mac1),
             )));

@@ -21,7 +21,7 @@ aead = "0.5.2"
 blake2 = "0.11.0"
 hmac = "0.13"
 typenum = "1.20.1"
-constant_time_eq = "0.6.0"
+subtle = "2.6.1"
 crossbeam-utils = "0.8.20"
 zeroize = "1.5.6"
 
