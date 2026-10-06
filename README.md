@@ -21,7 +21,7 @@ It features a re-designed API and internals that are tuned for maximising throug
 For a WireGuard implementation to be secure, it is not enough to just use sound & audited cryptography primitives.
 The API of `sanstun` is designed to guide you towards using it in a safe manner by enforcing many aspects through the type-system.
 For example, it is not possible to directly create a `Tunnel`.
-Instead, `Interface` serves as a factory for new tunnels and ensures their rng is seeded from a secure source.
+Instead, `Interface` serves as a factory for new tunnels and derives all key material from a `CryptoRng`.
 It is also not possible to handle inbound traffic in `sanstun` without going through a rate limiter.
 This ensures expensive crypto operations like DH cannot be triggered arbitrarily by remote peers.
 
