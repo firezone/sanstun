@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::time::{Duration, Instant};
 
+const DEFAULT_HANDSHAKE_LIMIT: u64 = 100;
+
 const PACKETS_PER_SECOND: u32 = 20;
 const PACKETS_BURSTABLE: u32 = 5;
 const PACKET_COST: Duration = Duration::from_nanos(1_000_000_000 / PACKETS_PER_SECOND as u64);
@@ -15,8 +17,15 @@ const _: () = assert!(IDLE_TIMEOUT.as_nanos() >= TOKEN_MAX.as_nanos());
 
 const MAX_SOURCES: usize = 65536;
 
-/// A token bucket per source address: IPv4 per address, IPv6 per /64.
+/// Limits the handshake messages we process.
+///
+/// Beyond a global number of messages per second we are under load, and then each source gets a
+/// token bucket: IPv4 per address, IPv6 per /64.
 pub(crate) struct RateLimiter {
+    limit: u64,
+    /// The messages counted since `window_start`
+    count: u64,
+    window_start: Instant,
     buckets: HashMap<Source, Bucket>,
     last_gc: Instant,
 }
@@ -24,9 +33,29 @@ pub(crate) struct RateLimiter {
 impl RateLimiter {
     pub(crate) fn new(now: Instant) -> Self {
         Self {
+            limit: DEFAULT_HANDSHAKE_LIMIT,
+            count: 0,
+            window_start: now,
             buckets: HashMap::new(),
             last_gc: now,
         }
+    }
+
+    pub(crate) fn set_limit(&mut self, limit: u64) {
+        self.limit = limit;
+    }
+
+    /// Counts a handshake message and whether more than the limit arrived in the current second.
+    pub(crate) fn is_under_load(&mut self, now: Instant) -> bool {
+        if now.duration_since(self.window_start) >= Duration::from_secs(1) {
+            self.count = 0;
+            self.window_start = now;
+        }
+
+        let count = self.count;
+        self.count += 1;
+
+        count >= self.limit
     }
 
     /// Whether a packet from `addr` is within its budget, taking it out of the budget if so.

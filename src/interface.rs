@@ -25,11 +25,7 @@ use zeroize::Zeroizing;
 const COOKIE_SECRET_MAX_AGE: Duration = Duration::from_secs(120);
 const COOKIE_SIZE: usize = 16;
 
-const DEFAULT_HANDSHAKE_LIMIT: u64 = 100;
 const COOKIE_NONCE_SIZE: usize = 24;
-
-/// How often should reset count in seconds
-const RESET_PERIOD: u64 = 1;
 
 type Cookie = [u8; COOKIE_SIZE];
 
@@ -48,14 +44,8 @@ pub struct Interface {
     rng: StdRng,
     mac1_key: [u8; 32],
     cookie_key: Key,
-    limit: u64,
-    /// The counter since last reset
-    count: u64,
-    /// The time the handshake count was last reset
-    last_reset: Instant,
     stamper: TimeStamper,
     indices: IndexLfsr,
-    /// Limits the handshake messages with a valid cookie per source while under load
     rate_limiter: RateLimiter,
 }
 
@@ -86,9 +76,6 @@ impl Interface {
             rng,
             mac1_key: b2s_hash(LABEL_MAC1, static_public.as_bytes()),
             cookie_key: b2s_hash(LABEL_COOKIE, static_public.as_bytes()).into(),
-            limit: DEFAULT_HANDSHAKE_LIMIT,
-            count: 0,
-            last_reset: now,
             stamper: TimeStamper::new(now, unix),
             indices,
             rate_limiter: RateLimiter::new(now),
@@ -112,7 +99,7 @@ impl Interface {
     ///
     /// Defaults to 100.
     pub fn with_handshake_limit(mut self, limit: u64) -> Self {
-        self.limit = limit;
+        self.rate_limiter.set_limit(limit);
 
         self
     }
@@ -233,12 +220,7 @@ impl Interface {
             return Err(Error::InvalidMac);
         }
 
-        // Advance the per-second window before checking it. Resetting it
-        // lazily here, on use, means callers don't need a background timer
-        // ticking once a second just to keep the counter accurate.
-        self.reset_count(now);
-
-        if !self.is_under_load() {
+        if !self.rate_limiter.is_under_load(now) {
             return Ok(None);
         }
 
@@ -256,15 +238,6 @@ impl Interface {
         }
 
         Ok(None)
-    }
-
-    /// Reset packet count once `RESET_PERIOD` has passed since the last reset
-    fn reset_count(&mut self, current_time: Instant) {
-        // The rate limit is not very accurate, but at the scale we care about it doesn't matter much
-        if current_time.duration_since(self.last_reset).as_secs() >= RESET_PERIOD {
-            self.count = 0;
-            self.last_reset = current_time;
-        }
     }
 
     /// The cookie for `addr`: MAC(responder.changing_secret_every_two_minutes, initiator.ip_address || initiator.port)
@@ -303,13 +276,6 @@ impl Interface {
 
     fn nonce(&mut self) -> [u8; COOKIE_NONCE_SIZE] {
         self.rng.random()
-    }
-
-    fn is_under_load(&mut self) -> bool {
-        let count = self.count;
-        self.count += 1;
-
-        count >= self.limit
     }
 
     fn format_cookie_reply(
