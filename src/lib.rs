@@ -4,7 +4,7 @@ mod crypto;
 mod errors;
 mod handshake;
 mod index;
-mod ingress;
+mod interface;
 mod message;
 mod replay;
 mod session;
@@ -13,7 +13,7 @@ mod timers;
 
 pub use errors::Error;
 pub use index::Index;
-pub use ingress::{Ingress, Received};
+pub use interface::{Interface, Received};
 pub use message::{
     CookieReplyMessage, DataMessage, HandshakeInit, HandshakeInitiationMessage, HandshakeResponse,
     HandshakeResponseMessage, KeepaliveMessage, Packet, PacketCookieReply, PacketData,
@@ -201,7 +201,7 @@ impl Tunnel {
         Some(session)
     }
 
-    /// Handles a message received from the network, as returned by [`Ingress::receive`].
+    /// Handles a message received from the network, as returned by [`Interface::receive`].
     ///
     /// Handshake messages and cookie replies are processed right away and return `None`; drain
     /// [`Tunnel::poll_event`] afterwards for any message to send in reply. The decryption of a

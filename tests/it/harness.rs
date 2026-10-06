@@ -15,7 +15,7 @@ use rand::rngs::StdRng;
 
 use sanstun::Error;
 use sanstun::{Committed, Decrypted, Packet, PendingDecapsulate, Tunnel};
-use sanstun::{Ingress, Received};
+use sanstun::{Interface, Received};
 use sanstun::{PublicKey, StaticSecret};
 
 // Protocol constants from the WireGuard whitepaper (§6.1, table on p. 14).
@@ -176,7 +176,7 @@ impl Outcome for Vec<Out> {
 
 struct Node {
     tunn: Tunnel,
-    ingress: Ingress,
+    interface: Interface,
     addr: SocketAddr,
     inbox: Vec<Vec<u8>>,
     errors: Vec<Error>,
@@ -223,7 +223,7 @@ impl Builder {
         self
     }
 
-    /// Give the responder an [`Ingress`] that considers it permanently under
+    /// Give the responder an [`Interface`] that considers it permanently under
     /// load, forcing the cookie mechanism (§5.3) on every handshake.
     pub fn responder_under_load(mut self) -> Self {
         self.responder_under_load = true;
@@ -253,14 +253,14 @@ impl Builder {
         } else {
             HANDSHAKE_RATE_LIMIT
         };
-        let mut ingress_a = Ingress::new(&mut StdRng::from_seed(self.seed_a), start, unix)
+        let mut interface_a = Interface::new(&mut StdRng::from_seed(self.seed_a), start, unix)
             .with_static_private(secret_a)
             .with_handshake_limit(HANDSHAKE_RATE_LIMIT);
-        let mut ingress_b = Ingress::new(&mut StdRng::from_seed(self.seed_b), start, unix)
+        let mut interface_b = Interface::new(&mut StdRng::from_seed(self.seed_b), start, unix)
             .with_static_private(secret_b)
             .with_handshake_limit(limit_b);
 
-        let a = ingress_a
+        let a = interface_a
             .new_tunnel(public_b, self.psk_a.map(StaticSecret::from), None, start)
             .expect("the test keys are valid");
 
@@ -269,7 +269,7 @@ impl Builder {
         } else {
             public_a
         };
-        let b = ingress_b
+        let b = interface_b
             .new_tunnel(
                 expected_by_b,
                 self.psk_b.map(StaticSecret::from),
@@ -284,7 +284,7 @@ impl Builder {
             nodes: [
                 Node {
                     tunn: a,
-                    ingress: ingress_a,
+                    interface: interface_a,
                     addr: "10.0.0.1:51820".parse().unwrap(),
                     inbox: Vec::new(),
                     errors: Vec::new(),
@@ -293,7 +293,7 @@ impl Builder {
                 },
                 Node {
                     tunn: b,
-                    ingress: ingress_b,
+                    interface: interface_b,
                     addr: "10.0.0.2:51820".parse().unwrap(),
                     inbox: Vec::new(),
                     errors: Vec::new(),
@@ -502,11 +502,11 @@ impl Sim {
         self.deliver_from(to, datagram, src)
     }
 
-    /// Run a datagram through the [`Ingress`] of `to`, as if sent by its peer.
+    /// Run a datagram through the [`Interface`] of `to`, as if sent by its peer.
     pub fn try_receive<'a>(&mut self, to: Peer, datagram: &'a [u8]) -> Result<Received<'a>, Error> {
         let src = self.node(to.other()).addr;
         let now = self.now;
-        self.node_mut(to).ingress.receive(src, datagram, now)
+        self.node_mut(to).interface.receive(src, datagram, now)
     }
 
     /// Like [`Sim::try_receive`], panicking unless the datagram passes.
@@ -523,7 +523,7 @@ impl Sim {
         let node = self.node_mut(to);
         let mut outs = Vec::new();
 
-        let packet = match node.ingress.receive(src, datagram, now) {
+        let packet = match node.interface.receive(src, datagram, now) {
             Ok(Received::Packet(packet)) => packet,
             Ok(Received::CookieReply(reply)) => return vec![Out::Net(reply.to_vec())],
             Err(e) => return vec![Out::Err(e)],

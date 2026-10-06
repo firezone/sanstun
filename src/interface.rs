@@ -34,10 +34,10 @@ type Cookie = [u8; COOKIE_SIZE];
 
 /// The entry point for every datagram received from the network for one static key.
 ///
-/// [`Ingress::receive`] verifies the MACs of handshake messages and applies the cookie mechanism
+/// [`Interface::receive`] verifies the MACs of handshake messages and applies the cookie mechanism
 /// under load before any expensive work, and is the only way to obtain a [`Packet`] for
 /// [`Tunnel::decapsulate`].
-pub struct Ingress {
+pub struct Interface {
     static_private: StaticSecret,
     static_public: PublicKey,
     /// The secret that cookies are derived from
@@ -56,7 +56,7 @@ pub struct Ingress {
     indices: IndexLfsr,
 }
 
-impl Ingress {
+impl Interface {
     /// Creates the entry point for datagrams addressed to a randomly generated static key.
     ///
     /// Use one instance for all [`Tunnel`]s of that key, so that the limit on handshake messages
@@ -75,7 +75,7 @@ impl Ingress {
         rng.fill(&mut cookie_secret[..]);
         let indices = IndexLfsr::new(&mut rng);
 
-        Ingress {
+        Interface {
             static_private,
             static_public,
             cookie_secret,
@@ -120,8 +120,8 @@ impl Ingress {
 
     /// Creates a [`Tunnel`] between our static key and `peer_static_public`.
     ///
-    /// The tunnel's RNG is seeded from this `Ingress`, so every tunnel derives distinct ephemeral keys.
-    /// Its [`Index`](crate::Index) comes from this `Ingress` too and only repeats after 2^24 - 1
+    /// The tunnel's RNG is seeded from this `Interface`, so every tunnel derives distinct ephemeral keys.
+    /// Its [`Index`](crate::Index) comes from this `Interface` too and only repeats after 2^24 - 1
     /// tunnels; route received messages to the tunnel whose [`Tunnel::index`] has the same
     /// [`Index::global`](crate::Index::global) part as their receiver index.
     ///
@@ -341,7 +341,7 @@ impl Ingress {
     }
 }
 
-/// What the caller needs to do after [`Ingress::receive`].
+/// What the caller needs to do after [`Interface::receive`].
 #[derive(Debug)]
 pub enum Received<'a> {
     /// Route the packet to its [`Tunnel`](crate::Tunnel) and hand it to
@@ -359,10 +359,10 @@ mod tests {
     #[test]
     fn cookies_differ_across_address_families() {
         let now = Instant::now();
-        let mut ingress = under_load(now);
+        let mut interface = under_load(now);
 
-        let v4 = ingress.current_cookie("1.2.3.4:51820".parse().unwrap(), now);
-        let v6 = ingress.current_cookie("[102:304::]:51820".parse().unwrap(), now);
+        let v4 = interface.current_cookie("1.2.3.4:51820".parse().unwrap(), now);
+        let v6 = interface.current_cookie("[102:304::]:51820".parse().unwrap(), now);
 
         assert_ne!(v4, v6);
     }
@@ -370,10 +370,10 @@ mod tests {
     #[test]
     fn cookies_differ_across_ports() {
         let now = Instant::now();
-        let mut ingress = under_load(now);
+        let mut interface = under_load(now);
 
-        let first = ingress.current_cookie("1.2.3.4:51820".parse().unwrap(), now);
-        let second = ingress.current_cookie("1.2.3.4:51821".parse().unwrap(), now);
+        let first = interface.current_cookie("1.2.3.4:51820".parse().unwrap(), now);
+        let second = interface.current_cookie("1.2.3.4:51821".parse().unwrap(), now);
 
         assert_ne!(first, second);
     }
@@ -381,14 +381,14 @@ mod tests {
     #[test]
     fn cookie_secret_rotates_every_120_seconds() {
         let start = Instant::now();
-        let mut ingress = under_load(start);
+        let mut interface = under_load(start);
         let addr = "1.2.3.4:51820".parse().unwrap();
 
-        let first = ingress.current_cookie(addr, start);
-        let before_rotation = ingress.current_cookie(addr, start + secs(119));
-        let second = ingress.current_cookie(addr, start + secs(120));
-        let before_next_rotation = ingress.current_cookie(addr, start + secs(239));
-        let third = ingress.current_cookie(addr, start + secs(240));
+        let first = interface.current_cookie(addr, start);
+        let before_rotation = interface.current_cookie(addr, start + secs(119));
+        let second = interface.current_cookie(addr, start + secs(120));
+        let before_next_rotation = interface.current_cookie(addr, start + secs(239));
+        let third = interface.current_cookie(addr, start + secs(240));
 
         assert_eq!(before_rotation, first);
         assert_ne!(second, first);
@@ -399,30 +399,30 @@ mod tests {
     #[test]
     fn mac2_from_the_previous_cookie_secret_is_rejected() {
         let start = Instant::now();
-        let mut ingress = under_load(start);
+        let mut interface = under_load(start);
         let addr = "1.2.3.4:51820".parse().unwrap();
-        let cookie = ingress.current_cookie(addr, start);
-        let init = handshake_initiation(&ingress, &cookie);
+        let cookie = interface.current_cookie(addr, start);
+        let init = handshake_initiation(&interface, &cookie);
 
-        let within = ingress.verify_macs(addr, 0, &init, start + secs(119));
-        let after = ingress.verify_macs(addr, 0, &init, start + secs(120));
+        let within = interface.verify_macs(addr, 0, &init, start + secs(119));
+        let after = interface.verify_macs(addr, 0, &init, start + secs(120));
 
         assert!(matches!(within, Ok(None)));
         assert!(matches!(after, Ok(Some(_))));
     }
 
-    fn under_load(now: Instant) -> Ingress {
-        Ingress::new(&mut StdRng::from_seed([2; 32]), now, Duration::ZERO).with_handshake_limit(0)
+    fn under_load(now: Instant) -> Interface {
+        Interface::new(&mut StdRng::from_seed([2; 32]), now, Duration::ZERO).with_handshake_limit(0)
     }
 
     /// A handshake initiation with a valid mac1 and its mac2 keyed with `cookie`.
-    fn handshake_initiation(ingress: &Ingress, cookie: &Cookie) -> [u8; HANDSHAKE_INIT_SZ] {
+    fn handshake_initiation(interface: &Interface, cookie: &Cookie) -> [u8; HANDSHAKE_INIT_SZ] {
         let mac1_off = HANDSHAKE_INIT_SZ - 32;
         let mac2_off = HANDSHAKE_INIT_SZ - 16;
         let mut init = [0u8; HANDSHAKE_INIT_SZ];
         init[0] = 1;
 
-        let mac1 = b2s_keyed_mac_16(&ingress.mac1_key, &init[..mac1_off]);
+        let mac1 = b2s_keyed_mac_16(&interface.mac1_key, &init[..mac1_off]);
         init[mac1_off..mac2_off].copy_from_slice(&mac1);
         let mac2 = b2s_keyed_mac_16(cookie, &init[..mac2_off]);
         init[mac2_off..].copy_from_slice(&mac2);

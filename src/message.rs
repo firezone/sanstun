@@ -112,7 +112,7 @@ impl PacketData {
 
 /// A message received from the network.
 ///
-/// It can only be obtained from [`Ingress::receive`](crate::Ingress::receive), which verifies it.
+/// It can only be obtained from [`Interface::receive`](crate::Interface::receive), which verifies it.
 #[derive(Debug)]
 pub enum Packet<'a> {
     HandshakeInit(HandshakeInit<'a>),

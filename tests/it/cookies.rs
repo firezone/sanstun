@@ -22,11 +22,11 @@ fn responder_under_load_replies_with_a_cookie_instead_of_a_handshake() {
     assert!(!sim.is_established(B), "no session state was created");
 }
 
-/// The [`Ingress`](sanstun::Ingress) answers an initiation without a valid
+/// The [`Interface`](sanstun::Interface) answers an initiation without a valid
 /// mac2 on its own, so the initiation never reaches the expensive handshake
 /// processing.
 #[test]
-fn ingress_replies_with_a_cookie_before_any_tunnel_is_involved() {
+fn interface_replies_with_a_cookie_before_any_tunnel_is_involved() {
     let mut sim = Sim::builder().responder_under_load().build();
 
     let init = sim.initiate_handshake(A);
@@ -42,7 +42,7 @@ fn ingress_replies_with_a_cookie_before_any_tunnel_is_involved() {
 /// mac1 is rejected before its static key is decrypted, whether or not we are
 /// under load.
 #[test]
-fn ingress_rejects_an_initiation_without_a_valid_mac1() {
+fn interface_rejects_an_initiation_without_a_valid_mac1() {
     let mut garbage = [0xa5; HANDSHAKE_INIT_SIZE];
     garbage[..4].copy_from_slice(&1u32.to_le_bytes());
 
@@ -112,7 +112,7 @@ fn expired_cookie_forces_a_new_cookie_round_trip() {
     assert_eq!(classify(&reply), Kind::CookieReply);
 }
 
-/// An `Ingress` with a limit of 10 considers itself under load beyond 10
+/// An `Interface` with a limit of 10 considers itself under load beyond 10
 /// handshake messages per second and recovers once the flood stops.
 #[test]
 fn rate_limited_tunnel_recovers_once_load_subsides() {
