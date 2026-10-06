@@ -34,9 +34,6 @@ use rand::{CryptoRng, SeedableRng};
 
 use std::time::{Duration, Instant};
 
-/// How many events are queued before the oldest is dropped.
-const MAX_QUEUED_EVENTS: usize = 16;
-
 /// What the caller needs to do, as returned by [`Tunnel::poll_event`].
 #[derive(Debug)]
 pub enum Event {
@@ -77,7 +74,7 @@ pub struct Tunnel {
     timers: timers::Timers,
     /// Source of the ephemeral keys and the handshake jitter
     rng: StdRng,
-    events: RingBuffer<Event, MAX_QUEUED_EVENTS>,
+    events: RingBuffer<Event, 16>,
 }
 
 impl Tunnel {
