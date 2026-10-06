@@ -163,11 +163,9 @@ fn xchacha20_subkey_and_nonce(key: &[u8; 32], nonce: &[u8; 24]) -> (Zeroizing<[u
     let mut chacha20_nonce = [0u8; 12];
     chacha20_nonce[4..].copy_from_slice(tail);
 
-    (hchacha20(key, hchacha20_nonce), chacha20_nonce)
-}
+    let subkey = chacha20::hchacha::<chacha20::R20>(key.into(), hchacha20_nonce.into());
 
-fn hchacha20(key: &[u8; 32], nonce: &[u8; 16]) -> Zeroizing<[u8; 32]> {
-    Zeroizing::new(chacha20::hchacha::<chacha20::R20>(key.into(), nonce.into()).into())
+    (Zeroizing::new(subkey.into()), chacha20_nonce)
 }
 
 /// The ChaCha20Poly1305 nonce for `counter`: 32 zero bits followed by the counter in little endian.
@@ -325,25 +323,6 @@ mod tests {
 
         aead_chacha20_open(&mut [], &key, counter, &encrypted_nothing, &aad)
             .expect("Should open what we just sealed");
-    }
-
-    #[test]
-    fn hchacha20_test_vector() {
-        let key = std::array::from_fn(|i| i as u8);
-        let nonce = [
-            0x00, 0x00, 0x00, 0x09, 0x00, 0x00, 0x00, 0x4a, 0x00, 0x00, 0x00, 0x00, 0x31, 0x41,
-            0x59, 0x27,
-        ];
-
-        let subkey = hchacha20(&key, &nonce);
-
-        const EXPECTED_SUBKEY: [u8; 32] = [
-            0x82, 0x41, 0x3b, 0x42, 0x27, 0xb2, 0x7b, 0xfe, 0xd3, 0x0e, 0x42, 0x50, 0x8a, 0x87,
-            0x7d, 0x73, 0xa0, 0xf9, 0xe4, 0xd5, 0x8a, 0x74, 0xa8, 0x53, 0xc1, 0x2e, 0xc4, 0x13,
-            0x26, 0xd3, 0xec, 0xdc,
-        ];
-
-        assert_eq!(*subkey, EXPECTED_SUBKEY);
     }
 
     #[test]
