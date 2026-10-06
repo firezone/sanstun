@@ -4,7 +4,7 @@ mod crypto;
 mod errors;
 mod handshake;
 mod index;
-mod ingress;
+mod interface;
 mod message;
 mod replay;
 mod session;
@@ -13,7 +13,7 @@ mod timers;
 
 pub use errors::Error;
 pub use index::Index;
-pub use ingress::{Ingress, Received};
+pub use interface::{Interface, Received};
 pub use message::{
     CookieReplyMessage, DataMessage, HandshakeInit, HandshakeInitiationMessage, HandshakeResponse,
     HandshakeResponseMessage, KeepaliveMessage, Packet, PacketCookieReply, PacketData,
@@ -24,10 +24,11 @@ pub use x25519_dalek::{PublicKey, StaticSecret};
 use crate::handshake::Handshake;
 use crate::message::DATA_OVERHEAD_SZ;
 use crate::session::Sessions;
+use crate::tai64n::TimeStamper;
 use crate::timers::{TimerName, Timers};
 
-use rand::SeedableRng;
 use rand::rngs::StdRng;
+use rand::{CryptoRng, SeedableRng};
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -64,6 +65,7 @@ pub enum Committed<B> {
 
 /// Tunnel represents a point-to-point WireGuard connection
 pub struct Tunnel {
+    index: Index,
     /// The handshake currently in progress
     handshake: handshake::Handshake,
     sessions: Sessions,
@@ -79,20 +81,16 @@ impl Tunnel {
         self.handshake.is_expired()
     }
 
-    /// Create a new tunnel using own private key and the peer public key
-    ///
-    /// `rng_seed` must come from a cryptographically secure source because key material is derived from it.
     #[expect(clippy::too_many_arguments, reason = "We don't care that much.")]
-    pub fn new(
+    pub(crate) fn new(
         static_private: StaticSecret,
         peer_static_public: PublicKey,
         preshared_key: Option<StaticSecret>,
         persistent_keepalive: Option<u16>,
         index: Index,
-        rng_seed: [u8; 32],
+        rng: &mut impl CryptoRng,
         now: Instant,
-        unix_instant: Instant,
-        unix: Duration,
+        stamper: TimeStamper,
     ) -> Result<Self, Error> {
         let static_public = PublicKey::from(&static_private);
         let handshake = Handshake::new(
@@ -101,17 +99,24 @@ impl Tunnel {
             peer_static_public,
             index,
             preshared_key,
-            unix_instant,
-            unix,
+            stamper,
         )?;
 
         Ok(Tunnel {
+            index,
             handshake,
             sessions: Sessions::default(),
             timers: Timers::new(persistent_keepalive, now),
-            rng: StdRng::from_seed(rng_seed),
+            rng: StdRng::from_rng(rng),
             events: VecDeque::new(),
         })
+    }
+
+    /// The index that the peer addresses this tunnel's messages to.
+    ///
+    /// Its [`Index::global`] part identifies the tunnel; the rest varies per session.
+    pub fn index(&self) -> Index {
+        self.index
     }
 
     pub fn remote_static_public(&self) -> PublicKey {
@@ -196,7 +201,7 @@ impl Tunnel {
         Some(session)
     }
 
-    /// Handles a message received from the network, as returned by [`Ingress::receive`].
+    /// Handles a message received from the network, as returned by [`Interface::receive`].
     ///
     /// Handshake messages and cookie replies are processed right away and return `None`; drain
     /// [`Tunnel::poll_event`] afterwards for any message to send in reply. The decryption of a

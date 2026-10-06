@@ -1,11 +1,13 @@
 use crate::crypto::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2};
 use crate::handshake::{LABEL_COOKIE, LABEL_MAC1, decrypt_initiator_static};
+use crate::index::IndexLfsr;
 use crate::message::{
     COOKIE_REPLY, COOKIE_REPLY_SZ, DATA, DATA_OVERHEAD_SZ, HANDSHAKE_INIT, HANDSHAKE_INIT_SZ,
     HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeInit, HandshakeResponse, Macs, Packet,
     PacketCookieReply, PacketData,
 };
-use crate::{CookieReplyMessage, Error, PublicKey, StaticSecret};
+use crate::tai64n::TimeStamper;
+use crate::{CookieReplyMessage, Error, PublicKey, StaticSecret, Tunnel};
 
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
@@ -15,12 +17,14 @@ use aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{Key, XChaCha20Poly1305};
 use constant_time_eq::constant_time_eq;
 use rand::rngs::StdRng;
-use rand::{RngExt, SeedableRng};
+use rand::{CryptoRng, RngExt, SeedableRng};
 use zeroize::Zeroizing;
 
 /// How long a cookie secret is used before it is replaced
 const COOKIE_SECRET_MAX_AGE: Duration = Duration::from_secs(120);
 const COOKIE_SIZE: usize = 16;
+
+const DEFAULT_HANDSHAKE_LIMIT: u64 = 100;
 const COOKIE_NONCE_SIZE: usize = 24;
 
 /// How often should reset count in seconds
@@ -30,10 +34,10 @@ type Cookie = [u8; COOKIE_SIZE];
 
 /// The entry point for every datagram received from the network for one static key.
 ///
-/// [`Ingress::receive`] verifies the MACs of handshake messages and applies the cookie mechanism
+/// [`Interface::receive`] verifies the MACs of handshake messages and applies the cookie mechanism
 /// under load before any expensive work, and is the only way to obtain a [`Packet`] for
-/// [`Tunnel::decapsulate`](crate::Tunnel::decapsulate).
-pub struct Ingress {
+/// [`Tunnel::decapsulate`].
+pub struct Interface {
     static_private: StaticSecret,
     static_public: PublicKey,
     /// The secret that cookies are derived from
@@ -48,22 +52,30 @@ pub struct Ingress {
     count: u64,
     /// The time the handshake count was last reset
     last_reset: Instant,
+    stamper: TimeStamper,
+    indices: IndexLfsr,
 }
 
-impl Ingress {
-    /// Creates the entry point for datagrams addressed to our `static_private` key.
+impl Interface {
+    /// Creates the entry point for datagrams addressed to a randomly generated static key.
     ///
-    /// Use one instance for all [`Tunnel`](crate::Tunnel)s of that key, so that `limit`
-    /// handshake messages per second apply to all of them together.
+    /// Use one instance for all [`Tunnel`]s of that key, so that the limit on handshake messages
+    /// per second applies to all of them together.
     ///
-    /// `rng_seed` must come from a cryptographically secure source because the cookie secrets are derived from it.
-    pub fn new(static_private: StaticSecret, limit: u64, rng_seed: [u8; 32], now: Instant) -> Self {
-        let mut rng = StdRng::from_seed(rng_seed);
+    /// `rng` seeds the generator that the static key, the cookie secrets, the tunnel indices and
+    /// the key material of every tunnel are derived from.
+    ///
+    /// `unix` is the time since the Unix epoch at `now`, from which the timestamps of handshake
+    /// initiations are derived.
+    pub fn new(rng: &mut impl CryptoRng, now: Instant, unix: Duration) -> Self {
+        let mut rng = StdRng::from_rng(rng);
+        let static_private = StaticSecret::from(rng.random::<[u8; 32]>());
         let static_public = PublicKey::from(&static_private);
         let mut cookie_secret = Zeroizing::new([0; 32]);
         rng.fill(&mut cookie_secret[..]);
+        let indices = IndexLfsr::new(&mut rng);
 
-        Ingress {
+        Interface {
             static_private,
             static_public,
             cookie_secret,
@@ -71,10 +83,61 @@ impl Ingress {
             rng,
             mac1_key: b2s_hash(LABEL_MAC1, static_public.as_bytes()),
             cookie_key: b2s_hash(LABEL_COOKIE, static_public.as_bytes()).into(),
-            limit,
+            limit: DEFAULT_HANDSHAKE_LIMIT,
             count: 0,
             last_reset: now,
+            stamper: TimeStamper::new(now, unix),
+            indices,
         }
+    }
+
+    /// Uses `static_private` as our static key instead of a random one.
+    pub fn with_static_private(mut self, static_private: StaticSecret) -> Self {
+        let static_public = PublicKey::from(&static_private);
+
+        self.mac1_key = b2s_hash(LABEL_MAC1, static_public.as_bytes());
+        self.cookie_key = b2s_hash(LABEL_COOKIE, static_public.as_bytes()).into();
+        self.static_private = static_private;
+        self.static_public = static_public;
+
+        self
+    }
+
+    /// Sets how many handshake messages per second are processed before the cookie mechanism
+    /// kicks in.
+    ///
+    /// Defaults to 100.
+    pub fn with_handshake_limit(mut self, limit: u64) -> Self {
+        self.limit = limit;
+
+        self
+    }
+
+    /// Our static public key.
+    pub fn static_public(&self) -> PublicKey {
+        self.static_public
+    }
+
+    /// Creates a [`Tunnel`] between our static key and `peer_static_public`.
+    ///
+    /// Fails with [`Error::LowOrderPoint`] if `peer_static_public` is a low-order point.
+    pub fn new_tunnel(
+        &mut self,
+        peer_static_public: PublicKey,
+        preshared_key: Option<StaticSecret>,
+        persistent_keepalive: Option<u16>,
+        now: Instant,
+    ) -> Result<Tunnel, Error> {
+        Tunnel::new(
+            self.static_private.clone(),
+            peer_static_public,
+            preshared_key,
+            persistent_keepalive,
+            self.indices.next(),
+            &mut self.rng,
+            now,
+            self.stamper.clone(),
+        )
     }
 
     /// Parses and verifies a datagram received from the network.
@@ -273,11 +336,11 @@ impl Ingress {
     }
 }
 
-/// What the caller needs to do after [`Ingress::receive`].
+/// What the caller needs to do after [`Interface::receive`].
 #[derive(Debug)]
 pub enum Received<'a> {
     /// Route the packet to its [`Tunnel`](crate::Tunnel) and hand it to
-    /// [`Tunnel::decapsulate`](crate::Tunnel::decapsulate).
+    /// [`Tunnel::decapsulate`].
     Packet(Packet<'a>),
     /// Send this cookie reply to the peer: we are under load and its handshake message needs
     /// a valid cookie.
@@ -291,10 +354,10 @@ mod tests {
     #[test]
     fn cookies_differ_across_address_families() {
         let now = Instant::now();
-        let mut ingress = under_load(now);
+        let mut interface = under_load(now);
 
-        let v4 = ingress.current_cookie("1.2.3.4:51820".parse().unwrap(), now);
-        let v6 = ingress.current_cookie("[102:304::]:51820".parse().unwrap(), now);
+        let v4 = interface.current_cookie("1.2.3.4:51820".parse().unwrap(), now);
+        let v6 = interface.current_cookie("[102:304::]:51820".parse().unwrap(), now);
 
         assert_ne!(v4, v6);
     }
@@ -302,10 +365,10 @@ mod tests {
     #[test]
     fn cookies_differ_across_ports() {
         let now = Instant::now();
-        let mut ingress = under_load(now);
+        let mut interface = under_load(now);
 
-        let first = ingress.current_cookie("1.2.3.4:51820".parse().unwrap(), now);
-        let second = ingress.current_cookie("1.2.3.4:51821".parse().unwrap(), now);
+        let first = interface.current_cookie("1.2.3.4:51820".parse().unwrap(), now);
+        let second = interface.current_cookie("1.2.3.4:51821".parse().unwrap(), now);
 
         assert_ne!(first, second);
     }
@@ -313,14 +376,14 @@ mod tests {
     #[test]
     fn cookie_secret_rotates_every_120_seconds() {
         let start = Instant::now();
-        let mut ingress = under_load(start);
+        let mut interface = under_load(start);
         let addr = "1.2.3.4:51820".parse().unwrap();
 
-        let first = ingress.current_cookie(addr, start);
-        let before_rotation = ingress.current_cookie(addr, start + secs(119));
-        let second = ingress.current_cookie(addr, start + secs(120));
-        let before_next_rotation = ingress.current_cookie(addr, start + secs(239));
-        let third = ingress.current_cookie(addr, start + secs(240));
+        let first = interface.current_cookie(addr, start);
+        let before_rotation = interface.current_cookie(addr, start + secs(119));
+        let second = interface.current_cookie(addr, start + secs(120));
+        let before_next_rotation = interface.current_cookie(addr, start + secs(239));
+        let third = interface.current_cookie(addr, start + secs(240));
 
         assert_eq!(before_rotation, first);
         assert_ne!(second, first);
@@ -331,30 +394,30 @@ mod tests {
     #[test]
     fn mac2_from_the_previous_cookie_secret_is_rejected() {
         let start = Instant::now();
-        let mut ingress = under_load(start);
+        let mut interface = under_load(start);
         let addr = "1.2.3.4:51820".parse().unwrap();
-        let cookie = ingress.current_cookie(addr, start);
-        let init = handshake_initiation(&ingress, &cookie);
+        let cookie = interface.current_cookie(addr, start);
+        let init = handshake_initiation(&interface, &cookie);
 
-        let within = ingress.verify_macs(addr, 0, &init, start + secs(119));
-        let after = ingress.verify_macs(addr, 0, &init, start + secs(120));
+        let within = interface.verify_macs(addr, 0, &init, start + secs(119));
+        let after = interface.verify_macs(addr, 0, &init, start + secs(120));
 
         assert!(matches!(within, Ok(None)));
         assert!(matches!(after, Ok(Some(_))));
     }
 
-    fn under_load(now: Instant) -> Ingress {
-        Ingress::new(StaticSecret::from([1; 32]), 0, [2; 32], now)
+    fn under_load(now: Instant) -> Interface {
+        Interface::new(&mut StdRng::from_seed([2; 32]), now, Duration::ZERO).with_handshake_limit(0)
     }
 
     /// A handshake initiation with a valid mac1 and its mac2 keyed with `cookie`.
-    fn handshake_initiation(ingress: &Ingress, cookie: &Cookie) -> [u8; HANDSHAKE_INIT_SZ] {
+    fn handshake_initiation(interface: &Interface, cookie: &Cookie) -> [u8; HANDSHAKE_INIT_SZ] {
         let mac1_off = HANDSHAKE_INIT_SZ - 32;
         let mac2_off = HANDSHAKE_INIT_SZ - 16;
         let mut init = [0u8; HANDSHAKE_INIT_SZ];
         init[0] = 1;
 
-        let mac1 = b2s_keyed_mac_16(&ingress.mac1_key, &init[..mac1_off]);
+        let mac1 = b2s_keyed_mac_16(&interface.mac1_key, &init[..mac1_off]);
         init[mac1_off..mac2_off].copy_from_slice(&mac1);
         let mac2 = b2s_keyed_mac_16(cookie, &init[..mac2_off]);
         init[mac2_off..].copy_from_slice(&mac2);

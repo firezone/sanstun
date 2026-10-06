@@ -16,7 +16,7 @@ use chacha20poly1305::XChaCha20Poly1305;
 use constant_time_eq::constant_time_eq;
 use rand::rngs::StdRng;
 use std::fmt::Debug;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use x25519_dalek::{PublicKey, StaticSecret};
 
 pub(crate) const LABEL_MAC1: &[u8; 8] = b"mac1----";
@@ -220,8 +220,7 @@ impl Handshake {
         peer_static_public: PublicKey,
         global_idx: Index,
         preshared_key: Option<x25519_dalek::StaticSecret>,
-        unix_instant: Instant,
-        unix: Duration,
+        stamper: TimeStamper,
     ) -> Result<Handshake, Error> {
         let params = NoiseParams::new(
             static_private,
@@ -236,7 +235,7 @@ impl Handshake {
             previous: HandshakeState::None,
             state: HandshakeState::None,
             last_handshake_timestamp: Tai64N::zero(),
-            stamper: TimeStamper::new(unix_instant, unix),
+            stamper,
             cookies: Default::default(),
         })
     }
