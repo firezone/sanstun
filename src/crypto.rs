@@ -4,6 +4,7 @@ use blake2::{Blake2s256, Blake2sMac, Digest};
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
 use typenum::U16;
 use x25519_dalek::{PublicKey, SharedSecret};
+use zeroize::Zeroizing;
 
 type HmacBlake2s = hmac::SimpleHmac<Blake2s256>;
 
@@ -17,21 +18,25 @@ pub(crate) fn b2s_hash(data1: &[u8], data2: &[u8]) -> [u8; 32] {
 
 #[inline]
 /// RFC 2401 HMAC+Blake2s, not to be confused with *keyed* Blake2s
-pub(crate) fn b2s_hmac(key: &[u8], data1: &[u8]) -> [u8; 32] {
+pub(crate) fn b2s_hmac(key: &[u8; 32], data1: &[u8]) -> Zeroizing<[u8; 32]> {
     use blake2::digest::Update;
     let mut hmac = HmacBlake2s::new_from_slice(key).unwrap();
     hmac.update(data1);
-    hmac.finalize_fixed().into()
+    let mut out = Zeroizing::new([0; 32]);
+    hmac.finalize_into((&mut *out).into());
+    out
 }
 
 #[inline]
 /// Like b2s_hmac, but chain data1 and data2 together
-pub(crate) fn b2s_hmac2(key: &[u8], data1: &[u8], data2: &[u8]) -> [u8; 32] {
+pub(crate) fn b2s_hmac2(key: &[u8; 32], data1: &[u8; 32], data2: &[u8]) -> Zeroizing<[u8; 32]> {
     use blake2::digest::Update;
     let mut hmac = HmacBlake2s::new_from_slice(key).unwrap();
     hmac.update(data1);
     hmac.update(data2);
-    hmac.finalize_fixed().into()
+    let mut out = Zeroizing::new([0; 32]);
+    hmac.finalize_into((&mut *out).into());
+    out
 }
 
 #[inline]
@@ -53,7 +58,7 @@ pub(crate) fn b2s_keyed_mac_16_2(key: &[u8], data1: &[u8], data2: &[u8]) -> [u8;
 /// This wrapper involves an extra copy and MAY BE SLOWER
 pub(crate) fn aead_chacha20_seal(
     ciphertext: &mut [u8],
-    key: &[u8],
+    key: &[u8; 32],
     counter: u64,
     data: &[u8],
     aad: &[u8],
@@ -64,7 +69,7 @@ pub(crate) fn aead_chacha20_seal(
 #[inline]
 fn aead_chacha20_seal_inner(
     ciphertext: &mut [u8],
-    key: &[u8],
+    key: &[u8; 32],
     nonce: [u8; 12],
     data: &[u8],
     aad: &[u8],
@@ -88,7 +93,7 @@ fn aead_chacha20_seal_inner(
 /// This wrapper involves an extra copy and MAY BE SLOWER
 pub(crate) fn aead_chacha20_open(
     buffer: &mut [u8],
-    key: &[u8],
+    key: &[u8; 32],
     counter: u64,
     data: &[u8],
     aad: &[u8],
@@ -101,7 +106,7 @@ pub(crate) fn aead_chacha20_open(
 #[inline]
 fn aead_chacha20_open_inner(
     buffer: &mut [u8],
-    key: &[u8],
+    key: &[u8; 32],
     nonce: [u8; 12],
     data: &[u8],
     aad: &[u8],

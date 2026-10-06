@@ -18,6 +18,7 @@ use rand::rngs::StdRng;
 use std::fmt::Debug;
 use std::time::Instant;
 use x25519_dalek::{PublicKey, StaticSecret};
+use zeroize::Zeroizing;
 
 pub(crate) const LABEL_MAC1: &[u8; 8] = b"mac1----";
 pub(crate) const LABEL_COOKIE: &[u8; 8] = b"cookie--";
@@ -58,19 +59,16 @@ impl std::fmt::Debug for NoiseParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NoiseParams")
             .field("static_public", &self.static_public)
-            .field("static_private", &"<redacted>")
             .field("peer_static_public", &self.peer_static_public)
-            .field("static_shared", &"<redacted>")
             .field("sending_mac1_key", &self.sending_mac1_key)
-            .field("preshared_key", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 struct HandshakeInitSentState {
     local_index: Index,
     hash: [u8; KEY_LEN],
-    chaining_key: [u8; KEY_LEN],
+    chaining_key: Zeroizing<[u8; KEY_LEN]>,
     ephemeral_private: x25519_dalek::ReusableSecret,
     time_sent: Instant,
 }
@@ -80,10 +78,8 @@ impl std::fmt::Debug for HandshakeInitSentState {
         f.debug_struct("HandshakeInitSentState")
             .field("local_index", &self.local_index)
             .field("hash", &self.hash)
-            .field("chaining_key", &self.chaining_key)
-            .field("ephemeral_private", &"<redacted>")
             .field("time_sent", &self.time_sent)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -126,7 +122,7 @@ struct WriteCookie {
 
 /// The responder's handshake state after decrypting the initiator's static public key.
 pub(crate) struct InitiatorStatic {
-    chaining_key: [u8; KEY_LEN],
+    chaining_key: Zeroizing<[u8; KEY_LEN]>,
     hash: [u8; KEY_LEN],
     peer_ephemeral_public: PublicKey,
     pub(crate) peer_static_public: PublicKey,
@@ -139,7 +135,7 @@ pub(crate) fn decrypt_initiator_static(
     encrypted_static: &[u8],
 ) -> Result<InitiatorStatic, Error> {
     // initiator.chaining_key = HASH(CONSTRUCTION)
-    let mut chaining_key = INITIAL_CHAIN_KEY;
+    let mut chaining_key = Zeroizing::new(INITIAL_CHAIN_KEY);
     // initiator.hash = HASH(HASH(initiator.chaining_key || IDENTIFIER) || responder.static_public)
     let mut hash = INITIAL_CHAIN_HASH;
     hash = b2s_hash(&hash, static_public.as_bytes());
@@ -176,7 +172,9 @@ pub(crate) fn decrypt_initiator_static(
 }
 
 /// Returns `(initiator.sending_key, initiator.receiving_key)` for the final chaining key.
-fn derive_transport_keys(chaining_key: &[u8; KEY_LEN]) -> ([u8; KEY_LEN], [u8; KEY_LEN]) {
+fn derive_transport_keys(
+    chaining_key: &[u8; KEY_LEN],
+) -> (Zeroizing<[u8; KEY_LEN]>, Zeroizing<[u8; KEY_LEN]>) {
     // temp1 = HMAC(initiator.chaining_key, [empty])
     // temp2 = HMAC(temp1, 0x1)
     // temp3 = HMAC(temp1, temp2 || 0x2)
@@ -391,7 +389,7 @@ impl Handshake {
         // key = HMAC(temp, temp2 || 0x3)
         let key = b2s_hmac2(&temp, &temp2, &[0x03]);
         // responder.hash = HASH(responder.hash || temp2)
-        hash = b2s_hash(&hash, &temp2);
+        hash = b2s_hash(&hash, &*temp2);
         // msg.encrypted_nothing = AEAD(key, 0, [empty], responder.hash)
         aead_chacha20_open(&mut [], &key, 0, packet.encrypted_nothing, &hash)?;
 
@@ -408,8 +406,8 @@ impl Handshake {
         Ok(Session::new(
             local_index,
             Index::from_peer(peer_index),
-            temp3,
-            temp2,
+            &temp3,
+            &temp2,
             now,
         ))
     }
@@ -488,7 +486,7 @@ impl Handshake {
         let local_index = self.next_index.wrapping_increment();
 
         // initiator.chaining_key = HASH(CONSTRUCTION)
-        let mut chaining_key = INITIAL_CHAIN_KEY;
+        let mut chaining_key = Zeroizing::new(INITIAL_CHAIN_KEY);
         // initiator.hash = HASH(HASH(initiator.chaining_key || IDENTIFIER) || responder.static_public)
         let mut hash = INITIAL_CHAIN_HASH;
         hash = b2s_hash(&hash, self.params.peer_static_public.as_bytes());
@@ -555,7 +553,7 @@ impl Handshake {
     fn format_handshake_response(
         &mut self,
         mut hash: [u8; KEY_LEN],
-        mut chaining_key: [u8; KEY_LEN],
+        mut chaining_key: Zeroizing<[u8; KEY_LEN]>,
         peer_ephemeral_public: PublicKey,
         peer_index: u32,
         rng: &mut StdRng,
@@ -606,7 +604,7 @@ impl Handshake {
         // key = HMAC(temp, temp2 || 0x3)
         let key = b2s_hmac2(&temp, &temp2, &[0x03]);
         // responder.hash = HASH(responder.hash || temp2)
-        hash = b2s_hash(&hash, &temp2);
+        hash = b2s_hash(&hash, &*temp2);
         // msg.encrypted_nothing = AEAD(key, 0, [empty], responder.hash)
         aead_chacha20_seal(encrypted_nothing, &key, 0, &[], &hash);
 
@@ -616,7 +614,13 @@ impl Handshake {
 
         Ok((
             dst,
-            Session::new(local_index, Index::from_peer(peer_index), temp2, temp3, now),
+            Session::new(
+                local_index,
+                Index::from_peer(peer_index),
+                &temp2,
+                &temp3,
+                now,
+            ),
         ))
     }
 }
