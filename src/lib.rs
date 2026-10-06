@@ -60,7 +60,7 @@ pub enum Event {
     HandshakeResponse(HandshakeResponseMessage),
     /// A keepalive is due: send it with [`Tunnel::encapsulate_keepalive`].
     KeepaliveDue(Keepalive),
-    /// The connection expired and all session state was wiped.
+    /// The connection expired and all session state was dropped.
     ///
     /// Emitted once per expiry, see [`Tunnel::is_expired`].
     ConnectionExpired,

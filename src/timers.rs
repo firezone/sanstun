@@ -88,7 +88,7 @@ impl Timers {
     }
 
     /// After `REJECT_AFTER_TIME * 3` without a new handshake, all ephemeral and
-    /// symmetric key material is wiped and the connection is considered dead.
+    /// symmetric key material is dropped and the connection is considered dead.
     pub(crate) fn reject_after_time(&self) -> Instant {
         self[TimeLastHandshakeCompleted] + REJECT_AFTER_TIME * 3
     }
