@@ -27,37 +27,29 @@ const COOKIE_NONCE_SIZE: usize = 24;
 type Cookie = [u8; COOKIE_SIZE];
 
 /// The entry point for every datagram received from the network for one static key.
-///
-/// [`Interface::receive`] verifies the MACs of handshake messages and, under load, applies the
-/// cookie mechanism and a per-source rate limit before any expensive work. It is the only way to
-/// obtain a [`Packet`] for [`Tunnel::decapsulate`].
 pub struct Interface {
     static_private: StaticSecret,
     static_public: PublicKey,
-    /// The secret that cookies are derived from
+
     cookie_secret: Zeroizing<[u8; 32]>,
     cookie_secret_created_at: Instant,
-    /// Replaces the cookie secret and draws the nonces of cookie replies
-    rng: StdRng,
     mac1_key: [u8; 32],
     cookie_key: [u8; 32],
+
+    rng: StdRng,
     stamper: TimeStamper,
     indices: TunnelIndices,
     rate_limiter: RateLimiter,
 }
 
 impl Interface {
-    /// Creates the entry point for datagrams addressed to a randomly generated static key.
-    ///
-    /// Use one instance for all [`Tunnel`]s of that key, so that the limit on handshake messages
-    /// per second applies to all of them together.
+    /// Creates a new [`Interface`],
     ///
     /// `rng` seeds the generator that the static key, the cookie secrets, the tunnel indices and
     /// the key material of every tunnel are derived from. It must draw fresh entropy from the
     /// operating system for every instance, e.g. `rand::rng()`. Seeding from a fixed value is
     /// only safe in tests: instances with the same seed derive the same keys and thus reuse
-    /// nonces. The same happens if the process is forked or restored from a snapshot after
-    /// creating the instance.
+    /// nonces.
     ///
     /// `unix` is the time since the Unix epoch at `now`, from which the timestamps of handshake
     /// initiations are derived.
@@ -314,11 +306,10 @@ impl Interface {
     }
 }
 
-/// What the caller needs to do after [`Interface::receive`].
+/// The result of [`Interface::receive`].
 #[derive(Debug)]
 pub enum Received<'a> {
-    /// Route the packet to its [`Tunnel`](crate::Tunnel) and hand it to
-    /// [`Tunnel::decapsulate`].
+    /// Route the packet to its [`Tunnel`](crate::Tunnel) and hand it to [`Tunnel::decapsulate`].
     Packet(Packet<'a>),
     /// Send this cookie reply to the peer: we are under load and its handshake message needs
     /// a valid cookie.

@@ -2,7 +2,7 @@ use std::convert::TryInto;
 use std::fmt::{self, Debug};
 use std::time::{Duration, Instant};
 
-/// This struct represents a 12 byte [Tai64N](https://cr.yp.to/libtai/tai64.html) timestamp
+/// This struct represents a 12 byte [Tai64N](https://cr.yp.to/libtai/tai64.html) timestamp.
 #[derive(PartialEq, Eq)]
 pub(crate) struct Tai64N {
     secs: u64,
@@ -10,14 +10,12 @@ pub(crate) struct Tai64N {
 }
 
 #[derive(Debug, Clone)]
-/// This struct computes a [Tai64N](https://cr.yp.to/libtai/tai64.html) timestamp from current system time
 pub(crate) struct TimeStamper {
     unix: Duration,
     created_at: Instant,
 }
 
 impl TimeStamper {
-    /// Create a new TimeStamper
     pub(crate) fn new(now: Instant, unix: Duration) -> TimeStamper {
         TimeStamper {
             unix,
@@ -43,7 +41,6 @@ impl Tai64N {
         Tai64N { secs: 0, nano: 0 }
     }
 
-    /// Parse a timestamp from a 12 byte u8 slice
     pub(crate) fn parse(buf: &[u8; 12]) -> Tai64N {
         let (sec_bytes, nano_bytes) = buf.split_at(std::mem::size_of::<u64>());
         let secs = u64::from_be_bytes(sec_bytes.try_into().unwrap());
@@ -54,7 +51,7 @@ impl Tai64N {
     }
 
     /// Check if this timestamp represents a time that is chronologically after the time represented
-    /// by the other timestamp
+    /// by the other timestamp.
     pub(crate) fn after(&self, other: &Tai64N) -> bool {
         (self.secs > other.secs) || ((self.secs == other.secs) && (self.nano > other.nano))
     }

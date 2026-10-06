@@ -71,12 +71,11 @@ pub enum Event {
 #[must_use = "a keepalive is due; send it with `Tunnel::encapsulate_keepalive`"]
 pub struct Keepalive;
 
-/// What the caller needs to do after [`Tunnel::commit_decrypted`].
+/// The result of committing a decrypted packet.
 pub enum Committed<B> {
-    /// The first `len` bytes of `buffer` hold the decrypted payload: an IP packet for the tunnel,
-    /// possibly followed by padding, which the caller strips when parsing it.
+    /// The first `len` bytes of `buffer` hold the decrypted payload, possibly followed by padding.
     Data { buffer: B, len: usize },
-    /// The data message was a keepalive; nothing to write.
+    /// The data message was a keepalive.
     Keepalive,
 }
 
@@ -92,16 +91,14 @@ impl<B> std::fmt::Debug for Committed<B> {
     }
 }
 
-/// Tunnel represents a point-to-point WireGuard connection
+/// A point-to-point WireGuard connection
 pub struct Tunnel {
-    /// The handshake currently in progress
-    handshake: handshake::Handshake,
+    handshake: Handshake,
     sessions: Sessions,
-    /// Keeps tabs on the expiring timers
-    timers: timers::Timers,
-    /// Source of the ephemeral keys and the handshake jitter
+    timers: Timers,
     rng: StdRng,
     events: RingBuffer<Event, 16>,
+
     /// Reserves this tunnel's index in its [`Interface`] while the tunnel is alive.
     _index_lease: Arc<()>,
 }
@@ -142,8 +139,9 @@ impl Tunnel {
         })
     }
 
-    /// Identifies this tunnel among those of its [`Interface`]: route a received [`Packet`] here if
-    /// its [`Packet::tunnel_id`] matches.
+    /// Identifies this tunnel among those of its [`Interface`].
+    ///
+    /// Route a received [`Packet`] here if its [`Packet::tunnel_id`] matches.
     pub fn id(&self) -> u32 {
         self.sessions.tunnel_id()
     }
@@ -181,13 +179,7 @@ impl Tunnel {
         self.timers.set_rekey_timeout(rekey_timeout);
     }
 
-    /// Prepares a data message, deferring writing and encrypting it to the returned
-    /// [`PendingEncapsulate`].
-    ///
-    /// All state of the [`Tunnel`] is updated immediately; the caller may run
-    /// [`PendingEncapsulate::encrypt`] later and on another thread. Keepalives are sent with
-    /// [`Tunnel::encapsulate_keepalive`] instead. Returns `Err(Error::NoCurrentSession)` when
-    /// there is no usable session; in that case **no** handshake is initiated.
+    /// Prepares a data message, deferring writing and encrypting it to the returned [`PendingEncapsulate`].
     pub fn encapsulate_data(&mut self, now: Instant) -> Result<PendingEncapsulate, Error> {
         let pending = self
             .sending_session(now)
@@ -200,9 +192,6 @@ impl Tunnel {
     }
 
     /// Encrypts a keepalive on the session that data messages are sent on.
-    ///
-    /// Returns `Err(Error::NoCurrentSession)` when there is no usable session; in that case **no**
-    /// handshake is initiated.
     pub fn encapsulate_keepalive(
         &mut self,
         _keepalive: Keepalive,
@@ -234,12 +223,10 @@ impl Tunnel {
 
     /// Handles a message received from the network, as returned by [`Interface::receive`].
     ///
-    /// Handshake messages and cookie replies are processed right away and return `None`; drain
-    /// [`Tunnel::poll_event`] afterwards for any message to send in reply. The decryption of a
-    /// data message is deferred to the returned [`PendingDecapsulate`]: its session is selected
-    /// and its counter checked against the replay window, without updating any state or reading
-    /// the ciphertext. Hand the [`Decrypted`] message back to [`Tunnel::commit_decrypted`] to
-    /// complete the decapsulation.
+    /// Handshake messages and cookie replies are processed right away and return `None`. The
+    /// decryption of a data message is deferred to the returned [`PendingDecapsulate`]. Hand
+    /// the [`Decrypted`] message back to [`Tunnel::commit_decrypted`] to complete the
+    /// decapsulation.
     pub fn decapsulate(
         &mut self,
         packet: Packet<'_>,
@@ -255,10 +242,7 @@ impl Tunnel {
         Ok(None)
     }
 
-    /// Completes the decapsulation of a decrypted data message.
-    ///
-    /// Marks its counter as received, which rejects a duplicate that passed
-    /// [`Tunnel::decapsulate`] before the original got here.
+    /// Completes the decapsulation of a decrypted data message to obtain the plaintext.
     pub fn commit_decrypted<B: AsRef<[u8]>>(
         &mut self,
         decrypted: Decrypted<B>,
@@ -376,9 +360,9 @@ impl Tunnel {
         session.prepare_receive_packet_data(packet)
     }
 
-    /// Formats a new handshake initiation message. If force_resend is true will send
-    /// a new handshake, even if a handshake is already in progress (for example when a handshake times out)
+    /// Formats a new handshake initiation message.
     ///
+    /// If `force_resend` is true will send a new handshake, even if a handshake is already in progress.
     pub fn format_handshake_initiation(
         &mut self,
         force_resend: bool,
