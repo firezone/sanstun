@@ -37,9 +37,6 @@ type Cookie = [u8; COOKIE_SIZE];
 /// [`Ingress::receive`] verifies the MACs of handshake messages and applies the cookie mechanism
 /// under load before any expensive work, and is the only way to obtain a [`Packet`] for
 /// [`Tunnel::decapsulate`].
-///
-/// [`Ingress::new_tunnel`] is the only way to create a [`Tunnel`], which ties every tunnel to the
-/// static key of its `Ingress`.
 pub struct Ingress {
     static_private: StaticSecret,
     static_public: PublicKey,
