@@ -313,7 +313,7 @@ impl Tunnel {
                 return;
             }
 
-            // In case our session expired_current, create a new one iff we initiated it.
+            // In case our session expired, create a new one iff we initiated it.
             if expired_current.role() == Role::Initiator && !self.handshake.is_in_progress() {
                 handshake_initiation_required = true;
             }
