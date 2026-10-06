@@ -10,8 +10,11 @@ use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
+use rand::SeedableRng;
+use rand::rngs::StdRng;
+
 use sanstun::Error;
-use sanstun::{Committed, Decrypted, Index, Packet, PendingDecapsulate, Tunnel};
+use sanstun::{Committed, Decrypted, Packet, PendingDecapsulate, Tunnel};
 use sanstun::{Ingress, Received};
 use sanstun::{PublicKey, StaticSecret};
 
@@ -250,17 +253,23 @@ impl Builder {
         } else {
             HANDSHAKE_RATE_LIMIT
         };
-        let mut ingress_a = Ingress::new(secret_a, HANDSHAKE_RATE_LIMIT, self.seed_a, start, unix);
-        let mut ingress_b = Ingress::new(secret_b, limit_b, self.seed_b, start, unix);
+        let mut ingress_a = Ingress::new(
+            secret_a,
+            HANDSHAKE_RATE_LIMIT,
+            &mut StdRng::from_seed(self.seed_a),
+            start,
+            unix,
+        );
+        let mut ingress_b = Ingress::new(
+            secret_b,
+            limit_b,
+            &mut StdRng::from_seed(self.seed_b),
+            start,
+            unix,
+        );
 
         let a = ingress_a
-            .new_tunnel(
-                public_b,
-                self.psk_a.map(StaticSecret::from),
-                None,
-                Index::new_local(1),
-                start,
-            )
+            .new_tunnel(public_b, self.psk_a.map(StaticSecret::from), None, start)
             .expect("the test keys are valid");
 
         let expected_by_b = if self.responder_expects_different_key {
@@ -273,7 +282,6 @@ impl Builder {
                 expected_by_b,
                 self.psk_b.map(StaticSecret::from),
                 self.persistent_keepalive_b,
-                Index::new_local(2),
                 start,
             )
             .expect("the test keys are valid");

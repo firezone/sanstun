@@ -5,7 +5,9 @@ use crate::harness::{
     HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, Outcome as _, Peer::A, Peer::B, Sim,
     classify,
 };
-use sanstun::{Error, Index, Ingress, PublicKey, StaticSecret};
+use rand::SeedableRng;
+use rand::rngs::StdRng;
+use sanstun::{Error, Ingress, PublicKey, StaticSecret};
 use std::time::{Duration, Instant};
 
 #[test]
@@ -190,14 +192,13 @@ fn tunnel_rejects_low_order_peer_static_key() {
     let mut ingress = Ingress::new(
         StaticSecret::from([1; 32]),
         0,
-        [0; 32],
+        &mut StdRng::from_seed([0; 32]),
         now,
         Duration::from_secs(1_700_000_000),
     );
 
     for point in low_order_points {
-        let tunnel =
-            ingress.new_tunnel(PublicKey::from(point), None, None, Index::new_local(1), now);
+        let tunnel = ingress.new_tunnel(PublicKey::from(point), None, None, now);
 
         assert!(matches!(tunnel, Err(Error::LowOrderPoint)), "{point:x?}");
     }

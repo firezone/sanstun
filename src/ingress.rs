@@ -1,12 +1,13 @@
 use crate::crypto::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2};
 use crate::handshake::{LABEL_COOKIE, LABEL_MAC1, decrypt_initiator_static};
+use crate::index::IndexLfsr;
 use crate::message::{
     COOKIE_REPLY, COOKIE_REPLY_SZ, DATA, DATA_OVERHEAD_SZ, HANDSHAKE_INIT, HANDSHAKE_INIT_SZ,
     HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeInit, HandshakeResponse, Macs, Packet,
     PacketCookieReply, PacketData,
 };
 use crate::tai64n::TimeStamper;
-use crate::{CookieReplyMessage, Error, Index, PublicKey, StaticSecret, Tunnel};
+use crate::{CookieReplyMessage, Error, PublicKey, StaticSecret, Tunnel};
 
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
@@ -16,7 +17,7 @@ use aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{Key, XChaCha20Poly1305};
 use constant_time_eq::constant_time_eq;
 use rand::rngs::StdRng;
-use rand::{RngExt, SeedableRng};
+use rand::{CryptoRng, RngExt, SeedableRng};
 use zeroize::Zeroizing;
 
 /// How long a cookie secret is used before it is replaced
@@ -53,6 +54,7 @@ pub struct Ingress {
     /// The time the handshake count was last reset
     last_reset: Instant,
     stamper: TimeStamper,
+    indices: IndexLfsr,
 }
 
 impl Ingress {
@@ -61,22 +63,23 @@ impl Ingress {
     /// Use one instance for all [`Tunnel`]s of that key, so that `limit`
     /// handshake messages per second apply to all of them together.
     ///
-    /// `rng_seed` must come from a cryptographically secure source because the cookie secrets and
-    /// the key material of every tunnel are derived from it.
+    /// `rng` seeds the generator that the cookie secrets, the tunnel indices and the key material
+    /// of every tunnel are derived from.
     ///
     /// `unix` is the time since the Unix epoch at `now`, from which the timestamps of handshake
     /// initiations are derived.
     pub fn new(
         static_private: StaticSecret,
         limit: u64,
-        rng_seed: [u8; 32],
+        rng: &mut impl CryptoRng,
         now: Instant,
         unix: Duration,
     ) -> Self {
-        let mut rng = StdRng::from_seed(rng_seed);
+        let mut rng = StdRng::from_rng(rng);
         let static_public = PublicKey::from(&static_private);
         let mut cookie_secret = Zeroizing::new([0; 32]);
         rng.fill(&mut cookie_secret[..]);
+        let indices = IndexLfsr::new(&mut rng);
 
         Ingress {
             static_private,
@@ -90,12 +93,16 @@ impl Ingress {
             count: 0,
             last_reset: now,
             stamper: TimeStamper::new(now, unix),
+            indices,
         }
     }
 
     /// Creates a [`Tunnel`] between our static key and `peer_static_public`.
     ///
     /// The tunnel's RNG is seeded from this `Ingress`, so every tunnel derives distinct ephemeral keys.
+    /// Its [`Index`](crate::Index) comes from this `Ingress` too and only repeats after 2^24 - 1
+    /// tunnels; route received messages to the tunnel whose [`Tunnel::index`] has the same
+    /// [`Index::global`](crate::Index::global) part as their receiver index.
     ///
     /// Fails with [`Error::LowOrderPoint`] if `peer_static_public` is a low-order point.
     pub fn new_tunnel(
@@ -103,7 +110,6 @@ impl Ingress {
         peer_static_public: PublicKey,
         preshared_key: Option<StaticSecret>,
         persistent_keepalive: Option<u16>,
-        index: Index,
         now: Instant,
     ) -> Result<Tunnel, Error> {
         Tunnel::new(
@@ -111,7 +117,7 @@ impl Ingress {
             peer_static_public,
             preshared_key,
             persistent_keepalive,
-            index,
+            self.indices.next(),
             self.rng.random(),
             now,
             self.stamper.clone(),
@@ -385,7 +391,13 @@ mod tests {
     }
 
     fn under_load(now: Instant) -> Ingress {
-        Ingress::new(StaticSecret::from([1; 32]), 0, [2; 32], now, Duration::ZERO)
+        Ingress::new(
+            StaticSecret::from([1; 32]),
+            0,
+            &mut StdRng::from_seed([2; 32]),
+            now,
+            Duration::ZERO,
+        )
     }
 
     /// A handshake initiation with a valid mac1 and its mac2 keyed with `cookie`.

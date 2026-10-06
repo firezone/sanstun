@@ -67,6 +67,7 @@ pub enum Committed<B> {
 ///
 /// Created with [`Ingress::new_tunnel`].
 pub struct Tunnel {
+    index: Index,
     /// The handshake currently in progress
     handshake: handshake::Handshake,
     sessions: Sessions,
@@ -104,12 +105,20 @@ impl Tunnel {
         )?;
 
         Ok(Tunnel {
+            index,
             handshake,
             sessions: Sessions::default(),
             timers: Timers::new(persistent_keepalive, now),
             rng: StdRng::from_seed(rng_seed),
             events: VecDeque::new(),
         })
+    }
+
+    /// The index that the peer addresses this tunnel's messages to.
+    ///
+    /// Its [`Index::global`] part identifies the tunnel; the rest varies per session.
+    pub fn index(&self) -> Index {
+        self.index
     }
 
     pub fn remote_static_public(&self) -> PublicKey {
