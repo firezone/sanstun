@@ -53,7 +53,11 @@ impl Interface {
     /// per second applies to all of them together.
     ///
     /// `rng` seeds the generator that the static key, the cookie secrets, the tunnel indices and
-    /// the key material of every tunnel are derived from.
+    /// the key material of every tunnel are derived from. It must draw fresh entropy from the
+    /// operating system for every instance, e.g. `rand::rng()`. Seeding from a fixed value is
+    /// only safe in tests: instances with the same seed derive the same keys and thus reuse
+    /// nonces. The same happens if the process is forked or restored from a snapshot after
+    /// creating the instance.
     ///
     /// `unix` is the time since the Unix epoch at `now`, from which the timestamps of handshake
     /// initiations are derived.
