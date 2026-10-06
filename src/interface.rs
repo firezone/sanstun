@@ -1,6 +1,6 @@
 use crate::crypto::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, xaead_seal};
 use crate::handshake::{LABEL_COOKIE, LABEL_MAC1, decrypt_initiator_static};
-use crate::index::IndexLfsr;
+use crate::index::TunnelIndices;
 use crate::message::{
     COOKIE_REPLY, COOKIE_REPLY_SZ, DATA, DATA_OVERHEAD_SZ, HANDSHAKE_INIT, HANDSHAKE_INIT_SZ,
     HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeInit, HandshakeResponse, Macs, Packet,
@@ -42,7 +42,7 @@ pub struct Interface {
     mac1_key: [u8; 32],
     cookie_key: [u8; 32],
     stamper: TimeStamper,
-    indices: IndexLfsr,
+    indices: TunnelIndices,
     rate_limiter: RateLimiter,
 }
 
@@ -67,7 +67,7 @@ impl Interface {
         let static_public = PublicKey::from(&static_private);
         let mut cookie_secret = Zeroizing::new([0; 32]);
         rng.fill(&mut cookie_secret[..]);
-        let indices = IndexLfsr::new(&mut rng);
+        let indices = TunnelIndices::new(&mut rng);
 
         Interface {
             static_private,
@@ -120,12 +120,15 @@ impl Interface {
         persistent_keepalive: Option<u16>,
         now: Instant,
     ) -> Result<Tunnel, Error> {
+        let (index, index_lease) = self.indices.next();
+
         Tunnel::new(
             self.static_private.clone(),
             peer_static_public,
             preshared_key,
             persistent_keepalive,
-            self.indices.next(),
+            index,
+            index_lease,
             &mut self.rng,
             now,
             self.stamper.clone(),

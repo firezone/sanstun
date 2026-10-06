@@ -48,6 +48,7 @@ use crate::timers::{TimerName, Timers};
 use rand::rngs::StdRng;
 use rand::{CryptoRng, SeedableRng};
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// What the caller needs to do, as returned by [`Tunnel::poll_event`].
@@ -101,6 +102,8 @@ pub struct Tunnel {
     /// Source of the ephemeral keys and the handshake jitter
     rng: StdRng,
     events: RingBuffer<Event, 16>,
+    /// Reserves this tunnel's index in its [`Interface`] while the tunnel is alive.
+    _index_lease: Arc<()>,
 }
 
 impl Tunnel {
@@ -115,6 +118,7 @@ impl Tunnel {
         preshared_key: Option<StaticSecret>,
         persistent_keepalive: Option<u16>,
         index: Index,
+        index_lease: Arc<()>,
         rng: &mut impl CryptoRng,
         now: Instant,
         stamper: TimeStamper,
@@ -134,6 +138,7 @@ impl Tunnel {
             timers: Timers::new(persistent_keepalive, now),
             rng: StdRng::from_rng(rng),
             events: RingBuffer::new(),
+            _index_lease: index_lease,
         })
     }
 
