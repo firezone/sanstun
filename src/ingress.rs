@@ -118,7 +118,7 @@ impl Ingress {
             preshared_key,
             persistent_keepalive,
             self.indices.next(),
-            self.rng.random(),
+            &mut self.rng,
             now,
             self.stamper.clone(),
         )

@@ -27,8 +27,8 @@ use crate::session::Sessions;
 use crate::tai64n::TimeStamper;
 use crate::timers::{TimerName, Timers};
 
-use rand::SeedableRng;
 use rand::rngs::StdRng;
+use rand::{CryptoRng, SeedableRng};
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -64,8 +64,6 @@ pub enum Committed<B> {
 }
 
 /// Tunnel represents a point-to-point WireGuard connection
-///
-/// Created with [`Ingress::new_tunnel`].
 pub struct Tunnel {
     index: Index,
     /// The handshake currently in progress
@@ -90,7 +88,7 @@ impl Tunnel {
         preshared_key: Option<StaticSecret>,
         persistent_keepalive: Option<u16>,
         index: Index,
-        rng_seed: [u8; 32],
+        rng: &mut impl CryptoRng,
         now: Instant,
         stamper: TimeStamper,
     ) -> Result<Self, Error> {
@@ -109,7 +107,7 @@ impl Tunnel {
             handshake,
             sessions: Sessions::default(),
             timers: Timers::new(persistent_keepalive, now),
-            rng: StdRng::from_seed(rng_seed),
+            rng: StdRng::from_rng(rng),
             events: VecDeque::new(),
         })
     }
