@@ -2,12 +2,12 @@
 
 mod crypto;
 mod errors;
-mod event_queue;
 mod handshake;
 mod index;
 mod interface;
 mod message;
 mod replay;
+mod ring_buffer;
 mod session;
 mod tai64n;
 mod timers;
@@ -22,9 +22,9 @@ pub use message::{
 pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
 pub use x25519_dalek::{PublicKey, StaticSecret};
 
-use crate::event_queue::EventQueue;
 use crate::handshake::Handshake;
 use crate::message::DATA_OVERHEAD_SZ;
+use crate::ring_buffer::RingBuffer;
 use crate::session::Sessions;
 use crate::tai64n::TimeStamper;
 use crate::timers::{TimerName, Timers};
@@ -33,6 +33,9 @@ use rand::rngs::StdRng;
 use rand::{CryptoRng, SeedableRng};
 
 use std::time::{Duration, Instant};
+
+/// How many events are queued before the oldest is dropped.
+const MAX_QUEUED_EVENTS: usize = 16;
 
 /// What the caller needs to do, as returned by [`Tunnel::poll_event`].
 #[derive(Debug)]
@@ -74,7 +77,7 @@ pub struct Tunnel {
     timers: timers::Timers,
     /// Source of the ephemeral keys and the handshake jitter
     rng: StdRng,
-    events: EventQueue,
+    events: RingBuffer<Event, MAX_QUEUED_EVENTS>,
 }
 
 impl Tunnel {
@@ -109,7 +112,7 @@ impl Tunnel {
             sessions: Sessions::default(),
             timers: Timers::new(persistent_keepalive, now),
             rng: StdRng::from_rng(rng),
-            events: Default::default(),
+            events: RingBuffer::new(),
         })
     }
 
@@ -286,7 +289,7 @@ impl Tunnel {
         tracing::debug!(%local_idx, %remote_idx, "Sending handshake_response");
 
         self.events
-            .push(Event::HandshakeResponse(HandshakeResponseMessage(packet)));
+            .push_back(Event::HandshakeResponse(HandshakeResponseMessage(packet)));
 
         Ok(())
     }
@@ -312,7 +315,7 @@ impl Tunnel {
         self.sessions.set_current(local_idx);
 
         // The keepalive confirms the session to the responder.
-        self.events.push(Event::KeepaliveDue(Keepalive));
+        self.events.push_back(Event::KeepaliveDue(Keepalive));
 
         Ok(())
     }
