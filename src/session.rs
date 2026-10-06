@@ -18,7 +18,7 @@ pub(crate) struct Session {
     role: Role,
     sent_data: bool,
     received_data: bool,
-    pub(crate) receiving_index: Index,
+    receiving_index: Index,
     sending_index: Index,
     receiver: Arc<Key>,
     sender: Arc<Key>,
@@ -43,7 +43,7 @@ pub(crate) enum Role {
     Responder,
 }
 
-/// The plaintext of a data message is zero-padded to a multiple of this
+/// The plaintext of a data message is zero-padded to a multiple of this.
 const PADDING_MULTIPLE: usize = 16;
 
 impl Session {
@@ -198,17 +198,15 @@ impl Session {
     }
 }
 
-/// Number of sessions in the ring, better keep a PoT
-///
-/// We use a `u8` to align with the number of bits reserved in [`Index`] for the sessions.
+/// Number of sessions in the ring.
 const N_SESSIONS: u8 = 8;
 
 /// The [`N_SESSIONS`] most recent sessions, stored at their index modulo [`N_SESSIONS`].
 pub(crate) struct Sessions {
     slots: [Option<Session>; N_SESSIONS as usize],
-    /// Index of most recently used session
+    /// Index of most recently used session.
     current: Index,
-    /// The most recently allocated local index
+    /// The most recently allocated local index.
     last_index: Index,
 }
 
@@ -372,8 +370,9 @@ impl PendingEncapsulate {
     /// Writes the data message encrypting `plaintext` to the start of `dst`.
     ///
     /// `plaintext` is zero-padded to the next multiple of 16 bytes, so the data message, and the
-    /// minimum length of `dst`, is `plaintext.len().next_multiple_of(16) + 32` bytes. Fails with
-    /// `Err(Error::EmptyPlaintext)` if `plaintext` is empty: an empty data message is a keepalive,
+    /// minimum length of `dst`, is `plaintext.len().next_multiple_of(16) + 32` bytes.
+    ///
+    /// Fails with `Err(Error::EmptyPlaintext)` if `plaintext` is empty. An empty data message is a keepalive,
     /// which is sent with [`Tunnel::encapsulate_keepalive`](crate::Tunnel::encapsulate_keepalive).
     pub fn encrypt<'a>(
         self,
@@ -447,7 +446,7 @@ impl PendingDecapsulate {
     ///
     /// `message` is the data message this [`PendingDecapsulate`] was prepared from; anything else fails
     /// to authenticate. The returned [`Decrypted`] message owns `dst`; hand it to
-    /// [`Tunnel::commit_decrypted`](crate::Tunnel::commit_decrypted).
+    /// [`Tunnel::commit_decrypted`](crate::Tunnel::commit_decrypted) to obtain the plaintext bytes.
     pub fn decrypt<B: AsMut<[u8]>>(self, message: &[u8], mut dst: B) -> Decrypted<B> {
         let plaintext_len = self.decrypt_in_place(message, dst.as_mut());
 

@@ -1,3 +1,5 @@
+//! <https://www.wireguard.com/papers/wireguard.pdf#page=14>
+
 use crate::session::Role;
 use crate::{Event, Keepalive, Tunnel};
 use std::iter;
@@ -6,8 +8,6 @@ use std::ops::{Index, IndexMut};
 use rand::RngExt;
 use std::time::{Duration, Instant};
 
-// Some constants, represent time in seconds
-// https://www.wireguard.com/papers/wireguard.pdf#page=14
 pub(crate) const REKEY_AFTER_TIME: Duration = Duration::from_secs(120);
 pub(crate) const REJECT_AFTER_TIME: Duration = Duration::from_secs(180);
 const REKEY_ATTEMPT_TIME: Duration = Duration::from_secs(90);
@@ -126,9 +126,9 @@ impl Timers {
         Some(self[TimePersistentKeepalive] + keepalive)
     }
 
-    // We don't really clear the timers, but we set them to the current time to
-    // so the reference time frame is the same
-    pub(super) fn clear(&mut self, now: Instant) {
+    pub(crate) fn clear(&mut self, now: Instant) {
+        // We don't really clear the timers, but we set them to the current time to
+        // so the reference time frame is the same
         for t in &mut self.timers[..] {
             *t = now;
         }
@@ -138,15 +138,9 @@ impl Timers {
 
     pub(crate) fn tick(&mut self, timer_name: TimerName, now: Instant) {
         match timer_name {
-            TimeLastPacketReceived => {
-                self.first_data_sent_without_reply = None;
-            }
-            TimeLastPacketSent => {
-                self.last_data_received_without_reply = None;
-            }
-            TimeLastDataPacketReceived => {
-                self.last_data_received_without_reply = Some(now);
-            }
+            TimeLastPacketReceived => self.first_data_sent_without_reply = None,
+            TimeLastPacketSent => self.last_data_received_without_reply = None,
+            TimeLastDataPacketReceived => self.last_data_received_without_reply = Some(now),
             TimeLastDataPacketSent => {
                 match self.first_data_sent_without_reply {
                     Some(_) => {

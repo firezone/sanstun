@@ -91,6 +91,7 @@ enum HandshakeState {
     Expired,
 }
 
+/// The handshake(s) currently in progress.
 pub(crate) struct Handshake {
     params: NoiseParams,
     /// Allow to have two outgoing handshakes in flight, because sometimes we may receive a delayed response to a handshake with bad networks

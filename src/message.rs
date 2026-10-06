@@ -125,8 +125,7 @@ pub enum Packet<'a> {
 impl Packet<'_> {
     /// The [`Tunnel::id`](crate::Tunnel::id) of the tunnel this message is addressed to.
     ///
-    /// `None` for a handshake initiation, which is routed by
-    /// [`HandshakeInit::peer_static_public`] instead.
+    /// `None` for a handshake initiation, which is routed by [`HandshakeInit::peer_static_public`] instead.
     pub fn tunnel_id(&self) -> Option<u32> {
         let receiver_idx = match self {
             Packet::HandshakeInit(_) => return None,
