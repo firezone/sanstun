@@ -9,7 +9,6 @@ use crate::crypto::nonce;
 use crate::errors::Error;
 use crate::message::{AEAD_TAG_SZ, DATA, DATA_HEADER_SZ, DataMessage, PacketData};
 use crate::replay::ReceivingKeyCounterValidator;
-use crossbeam_utils::CachePadded;
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -63,10 +62,10 @@ impl Session {
             received_data: false,
             receiving_index: local_index,
             sending_index: peer_index,
-            receiver: Arc::new(Key::new(LessSafeKey::new(
+            receiver: Arc::new(Key(LessSafeKey::new(
                 UnboundKey::new(&CHACHA20_POLY1305, receiving_key).unwrap(),
             ))),
-            sender: Arc::new(Key::new(LessSafeKey::new(
+            sender: Arc::new(Key(LessSafeKey::new(
                 UnboundKey::new(&CHACHA20_POLY1305, sending_key).unwrap(),
             ))),
             sending_key_counter: 0,
@@ -518,7 +517,17 @@ impl<B> std::fmt::Debug for Decrypted<B> {
 /// A session key on a cache line of its own, apart from the reference count of its [`Arc`].
 ///
 /// Threads that only read the key then never contend with the thread updating the count.
-pub(crate) type Key = CachePadded<LessSafeKey>;
+#[derive(Debug)]
+#[repr(align(128))]
+pub(crate) struct Key(LessSafeKey);
+
+impl std::ops::Deref for Key {
+    type Target = LessSafeKey;
+
+    fn deref(&self) -> &LessSafeKey {
+        &self.0
+    }
+}
 
 #[cfg(test)]
 mod tests {
