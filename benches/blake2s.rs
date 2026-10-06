@@ -1,8 +1,8 @@
+use blake2::digest::consts::U16;
 use blake2::digest::{FixedOutput, KeyInit};
 use blake2::{Blake2s256, Blake2sMac, Digest};
 use criterion::{BenchmarkId, Criterion, Throughput};
 use ring::rand::{SecureRandom, SystemRandom};
-use typenum::U16;
 
 fn bench_blake2s_hash(c: &mut Criterion) {
     let mut group = c.benchmark_group("blake2s_hash");

@@ -1,8 +1,8 @@
 use crate::errors::Error;
+use blake2::digest::consts::U16;
 use blake2::digest::{FixedOutput, KeyInit};
 use blake2::{Blake2s256, Blake2sMac, Digest};
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
-use typenum::U16;
 use x25519_dalek::{PublicKey, SharedSecret};
 use zeroize::Zeroizing;
 
