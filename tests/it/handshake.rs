@@ -7,7 +7,7 @@ use crate::harness::{
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use sanstun::{Error, Ingress, PublicKey, StaticSecret};
+use sanstun::{Error, Ingress, PublicKey};
 use std::time::{Duration, Instant};
 
 #[test]
@@ -190,8 +190,6 @@ fn tunnel_rejects_low_order_peer_static_key() {
     ];
     let now = Instant::now();
     let mut ingress = Ingress::new(
-        StaticSecret::from([1; 32]),
-        0,
         &mut StdRng::from_seed([0; 32]),
         now,
         Duration::from_secs(1_700_000_000),

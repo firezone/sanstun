@@ -23,6 +23,8 @@ use zeroize::Zeroizing;
 /// How long a cookie secret is used before it is replaced
 const COOKIE_SECRET_MAX_AGE: Duration = Duration::from_secs(120);
 const COOKIE_SIZE: usize = 16;
+
+const DEFAULT_HANDSHAKE_LIMIT: u64 = 100;
 const COOKIE_NONCE_SIZE: usize = 24;
 
 /// How often should reset count in seconds
@@ -58,24 +60,19 @@ pub struct Ingress {
 }
 
 impl Ingress {
-    /// Creates the entry point for datagrams addressed to our `static_private` key.
+    /// Creates the entry point for datagrams addressed to a randomly generated static key.
     ///
-    /// Use one instance for all [`Tunnel`]s of that key, so that `limit`
-    /// handshake messages per second apply to all of them together.
+    /// Use one instance for all [`Tunnel`]s of that key, so that the limit on handshake messages
+    /// per second applies to all of them together.
     ///
-    /// `rng` seeds the generator that the cookie secrets, the tunnel indices and the key material
-    /// of every tunnel are derived from.
+    /// `rng` seeds the generator that the static key, the cookie secrets, the tunnel indices and
+    /// the key material of every tunnel are derived from.
     ///
     /// `unix` is the time since the Unix epoch at `now`, from which the timestamps of handshake
     /// initiations are derived.
-    pub fn new(
-        static_private: StaticSecret,
-        limit: u64,
-        rng: &mut impl CryptoRng,
-        now: Instant,
-        unix: Duration,
-    ) -> Self {
+    pub fn new(rng: &mut impl CryptoRng, now: Instant, unix: Duration) -> Self {
         let mut rng = StdRng::from_rng(rng);
+        let static_private = StaticSecret::from(rng.random::<[u8; 32]>());
         let static_public = PublicKey::from(&static_private);
         let mut cookie_secret = Zeroizing::new([0; 32]);
         rng.fill(&mut cookie_secret[..]);
@@ -89,12 +86,39 @@ impl Ingress {
             rng,
             mac1_key: b2s_hash(LABEL_MAC1, static_public.as_bytes()),
             cookie_key: b2s_hash(LABEL_COOKIE, static_public.as_bytes()).into(),
-            limit,
+            limit: DEFAULT_HANDSHAKE_LIMIT,
             count: 0,
             last_reset: now,
             stamper: TimeStamper::new(now, unix),
             indices,
         }
+    }
+
+    /// Uses `static_private` as our static key instead of a random one.
+    pub fn with_static_private(mut self, static_private: StaticSecret) -> Self {
+        let static_public = PublicKey::from(&static_private);
+
+        self.mac1_key = b2s_hash(LABEL_MAC1, static_public.as_bytes());
+        self.cookie_key = b2s_hash(LABEL_COOKIE, static_public.as_bytes()).into();
+        self.static_private = static_private;
+        self.static_public = static_public;
+
+        self
+    }
+
+    /// Sets how many handshake messages per second are processed before the cookie mechanism
+    /// kicks in.
+    ///
+    /// Defaults to 100.
+    pub fn with_handshake_limit(mut self, limit: u64) -> Self {
+        self.limit = limit;
+
+        self
+    }
+
+    /// Our static public key.
+    pub fn static_public(&self) -> PublicKey {
+        self.static_public
     }
 
     /// Creates a [`Tunnel`] between our static key and `peer_static_public`.
@@ -391,13 +415,7 @@ mod tests {
     }
 
     fn under_load(now: Instant) -> Ingress {
-        Ingress::new(
-            StaticSecret::from([1; 32]),
-            0,
-            &mut StdRng::from_seed([2; 32]),
-            now,
-            Duration::ZERO,
-        )
+        Ingress::new(&mut StdRng::from_seed([2; 32]), now, Duration::ZERO).with_handshake_limit(0)
     }
 
     /// A handshake initiation with a valid mac1 and its mac2 keyed with `cookie`.
