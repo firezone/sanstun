@@ -192,7 +192,7 @@ impl Tunnel {
         let is_responder = self.timers.is_responder();
         let session = self.sessions.current_mut()?;
 
-        if session.sending_counter_exhausted() {
+        if session.sending_counter_exhausted() || session.expired_at(now) {
             return None;
         }
         if !session.should_use_at(now) && !is_responder {
