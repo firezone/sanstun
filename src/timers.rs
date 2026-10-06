@@ -306,15 +306,15 @@ impl Tunnel {
         // discards it at the same moment we do. A session that carried data was due a
         // re-key at REKEY_AFTER_TIME, so reaching its expiry means that re-key never
         // landed and there is no shared state left to reach.
-        if let Some(expired) = self.sessions.expire(now) {
-            if self.timers.carried_data(&expired) {
+        if let Some(expired_current) = self.sessions.expire(now) {
+            if self.timers.carried_data(&expired_current) {
                 tracing::debug!("CONNECTION_EXPIRED(REJECT_AFTER_TIME)");
                 self.expire(now);
                 return;
             }
 
-            // In case our session expired, create a new one iff we initiated it.
-            if expired.role() == Role::Initiator && !self.handshake.is_in_progress() {
+            // In case our session expired_current, create a new one iff we initiated it.
+            if expired_current.role() == Role::Initiator && !self.handshake.is_in_progress() {
                 handshake_initiation_required = true;
             }
         }
