@@ -278,6 +278,86 @@ impl Handshake {
         self.cookies.write_cookie = None;
     }
 
+    pub(super) fn format_handshake_initiation(
+        &mut self,
+        rng: &mut StdRng,
+        now: Instant,
+    ) -> ([u8; HANDSHAKE_INIT_SZ], Index) {
+        let mut dst = [0u8; HANDSHAKE_INIT_SZ];
+
+        let (message_type, rest) = dst.split_at_mut(4);
+        let (sender_index, rest) = rest.split_at_mut(4);
+        let (unencrypted_ephemeral, rest) = rest.split_at_mut(32);
+        let (encrypted_static, rest) = rest.split_at_mut(32 + 16);
+        let (encrypted_timestamp, _) = rest.split_at_mut(12 + 16);
+
+        let local_index = self.next_index.wrapping_increment();
+
+        // initiator.chaining_key = HASH(CONSTRUCTION)
+        let mut chaining_key = Zeroizing::new(INITIAL_CHAIN_KEY);
+        // initiator.hash = HASH(HASH(initiator.chaining_key || IDENTIFIER) || responder.static_public)
+        let mut hash = INITIAL_CHAIN_HASH;
+        hash = b2s_hash(&hash, self.params.peer_static_public.as_bytes());
+        // initiator.ephemeral_private = DH_GENERATE()
+        let ephemeral_private = x25519_dalek::ReusableSecret::random_from_rng(rng);
+        // msg.message_type = 1
+        // msg.reserved_zero = { 0, 0, 0 }
+        message_type.copy_from_slice(&HANDSHAKE_INIT.to_le_bytes());
+        // msg.sender_index = little_endian(initiator.sender_index)
+        sender_index.copy_from_slice(&local_index.to_le_bytes());
+        // msg.unencrypted_ephemeral = DH_PUBKEY(initiator.ephemeral_private)
+        unencrypted_ephemeral.copy_from_slice(PublicKey::from(&ephemeral_private).as_bytes());
+        // initiator.hash = HASH(initiator.hash || msg.unencrypted_ephemeral)
+        hash = b2s_hash(&hash, unencrypted_ephemeral);
+        // temp = HMAC(initiator.chaining_key, msg.unencrypted_ephemeral)
+        // initiator.chaining_key = HMAC(temp, 0x1)
+        chaining_key = b2s_hmac(&b2s_hmac(&chaining_key, unencrypted_ephemeral), &[0x01]);
+        // temp = HMAC(initiator.chaining_key, DH(initiator.ephemeral_private, responder.static_public))
+        let ephemeral_shared = dh(&ephemeral_private, &self.params.peer_static_public)
+            .expect("`Handshake::new` rejects a low-order peer static key");
+        let temp = b2s_hmac(&chaining_key, ephemeral_shared.as_bytes());
+        // initiator.chaining_key = HMAC(temp, 0x1)
+        chaining_key = b2s_hmac(&temp, &[0x01]);
+        // key = HMAC(temp, initiator.chaining_key || 0x2)
+        let key = b2s_hmac2(&temp, &chaining_key, &[0x02]);
+        // msg.encrypted_static = AEAD(key, 0, initiator.static_public, initiator.hash)
+        aead_chacha20_seal(
+            encrypted_static,
+            &key,
+            0,
+            self.params.static_public.as_bytes(),
+            &hash,
+        );
+        // initiator.hash = HASH(initiator.hash || msg.encrypted_static)
+        hash = b2s_hash(&hash, encrypted_static);
+        // temp = HMAC(initiator.chaining_key, DH(initiator.static_private, responder.static_public))
+        let temp = b2s_hmac(&chaining_key, self.params.static_shared.as_bytes());
+        // initiator.chaining_key = HMAC(temp, 0x1)
+        chaining_key = b2s_hmac(&temp, &[0x01]);
+        // key = HMAC(temp, initiator.chaining_key || 0x2)
+        let key = b2s_hmac2(&temp, &chaining_key, &[0x02]);
+        // msg.encrypted_timestamp = AEAD(key, 0, TAI64N(), initiator.hash)
+        let timestamp = self.stamper.stamp(now);
+        aead_chacha20_seal(encrypted_timestamp, &key, 0, &timestamp, &hash);
+        // initiator.hash = HASH(initiator.hash || msg.encrypted_timestamp)
+        hash = b2s_hash(&hash, encrypted_timestamp);
+
+        self.previous = std::mem::replace(
+            &mut self.state,
+            HandshakeState::InitSent(HandshakeInitSentState {
+                local_index,
+                chaining_key,
+                hash,
+                ephemeral_private,
+                time_sent: now,
+            }),
+        );
+
+        self.append_mac1_and_mac2(local_index, &mut dst);
+
+        (dst, local_index)
+    }
+
     pub(super) fn receive_handshake_initialization(
         &mut self,
         packet: HandshakeInit,
@@ -446,110 +526,6 @@ impl Handshake {
         Ok(())
     }
 
-    // Compute and append mac1 and mac2 to a handshake message
-    fn append_mac1_and_mac2(&mut self, local_index: Index, dst: &mut [u8]) {
-        let mac1_off = dst.len() - 32;
-        let mac2_off = dst.len() - 16;
-
-        // msg.mac1 = MAC(HASH(LABEL_MAC1 || responder.static_public), msg[0:offsetof(msg.mac1)])
-        let msg_mac1 = b2s_keyed_mac_16(&self.params.sending_mac1_key, &dst[..mac1_off]);
-
-        dst[mac1_off..mac2_off].copy_from_slice(&msg_mac1[..]);
-
-        //msg.mac2 = MAC(initiator.last_received_cookie, msg[0:offsetof(msg.mac2)])
-        let msg_mac2: [u8; 16] =
-            if let Some(WriteCookie { value: cookie, .. }) = self.cookies.write_cookie {
-                b2s_keyed_mac_16(&cookie, &dst[..mac2_off])
-            } else {
-                [0u8; 16]
-            };
-
-        dst[mac2_off..].copy_from_slice(&msg_mac2[..]);
-
-        self.cookies.index = local_index;
-        self.cookies.last_mac1 = Some(msg_mac1);
-    }
-
-    pub(super) fn format_handshake_initiation(
-        &mut self,
-        rng: &mut StdRng,
-        now: Instant,
-    ) -> ([u8; HANDSHAKE_INIT_SZ], Index) {
-        let mut dst = [0u8; HANDSHAKE_INIT_SZ];
-
-        let (message_type, rest) = dst.split_at_mut(4);
-        let (sender_index, rest) = rest.split_at_mut(4);
-        let (unencrypted_ephemeral, rest) = rest.split_at_mut(32);
-        let (encrypted_static, rest) = rest.split_at_mut(32 + 16);
-        let (encrypted_timestamp, _) = rest.split_at_mut(12 + 16);
-
-        let local_index = self.next_index.wrapping_increment();
-
-        // initiator.chaining_key = HASH(CONSTRUCTION)
-        let mut chaining_key = Zeroizing::new(INITIAL_CHAIN_KEY);
-        // initiator.hash = HASH(HASH(initiator.chaining_key || IDENTIFIER) || responder.static_public)
-        let mut hash = INITIAL_CHAIN_HASH;
-        hash = b2s_hash(&hash, self.params.peer_static_public.as_bytes());
-        // initiator.ephemeral_private = DH_GENERATE()
-        let ephemeral_private = x25519_dalek::ReusableSecret::random_from_rng(rng);
-        // msg.message_type = 1
-        // msg.reserved_zero = { 0, 0, 0 }
-        message_type.copy_from_slice(&HANDSHAKE_INIT.to_le_bytes());
-        // msg.sender_index = little_endian(initiator.sender_index)
-        sender_index.copy_from_slice(&local_index.to_le_bytes());
-        // msg.unencrypted_ephemeral = DH_PUBKEY(initiator.ephemeral_private)
-        unencrypted_ephemeral.copy_from_slice(PublicKey::from(&ephemeral_private).as_bytes());
-        // initiator.hash = HASH(initiator.hash || msg.unencrypted_ephemeral)
-        hash = b2s_hash(&hash, unencrypted_ephemeral);
-        // temp = HMAC(initiator.chaining_key, msg.unencrypted_ephemeral)
-        // initiator.chaining_key = HMAC(temp, 0x1)
-        chaining_key = b2s_hmac(&b2s_hmac(&chaining_key, unencrypted_ephemeral), &[0x01]);
-        // temp = HMAC(initiator.chaining_key, DH(initiator.ephemeral_private, responder.static_public))
-        let ephemeral_shared = dh(&ephemeral_private, &self.params.peer_static_public)
-            .expect("`Handshake::new` rejects a low-order peer static key");
-        let temp = b2s_hmac(&chaining_key, ephemeral_shared.as_bytes());
-        // initiator.chaining_key = HMAC(temp, 0x1)
-        chaining_key = b2s_hmac(&temp, &[0x01]);
-        // key = HMAC(temp, initiator.chaining_key || 0x2)
-        let key = b2s_hmac2(&temp, &chaining_key, &[0x02]);
-        // msg.encrypted_static = AEAD(key, 0, initiator.static_public, initiator.hash)
-        aead_chacha20_seal(
-            encrypted_static,
-            &key,
-            0,
-            self.params.static_public.as_bytes(),
-            &hash,
-        );
-        // initiator.hash = HASH(initiator.hash || msg.encrypted_static)
-        hash = b2s_hash(&hash, encrypted_static);
-        // temp = HMAC(initiator.chaining_key, DH(initiator.static_private, responder.static_public))
-        let temp = b2s_hmac(&chaining_key, self.params.static_shared.as_bytes());
-        // initiator.chaining_key = HMAC(temp, 0x1)
-        chaining_key = b2s_hmac(&temp, &[0x01]);
-        // key = HMAC(temp, initiator.chaining_key || 0x2)
-        let key = b2s_hmac2(&temp, &chaining_key, &[0x02]);
-        // msg.encrypted_timestamp = AEAD(key, 0, TAI64N(), initiator.hash)
-        let timestamp = self.stamper.stamp(now);
-        aead_chacha20_seal(encrypted_timestamp, &key, 0, &timestamp, &hash);
-        // initiator.hash = HASH(initiator.hash || msg.encrypted_timestamp)
-        hash = b2s_hash(&hash, encrypted_timestamp);
-
-        self.previous = std::mem::replace(
-            &mut self.state,
-            HandshakeState::InitSent(HandshakeInitSentState {
-                local_index,
-                chaining_key,
-                hash,
-                ephemeral_private,
-                time_sent: now,
-            }),
-        );
-
-        self.append_mac1_and_mac2(local_index, &mut dst);
-
-        (dst, local_index)
-    }
-
     fn format_handshake_response(
         &mut self,
         mut hash: [u8; KEY_LEN],
@@ -622,5 +598,29 @@ impl Handshake {
                 now,
             ),
         ))
+    }
+
+    // Compute and append mac1 and mac2 to a handshake message
+    fn append_mac1_and_mac2(&mut self, local_index: Index, dst: &mut [u8]) {
+        let mac1_off = dst.len() - 32;
+        let mac2_off = dst.len() - 16;
+
+        // msg.mac1 = MAC(HASH(LABEL_MAC1 || responder.static_public), msg[0:offsetof(msg.mac1)])
+        let msg_mac1 = b2s_keyed_mac_16(&self.params.sending_mac1_key, &dst[..mac1_off]);
+
+        dst[mac1_off..mac2_off].copy_from_slice(&msg_mac1[..]);
+
+        //msg.mac2 = MAC(initiator.last_received_cookie, msg[0:offsetof(msg.mac2)])
+        let msg_mac2: [u8; 16] =
+            if let Some(WriteCookie { value: cookie, .. }) = self.cookies.write_cookie {
+                b2s_keyed_mac_16(&cookie, &dst[..mac2_off])
+            } else {
+                [0u8; 16]
+            };
+
+        dst[mac2_off..].copy_from_slice(&msg_mac2[..]);
+
+        self.cookies.index = local_index;
+        self.cookies.last_mac1 = Some(msg_mac1);
     }
 }
