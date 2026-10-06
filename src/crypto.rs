@@ -41,16 +41,11 @@ pub(crate) fn b2s_keyed_mac_16_2(key: &[u8], data1: &[u8], data2: &[u8]) -> [u8;
     hmac.finalize_fixed().into()
 }
 
-fn hmac_blake2s(key: &[u8], data: &[&[u8]]) -> Zeroizing<[u8; 32]> {
+fn hmac_blake2s(key: &[u8; 32], data: &[&[u8]]) -> Zeroizing<[u8; 32]> {
     const BLOCK_SIZE: usize = 64;
 
     let mut padded_key = Zeroizing::new([0u8; BLOCK_SIZE]);
-    if key.len() > BLOCK_SIZE {
-        let hashed_key = padded_key.first_chunk_mut::<32>().unwrap();
-        Digest::finalize_into(Blake2s256::new_with_prefix(key), hashed_key.into());
-    } else {
-        padded_key[..key.len()].copy_from_slice(key);
-    }
+    padded_key[..32].copy_from_slice(key);
 
     let mut ipad = Zeroizing::new([0x36; BLOCK_SIZE]);
     let mut opad = Zeroizing::new([0x5c; BLOCK_SIZE]);
