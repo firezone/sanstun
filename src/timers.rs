@@ -477,7 +477,10 @@ impl Tunnel {
 
     /// Returns the next [`Event`] queued by [`Tunnel::handle_timeout`] or [`Tunnel::decapsulate`].
     pub fn poll_event(&mut self) -> Option<Event> {
-        self.events.pop_front()
+        let event = self.events[0].take()?;
+        self.events.rotate_left(1);
+
+        Some(event)
     }
 
     /// Returns the [`Instant`] at which [`Tunnel::handle_timeout`] next needs to
@@ -577,7 +580,7 @@ impl Tunnel {
     fn expire(&mut self, now: Instant) {
         self.handshake.set_expired();
         self.clear_all(now);
-        self.events.push_back(Event::ConnectionExpired);
+        self.queue_event(Event::ConnectionExpired);
     }
 
     pub fn time_since_last_handshake(&self, now: Instant) -> Option<Duration> {

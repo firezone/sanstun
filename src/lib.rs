@@ -30,12 +30,11 @@ use crate::timers::{TimerName, Timers};
 use rand::rngs::StdRng;
 use rand::{CryptoRng, SeedableRng};
 
-use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 /// What the caller needs to do, as returned by [`Tunnel::poll_event`].
 ///
-/// A newer message to send replaces a queued one of the same kind, which it supersedes.
+/// A newer event replaces a queued one of the same kind, which it supersedes.
 #[derive(Debug)]
 pub enum Event {
     /// Send this handshake initiation to the peer.
@@ -49,6 +48,9 @@ pub enum Event {
     /// Emitted once per expiry, see [`Tunnel::is_expired`].
     ConnectionExpired,
 }
+
+/// The number of variants of [`Event`], which bounds how many can be queued.
+const EVENT_KINDS: usize = 4;
 
 /// A keepalive to send with [`Tunnel::encapsulate_keepalive`], e.g. when probing a path.
 #[derive(Debug)]
@@ -75,7 +77,8 @@ pub struct Tunnel {
     timers: timers::Timers,
     /// Source of the ephemeral keys and the handshake jitter
     rng: StdRng,
-    events: VecDeque<Event>,
+    /// At most one event of each kind, oldest first.
+    events: [Option<Event>; EVENT_KINDS],
 }
 
 impl Tunnel {
@@ -110,7 +113,7 @@ impl Tunnel {
             sessions: Sessions::default(),
             timers: Timers::new(persistent_keepalive, now),
             rng: StdRng::from_rng(rng),
-            events: VecDeque::new(),
+            events: Default::default(),
         })
     }
 
@@ -381,9 +384,21 @@ impl Tunnel {
     /// which it supersedes.
     fn queue_event(&mut self, event: Event) {
         let kind = std::mem::discriminant(&event);
-        self.events
-            .retain(|queued| std::mem::discriminant(queued) != kind);
 
-        self.events.push_back(event);
+        if let Some(i) = self.events.iter().position(|queued| {
+            queued
+                .as_ref()
+                .is_some_and(|queued| std::mem::discriminant(queued) == kind)
+        }) {
+            self.events[i] = None;
+            self.events[i..].rotate_left(1);
+        }
+
+        let free = self
+            .events
+            .iter_mut()
+            .find(|slot| slot.is_none())
+            .expect("there is a slot for every kind of event");
+        *free = Some(event);
     }
 }
