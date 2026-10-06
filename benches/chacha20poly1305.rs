@@ -1,4 +1,3 @@
-use aead::{AeadInPlace, KeyInit};
 use criterion::{BenchmarkId, Criterion, Throughput};
 use rand::Rng;
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
@@ -18,20 +17,6 @@ fn chacha20poly1305_ring(key_bytes: &[u8], buf: &mut [u8]) {
         .unwrap();
 
     buf[n..].copy_from_slice(tag.as_ref())
-}
-
-fn chacha20poly1305_non_ring(key_bytes: &[u8], buf: &mut [u8]) {
-    let len = buf.len();
-    let n = len - 16;
-
-    let aead = chacha20poly1305::ChaCha20Poly1305::new_from_slice(key_bytes).unwrap();
-    let nonce = chacha20poly1305::Nonce::default();
-
-    let tag = aead
-        .encrypt_in_place_detached(&nonce, &[], &mut buf[..n])
-        .unwrap();
-
-    buf[n..].copy_from_slice(tag.as_ref());
 }
 
 fn bench_chacha20poly1305(c: &mut Criterion) {
@@ -55,22 +40,6 @@ fn bench_chacha20poly1305(c: &mut Criterion) {
                 rng.fill_bytes(&mut buf);
 
                 b.iter(|| chacha20poly1305_ring(&key, &mut buf));
-            },
-        );
-
-        group.bench_with_input(
-            BenchmarkId::new("chacha20poly1305_non_ring", size),
-            &size,
-            |b, i| {
-                let mut key = [0; 32];
-                let mut buf = vec![0; i + 16];
-
-                let mut rng = rand::rng();
-
-                rng.fill_bytes(&mut key);
-                rng.fill_bytes(&mut buf);
-
-                b.iter(|| chacha20poly1305_non_ring(&key, &mut buf));
             },
         );
     }

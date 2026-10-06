@@ -1,4 +1,4 @@
-use crate::crypto::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2};
+use crate::crypto::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, xaead_seal};
 use crate::handshake::{LABEL_COOKIE, LABEL_MAC1, decrypt_initiator_static};
 use crate::index::IndexLfsr;
 use crate::message::{
@@ -13,9 +13,6 @@ use crate::{CookieReplyMessage, Error, PublicKey, StaticSecret, Tunnel};
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
-use aead::generic_array::GenericArray;
-use aead::{AeadInPlace, KeyInit};
-use chacha20poly1305::{Key, XChaCha20Poly1305};
 use rand::rngs::StdRng;
 use rand::{CryptoRng, RngExt, SeedableRng};
 use subtle::ConstantTimeEq as _;
@@ -43,7 +40,7 @@ pub struct Interface {
     /// Replaces the cookie secret and draws the nonces of cookie replies
     rng: StdRng,
     mac1_key: [u8; 32],
-    cookie_key: Key,
+    cookie_key: [u8; 32],
     stamper: TimeStamper,
     indices: IndexLfsr,
     rate_limiter: RateLimiter,
@@ -75,7 +72,7 @@ impl Interface {
             cookie_secret_created_at: now,
             rng,
             mac1_key: b2s_hash(LABEL_MAC1, static_public.as_bytes()),
-            cookie_key: b2s_hash(LABEL_COOKIE, static_public.as_bytes()).into(),
+            cookie_key: b2s_hash(LABEL_COOKIE, static_public.as_bytes()),
             stamper: TimeStamper::new(now, unix),
             indices,
             rate_limiter: RateLimiter::new(now),
@@ -87,7 +84,7 @@ impl Interface {
         let static_public = PublicKey::from(&static_private);
 
         self.mac1_key = b2s_hash(LABEL_MAC1, static_public.as_bytes());
-        self.cookie_key = b2s_hash(LABEL_COOKIE, static_public.as_bytes()).into();
+        self.cookie_key = b2s_hash(LABEL_COOKIE, static_public.as_bytes());
         self.static_private = static_private;
         self.static_public = static_public;
 
@@ -189,7 +186,7 @@ impl Interface {
             }
             (COOKIE_REPLY, COOKIE_REPLY_SZ) => Packet::PacketCookieReply(PacketCookieReply {
                 receiver_idx: u32::from_le_bytes(datagram[4..8].try_into().unwrap()),
-                nonce: &datagram[8..32],
+                nonce: datagram[8..32].try_into().unwrap(),
                 encrypted_cookie: &datagram[32..64],
             }),
             (DATA, DATA_OVERHEAD_SZ..=usize::MAX) => Packet::PacketData(PacketData {
@@ -290,24 +287,21 @@ impl Interface {
         let (receiver_index, rest) = rest.split_at_mut(4);
         let (nonce, rest) = rest.split_at_mut(24);
         let (encrypted_cookie, _) = rest.split_at_mut(16 + 16);
+        let nonce_value = self.nonce();
 
         // msg.message_type = 3
         // msg.reserved_zero = { 0, 0, 0 }
         message_type.copy_from_slice(&COOKIE_REPLY.to_le_bytes());
         // msg.receiver_index = little_endian(initiator.sender_index)
         receiver_index.copy_from_slice(&idx.to_le_bytes());
-        nonce.copy_from_slice(&self.nonce()[..]);
-
-        let cipher = XChaCha20Poly1305::new(&self.cookie_key);
-
-        let iv = GenericArray::from_slice(nonce);
-
-        encrypted_cookie[..16].copy_from_slice(&cookie);
-        let tag = cipher
-            .encrypt_in_place_detached(iv, mac1, &mut encrypted_cookie[..16])
-            .expect("a cookie is always within the AEAD's limits");
-
-        encrypted_cookie[16..].copy_from_slice(&tag);
+        nonce.copy_from_slice(&nonce_value);
+        xaead_seal(
+            encrypted_cookie,
+            &self.cookie_key,
+            &nonce_value,
+            &cookie,
+            mac1,
+        );
 
         dst
     }
