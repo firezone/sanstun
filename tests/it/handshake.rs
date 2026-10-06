@@ -3,7 +3,7 @@
 
 use crate::harness::{
     HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, Outcome as _, Peer::A, Peer::B, Sim,
-    classify,
+    classify, ipv4_packet, secs,
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -126,6 +126,24 @@ fn simultaneous_handshake_initiations_converge() {
     assert!(sim.is_established(A));
     assert!(sim.is_established(B));
     sim.assert_connectivity();
+}
+
+// §6.1: the responder keeps sending on the previous session until the
+// initiator confirms the new one, however many initiations it answers.
+#[test]
+fn unconfirmed_sessions_never_replace_the_current_one() {
+    let mut sim = Sim::connected();
+    sim.cut_link();
+
+    for _ in 0..8 {
+        sim.advance(secs(1));
+        let init = sim.force_handshake_initiation(A);
+        sim.deliver(B, &init).expect_one_net();
+    }
+
+    let ip_packet = ipv4_packet(b"still on the confirmed session");
+    let datagram = sim.encapsulate(B, &ip_packet);
+    assert_eq!(sim.deliver(A, &datagram).expect_one_ip(), ip_packet);
 }
 
 #[test]

@@ -98,7 +98,6 @@ impl Tunnel {
             static_private,
             static_public,
             peer_static_public,
-            index,
             preshared_key,
             stamper,
         )?;
@@ -106,7 +105,7 @@ impl Tunnel {
         Ok(Tunnel {
             index,
             handshake,
-            sessions: Sessions::default(),
+            sessions: Sessions::new(index),
             timers: Timers::new(persistent_keepalive, now),
             rng: StdRng::from_rng(rng),
             events: RingBuffer::new(),
@@ -271,11 +270,13 @@ impl Tunnel {
 
         tracing::debug!(%remote_idx, "Received handshake_initiation",);
 
-        let (packet, session) =
-            self.handshake
-                .receive_handshake_initialization(p, &mut self.rng, now)?;
+        let (packet, session) = self.handshake.receive_handshake_initialization(
+            p,
+            self.sessions.next_index(),
+            &mut self.rng,
+            now,
+        )?;
 
-        // Store new session in ring buffer
         let local_idx = self.sessions.insert(session);
 
         self.timers.tick(TimerName::TimeLastPacketReceived, now);
@@ -362,9 +363,10 @@ impl Tunnel {
 
         let starting_new_handshake = !self.handshake.is_in_progress();
 
-        let (packet, local_idx) = self
+        let local_idx = self.sessions.next_index();
+        let packet = self
             .handshake
-            .format_handshake_initiation(&mut self.rng, now);
+            .initiate_handshake(local_idx, &mut self.rng, now);
 
         tracing::debug!(%local_idx, "Sending handshake_initiation");
 

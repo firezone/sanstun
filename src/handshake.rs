@@ -95,8 +95,6 @@ enum HandshakeState {
 
 pub(crate) struct Handshake {
     params: NoiseParams,
-    /// Index of the next session
-    next_index: Index,
     /// Allow to have two outgoing handshakes in flight, because sometimes we may receive a delayed response to a handshake with bad networks
     previous: HandshakeState,
     /// Current handshake state
@@ -216,7 +214,6 @@ impl Handshake {
         static_private: StaticSecret,
         static_public: PublicKey,
         peer_static_public: PublicKey,
-        global_idx: Index,
         preshared_key: Option<x25519_dalek::StaticSecret>,
         stamper: TimeStamper,
     ) -> Result<Handshake, Error> {
@@ -229,7 +226,6 @@ impl Handshake {
 
         Ok(Handshake {
             params,
-            next_index: global_idx,
             previous: HandshakeState::None,
             state: HandshakeState::None,
             last_handshake_timestamp: Tai64N::zero(),
@@ -278,89 +274,27 @@ impl Handshake {
         self.cookies.write_cookie = None;
     }
 
-    pub(super) fn format_handshake_initiation(
+    /// Starts a new handshake, returning the initiation to send.
+    pub(super) fn initiate_handshake(
         &mut self,
+        local_index: Index,
         rng: &mut StdRng,
         now: Instant,
-    ) -> ([u8; HANDSHAKE_INIT_SZ], Index) {
-        let mut dst = [0u8; HANDSHAKE_INIT_SZ];
+    ) -> [u8; HANDSHAKE_INIT_SZ] {
+        let (mut initiation, state) = self.format_handshake_initiation(local_index, rng, now);
 
-        let (message_type, rest) = dst.split_at_mut(4);
-        let (sender_index, rest) = rest.split_at_mut(4);
-        let (unencrypted_ephemeral, rest) = rest.split_at_mut(32);
-        let (encrypted_static, rest) = rest.split_at_mut(32 + 16);
-        let (encrypted_timestamp, _) = rest.split_at_mut(12 + 16);
+        self.previous = std::mem::replace(&mut self.state, HandshakeState::InitSent(state));
+        self.append_mac1_and_mac2(local_index, &mut initiation);
 
-        let local_index = self.next_index.wrapping_increment();
-
-        // initiator.chaining_key = HASH(CONSTRUCTION)
-        let mut chaining_key = Zeroizing::new(INITIAL_CHAIN_KEY);
-        // initiator.hash = HASH(HASH(initiator.chaining_key || IDENTIFIER) || responder.static_public)
-        let mut hash = INITIAL_CHAIN_HASH;
-        hash = b2s_hash(&hash, self.params.peer_static_public.as_bytes());
-        // initiator.ephemeral_private = DH_GENERATE()
-        let ephemeral_private = x25519_dalek::ReusableSecret::random_from_rng(rng);
-        // msg.message_type = 1
-        // msg.reserved_zero = { 0, 0, 0 }
-        message_type.copy_from_slice(&HANDSHAKE_INIT.to_le_bytes());
-        // msg.sender_index = little_endian(initiator.sender_index)
-        sender_index.copy_from_slice(&local_index.to_le_bytes());
-        // msg.unencrypted_ephemeral = DH_PUBKEY(initiator.ephemeral_private)
-        unencrypted_ephemeral.copy_from_slice(PublicKey::from(&ephemeral_private).as_bytes());
-        // initiator.hash = HASH(initiator.hash || msg.unencrypted_ephemeral)
-        hash = b2s_hash(&hash, unencrypted_ephemeral);
-        // temp = HMAC(initiator.chaining_key, msg.unencrypted_ephemeral)
-        // initiator.chaining_key = HMAC(temp, 0x1)
-        chaining_key = b2s_hmac(&b2s_hmac(&chaining_key, unencrypted_ephemeral), &[0x01]);
-        // temp = HMAC(initiator.chaining_key, DH(initiator.ephemeral_private, responder.static_public))
-        let ephemeral_shared = dh(&ephemeral_private, &self.params.peer_static_public)
-            .expect("`Handshake::new` rejects a low-order peer static key");
-        let temp = b2s_hmac(&chaining_key, ephemeral_shared.as_bytes());
-        // initiator.chaining_key = HMAC(temp, 0x1)
-        chaining_key = b2s_hmac(&temp, &[0x01]);
-        // key = HMAC(temp, initiator.chaining_key || 0x2)
-        let key = b2s_hmac2(&temp, &chaining_key, &[0x02]);
-        // msg.encrypted_static = AEAD(key, 0, initiator.static_public, initiator.hash)
-        aead_chacha20_seal(
-            encrypted_static,
-            &key,
-            0,
-            self.params.static_public.as_bytes(),
-            &hash,
-        );
-        // initiator.hash = HASH(initiator.hash || msg.encrypted_static)
-        hash = b2s_hash(&hash, encrypted_static);
-        // temp = HMAC(initiator.chaining_key, DH(initiator.static_private, responder.static_public))
-        let temp = b2s_hmac(&chaining_key, self.params.static_shared.as_bytes());
-        // initiator.chaining_key = HMAC(temp, 0x1)
-        chaining_key = b2s_hmac(&temp, &[0x01]);
-        // key = HMAC(temp, initiator.chaining_key || 0x2)
-        let key = b2s_hmac2(&temp, &chaining_key, &[0x02]);
-        // msg.encrypted_timestamp = AEAD(key, 0, TAI64N(), initiator.hash)
-        let timestamp = self.stamper.stamp(now);
-        aead_chacha20_seal(encrypted_timestamp, &key, 0, &timestamp, &hash);
-        // initiator.hash = HASH(initiator.hash || msg.encrypted_timestamp)
-        hash = b2s_hash(&hash, encrypted_timestamp);
-
-        self.previous = std::mem::replace(
-            &mut self.state,
-            HandshakeState::InitSent(HandshakeInitSentState {
-                local_index,
-                chaining_key,
-                hash,
-                ephemeral_private,
-                time_sent: now,
-            }),
-        );
-
-        self.append_mac1_and_mac2(local_index, &mut dst);
-
-        (dst, local_index)
+        initiation
     }
 
+    /// Answers a valid handshake initiation with a response and the session it establishes under
+    /// `local_index`.
     pub(super) fn receive_handshake_initialization(
         &mut self,
         packet: HandshakeInit,
+        local_index: Index,
         rng: &mut StdRng,
         now: Instant,
     ) -> Result<([u8; HANDSHAKE_RESP_SZ], Session), Error> {
@@ -407,16 +341,18 @@ impl Handshake {
         // initiator.hash = HASH(initiator.hash || msg.encrypted_timestamp)
         hash = b2s_hash(&hash, encrypted_timestamp);
 
-        let response = self.format_handshake_response(
+        let (mut response, session) = self.format_handshake_response(
             hash,
             chaining_key,
             peer_ephemeral_public,
+            local_index,
             peer_index,
             rng,
             now,
         )?;
+        self.append_mac1_and_mac2(local_index, &mut response);
 
-        Ok(response)
+        Ok((response, session))
     }
 
     pub(super) fn receive_handshake_response(
@@ -526,11 +462,92 @@ impl Handshake {
         Ok(())
     }
 
+    /// Formats a handshake initiation without its MACs.
+    fn format_handshake_initiation(
+        &self,
+        local_index: Index,
+        rng: &mut StdRng,
+        now: Instant,
+    ) -> ([u8; HANDSHAKE_INIT_SZ], HandshakeInitSentState) {
+        let mut dst = [0u8; HANDSHAKE_INIT_SZ];
+
+        let (message_type, rest) = dst.split_at_mut(4);
+        let (sender_index, rest) = rest.split_at_mut(4);
+        let (unencrypted_ephemeral, rest) = rest.split_at_mut(32);
+        let (encrypted_static, rest) = rest.split_at_mut(32 + 16);
+        let (encrypted_timestamp, _) = rest.split_at_mut(12 + 16);
+
+        // initiator.chaining_key = HASH(CONSTRUCTION)
+        let mut chaining_key = Zeroizing::new(INITIAL_CHAIN_KEY);
+        // initiator.hash = HASH(HASH(initiator.chaining_key || IDENTIFIER) || responder.static_public)
+        let mut hash = INITIAL_CHAIN_HASH;
+        hash = b2s_hash(&hash, self.params.peer_static_public.as_bytes());
+        // initiator.ephemeral_private = DH_GENERATE()
+        let ephemeral_private = x25519_dalek::ReusableSecret::random_from_rng(rng);
+        // msg.message_type = 1
+        // msg.reserved_zero = { 0, 0, 0 }
+        message_type.copy_from_slice(&HANDSHAKE_INIT.to_le_bytes());
+        // msg.sender_index = little_endian(initiator.sender_index)
+        sender_index.copy_from_slice(&local_index.to_le_bytes());
+        // msg.unencrypted_ephemeral = DH_PUBKEY(initiator.ephemeral_private)
+        unencrypted_ephemeral.copy_from_slice(PublicKey::from(&ephemeral_private).as_bytes());
+        // initiator.hash = HASH(initiator.hash || msg.unencrypted_ephemeral)
+        hash = b2s_hash(&hash, unencrypted_ephemeral);
+        // temp = HMAC(initiator.chaining_key, msg.unencrypted_ephemeral)
+        // initiator.chaining_key = HMAC(temp, 0x1)
+        chaining_key = b2s_hmac(&b2s_hmac(&chaining_key, unencrypted_ephemeral), &[0x01]);
+        // temp = HMAC(initiator.chaining_key, DH(initiator.ephemeral_private, responder.static_public))
+        let ephemeral_shared = dh(&ephemeral_private, &self.params.peer_static_public)
+            .expect("`Handshake::new` rejects a low-order peer static key");
+        let temp = b2s_hmac(&chaining_key, ephemeral_shared.as_bytes());
+        // initiator.chaining_key = HMAC(temp, 0x1)
+        chaining_key = b2s_hmac(&temp, &[0x01]);
+        // key = HMAC(temp, initiator.chaining_key || 0x2)
+        let key = b2s_hmac2(&temp, &chaining_key, &[0x02]);
+        // msg.encrypted_static = AEAD(key, 0, initiator.static_public, initiator.hash)
+        aead_chacha20_seal(
+            encrypted_static,
+            &key,
+            0,
+            self.params.static_public.as_bytes(),
+            &hash,
+        );
+        // initiator.hash = HASH(initiator.hash || msg.encrypted_static)
+        hash = b2s_hash(&hash, encrypted_static);
+        // temp = HMAC(initiator.chaining_key, DH(initiator.static_private, responder.static_public))
+        let temp = b2s_hmac(&chaining_key, self.params.static_shared.as_bytes());
+        // initiator.chaining_key = HMAC(temp, 0x1)
+        chaining_key = b2s_hmac(&temp, &[0x01]);
+        // key = HMAC(temp, initiator.chaining_key || 0x2)
+        let key = b2s_hmac2(&temp, &chaining_key, &[0x02]);
+        // msg.encrypted_timestamp = AEAD(key, 0, TAI64N(), initiator.hash)
+        let timestamp = self.stamper.stamp(now);
+        aead_chacha20_seal(encrypted_timestamp, &key, 0, &timestamp, &hash);
+        // initiator.hash = HASH(initiator.hash || msg.encrypted_timestamp)
+        hash = b2s_hash(&hash, encrypted_timestamp);
+
+        let state = HandshakeInitSentState {
+            local_index,
+            chaining_key,
+            hash,
+            ephemeral_private,
+            time_sent: now,
+        };
+
+        (dst, state)
+    }
+
+    /// Formats a handshake response without its MACs.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The arguments are the handshake state so far."
+    )]
     fn format_handshake_response(
-        &mut self,
+        &self,
         mut hash: [u8; KEY_LEN],
         mut chaining_key: Zeroizing<[u8; KEY_LEN]>,
         peer_ephemeral_public: PublicKey,
+        local_index: Index,
         peer_index: u32,
         rng: &mut StdRng,
         now: Instant,
@@ -545,7 +562,6 @@ impl Handshake {
 
         // responder.ephemeral_private = DH_GENERATE()
         let ephemeral_private = x25519_dalek::ReusableSecret::random_from_rng(rng);
-        let local_index = self.next_index.wrapping_increment();
         // msg.message_type = 2
         // msg.reserved_zero = { 0, 0, 0 }
         message_type.copy_from_slice(&HANDSHAKE_RESP.to_le_bytes());
@@ -585,8 +601,6 @@ impl Handshake {
         aead_chacha20_seal(encrypted_nothing, &key, 0, &[], &hash);
 
         let (temp2, temp3) = derive_transport_keys(&chaining_key);
-
-        self.append_mac1_and_mac2(local_index, &mut dst);
 
         Ok((
             dst,

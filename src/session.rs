@@ -146,14 +146,41 @@ impl Session {
 const N_SESSIONS: u8 = 8;
 
 /// The [`N_SESSIONS`] most recent sessions, stored at their index modulo [`N_SESSIONS`].
-#[derive(Default)]
 pub(crate) struct Sessions {
     slots: [Option<Session>; N_SESSIONS as usize],
     /// Index of most recently used session
     current: Index,
+    /// The most recently allocated local index
+    last_index: Index,
 }
 
 impl Sessions {
+    /// Creates an empty ring whose sessions take their local indices from `index`.
+    pub(crate) fn new(index: Index) -> Self {
+        Self {
+            slots: Default::default(),
+            current: Index::default(),
+            last_index: index,
+        }
+    }
+
+    /// Allocates the local index of a new session.
+    ///
+    /// The index never maps to the slot of the current session, so storing the new session
+    /// cannot replace it.
+    pub(crate) fn next_index(&mut self) -> Index {
+        loop {
+            let index = self.last_index.wrapping_increment();
+
+            if self
+                .current()
+                .is_none_or(|current| slot_of(current.receiving_index) != slot_of(index))
+            {
+                return index;
+            }
+        }
+    }
+
     /// Stores a new session, replacing the one in its slot, and returns its index.
     pub(crate) fn insert(&mut self, session: Session) -> Index {
         let index = session.receiving_index;
@@ -164,11 +191,11 @@ impl Sessions {
 
     /// The most recently used session, if it still exists.
     pub(crate) fn current(&self) -> Option<&Session> {
-        self.slot(self.current).as_ref()
+        self.get(self.current)
     }
 
     pub(crate) fn current_mut(&mut self) -> Option<&mut Session> {
-        self.slot_mut(self.current).as_mut()
+        self.get_mut(self.current)
     }
 
     /// The session in the slot of `index`, which may have a different index.
@@ -191,13 +218,12 @@ impl Sessions {
             return;
         }
 
-        let Some(new) = self.slot(new_idx).as_ref() else {
+        let Some(new) = self.get(new_idx) else {
             debug_assert!(false, "new session should always exist");
             return;
         };
         if self
-            .slot(cur_idx)
-            .as_ref()
+            .current()
             .is_some_and(|current| current.established_at() > new.established_at())
         {
             // The current session is "newer" than the new one, don't update.
@@ -247,13 +273,23 @@ impl Sessions {
         self.slots.iter().flatten().map(Session::expires_at).min()
     }
 
+    fn get(&self, index: Index) -> Option<&Session> {
+        self.slot(index)
+            .as_ref()
+            .filter(|s| s.receiving_index == index)
+    }
+
     fn slot(&self, index: Index) -> &Option<Session> {
-        &self.slots[index.session() % N_SESSIONS as usize]
+        &self.slots[slot_of(index)]
     }
 
     fn slot_mut(&mut self, index: Index) -> &mut Option<Session> {
-        &mut self.slots[index.session() % N_SESSIONS as usize]
+        &mut self.slots[slot_of(index)]
     }
+}
+
+fn slot_of(index: Index) -> usize {
+    index.session() % N_SESSIONS as usize
 }
 
 /// The encryption of a data message whose counter is already assigned.
@@ -420,7 +456,7 @@ mod tests {
 
     #[test]
     fn last_counter_below_the_limit_is_handed_out_before_exhaustion() {
-        let mut session = session();
+        let mut session = session(Index::new_local(0));
         session.sending_key_counter = REJECT_AFTER_MESSAGES - 1;
         assert!(!session.sending_counter_exhausted());
 
@@ -430,9 +466,21 @@ mod tests {
         assert!(session.sending_counter_exhausted());
     }
 
-    fn session() -> Session {
+    #[test]
+    fn next_index_skips_the_slot_of_the_current_session() {
+        let mut sessions = Sessions::new(Index::new_local(0));
+        let current = sessions.next_index();
+        sessions.insert(session(current));
+        sessions.set_current(current);
+
+        for _ in 0..2 * N_SESSIONS {
+            assert_ne!(slot_of(sessions.next_index()), slot_of(current));
+        }
+    }
+
+    fn session(receiving_index: Index) -> Session {
         Session::new(
-            Index::new_local(0),
+            receiving_index,
             Index::from_peer(0),
             &[0; 32],
             &[0; 32],
