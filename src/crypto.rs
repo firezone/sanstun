@@ -6,8 +6,6 @@ use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
 use x25519_dalek::{PublicKey, SharedSecret};
 use zeroize::Zeroizing;
 
-type HmacBlake2s = hmac::SimpleHmac<Blake2s256>;
-
 #[inline]
 pub(crate) fn b2s_hash(data1: &[u8], data2: &[u8]) -> [u8; 32] {
     let mut hash = Blake2s256::new();
@@ -17,26 +15,15 @@ pub(crate) fn b2s_hash(data1: &[u8], data2: &[u8]) -> [u8; 32] {
 }
 
 #[inline]
-/// RFC 2401 HMAC+Blake2s, not to be confused with *keyed* Blake2s
+/// RFC 2104 HMAC-BLAKE2s, not to be confused with *keyed* BLAKE2s.
 pub(crate) fn b2s_hmac(key: &[u8; 32], data1: &[u8]) -> Zeroizing<[u8; 32]> {
-    use blake2::digest::Update;
-    let mut hmac = HmacBlake2s::new_from_slice(key).unwrap();
-    hmac.update(data1);
-    let mut out = Zeroizing::new([0; 32]);
-    hmac.finalize_into((&mut *out).into());
-    out
+    hmac_blake2s(key, &[data1])
 }
 
 #[inline]
 /// Like b2s_hmac, but chain data1 and data2 together
 pub(crate) fn b2s_hmac2(key: &[u8; 32], data1: &[u8; 32], data2: &[u8]) -> Zeroizing<[u8; 32]> {
-    use blake2::digest::Update;
-    let mut hmac = HmacBlake2s::new_from_slice(key).unwrap();
-    hmac.update(data1);
-    hmac.update(data2);
-    let mut out = Zeroizing::new([0; 32]);
-    hmac.finalize_into((&mut *out).into());
-    out
+    hmac_blake2s(key, &[data1, data2])
 }
 
 #[inline]
@@ -52,6 +39,37 @@ pub(crate) fn b2s_keyed_mac_16_2(key: &[u8], data1: &[u8], data2: &[u8]) -> [u8;
     blake2::digest::Update::update(&mut hmac, data1);
     blake2::digest::Update::update(&mut hmac, data2);
     hmac.finalize_fixed().into()
+}
+
+fn hmac_blake2s(key: &[u8], data: &[&[u8]]) -> Zeroizing<[u8; 32]> {
+    const BLOCK_SIZE: usize = 64;
+
+    let mut padded_key = Zeroizing::new([0u8; BLOCK_SIZE]);
+    if key.len() > BLOCK_SIZE {
+        let hashed_key = padded_key.first_chunk_mut::<32>().unwrap();
+        Digest::finalize_into(Blake2s256::new_with_prefix(key), hashed_key.into());
+    } else {
+        padded_key[..key.len()].copy_from_slice(key);
+    }
+
+    let mut ipad = Zeroizing::new([0x36; BLOCK_SIZE]);
+    let mut opad = Zeroizing::new([0x5c; BLOCK_SIZE]);
+    for ((i, o), k) in ipad.iter_mut().zip(opad.iter_mut()).zip(padded_key.iter()) {
+        *i ^= k;
+        *o ^= k;
+    }
+
+    let mut inner = Blake2s256::new_with_prefix(ipad.as_slice());
+    for d in data {
+        inner.update(d);
+    }
+    let mut inner_hash = Zeroizing::new([0u8; 32]);
+    Digest::finalize_into(inner, (&mut *inner_hash).into());
+
+    let mut out = Zeroizing::new([0u8; 32]);
+    let outer = Blake2s256::new_with_prefix(opad.as_slice()).chain_update(inner_hash.as_slice());
+    Digest::finalize_into(outer, (&mut *out).into());
+    out
 }
 
 #[inline]
@@ -181,6 +199,50 @@ mod x25519 {
 mod tests {
     use super::*;
     use x25519_dalek::StaticSecret;
+
+    #[test]
+    fn tmp_hmac_matches_crate() {
+        use blake2::digest::Update;
+        for key_len in [0, 1, 31, 32, 63, 64, 65, 100, 200] {
+            for msg_len in [0, 1, 32, 63, 64, 65, 100, 1000] {
+                for split in [0, msg_len / 2, msg_len] {
+                    let key = (0..key_len).map(|i| (i * 7 + 3) as u8).collect::<Vec<_>>();
+                    let msg = (0..msg_len).map(|i| (i * 13 + 1) as u8).collect::<Vec<_>>();
+                    let (a, b) = msg.split_at(split);
+
+                    let mut mac = hmac::SimpleHmac::<Blake2s256>::new_from_slice(&key).unwrap();
+                    mac.update(a);
+                    mac.update(b);
+                    let expected: [u8; 32] = mac.finalize_fixed().into();
+
+                    assert_eq!(
+                        *hmac_blake2s(&key, &[a, b]),
+                        expected,
+                        "{key_len} {msg_len} {split}"
+                    );
+                    assert_eq!(
+                        *hmac_blake2s(&key, &[&msg]),
+                        expected,
+                        "{key_len} {msg_len}"
+                    );
+                }
+            }
+        }
+        let key = [0x42; 32];
+        let mut mac = hmac::SimpleHmac::<Blake2s256>::new_from_slice(&key).unwrap();
+        mac.update(&[7; 32]);
+        mac.update(b"wireguard");
+        let expected: [u8; 32] = mac.finalize_fixed().into();
+        assert_eq!(*b2s_hmac2(&key, &[7; 32], b"wireguard"), expected);
+        let mut mac = hmac::SimpleHmac::<Blake2s256>::new_from_slice(&key).unwrap();
+        mac.update(b"wireguard");
+        let expected: [u8; 32] = mac.finalize_fixed().into();
+        assert_eq!(*b2s_hmac(&key, b"wireguard"), expected);
+        println!(
+            "KAT b2s_hmac2 = {:?}",
+            *b2s_hmac2(&key, &[7; 32], b"wireguard")
+        );
+    }
 
     #[test]
     fn dh_rejects_low_order_points() {
