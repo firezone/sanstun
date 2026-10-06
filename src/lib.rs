@@ -176,7 +176,7 @@ impl Tunnel {
         let mut message = [0u8; DATA_OVERHEAD_SZ];
         self.sending_session(now)
             .ok_or(Error::NoCurrentSession)?
-            .prepare_packet_data()
+            .prepare_keepalive()
             .encrypt_payload(&[], &mut message)?;
         self.timers.tick(TimerName::TimeLastPacketSent, now);
 

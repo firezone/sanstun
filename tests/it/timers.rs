@@ -320,11 +320,8 @@ fn responder_does_not_encrypt_on_an_expired_session_before_timers_run() {
 #[test]
 fn initiator_renews_an_expired_session_automatically() {
     let mut sim = Sim::connected();
-    sim.assert_connectivity();
-    sim.advance(secs(30));
-    sim.clear_log();
 
-    sim.advance(REJECT_AFTER_TIME - secs(20));
+    sim.advance(REJECT_AFTER_TIME + secs(10));
 
     let inits = sim.sent_at(A, Kind::Init);
     assert_eq!(inits.len(), 1);
@@ -374,6 +371,26 @@ fn tunnel_survives_a_session_a_rekey_left_unused() {
     for peer in [A, B] {
         assert!(!sim.tunn(peer).is_expired());
     }
+    sim.assert_connectivity();
+}
+
+/// Data sent on the previous session while a new one awaits confirmation was not
+/// sent on the new one, so the new session ages out like any unused one.
+#[test]
+fn data_sent_before_confirmation_does_not_count_for_the_new_session() {
+    let mut sim = Sim::connected();
+    sim.advance(secs(1));
+
+    let init = sim.initiate_handshake(A);
+    let response = sim.deliver(B, &init).expect_one_net();
+    let keepalive = sim.deliver(A, &response).expect_one_net();
+    sim.advance(secs(1));
+    sim.encapsulate(B, &ipv4_packet(b"on the previous session"));
+    sim.deliver(B, &keepalive).expect_consumed();
+
+    sim.advance(REJECT_AFTER_TIME + secs(10));
+
+    assert_eq!(sim.expirations(B), 0);
     sim.assert_connectivity();
 }
 
