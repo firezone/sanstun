@@ -15,7 +15,7 @@ use std::time::Instant;
 
 pub(crate) struct Session {
     established_at: Instant,
-    is_initiator: bool,
+    role: Role,
     pub(crate) receiving_index: Index,
     sending_index: Index,
     receiver: Arc<Key>,
@@ -34,6 +34,13 @@ impl std::fmt::Debug for Session {
     }
 }
 
+/// Our role in the handshake that established a session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Role {
+    Initiator,
+    Responder,
+}
+
 /// The plaintext of a data message is zero-padded to a multiple of this
 const PADDING_MULTIPLE: usize = 16;
 
@@ -43,12 +50,12 @@ impl Session {
         peer_index: Index,
         receiving_key: &[u8; 32],
         sending_key: &[u8; 32],
-        is_initiator: bool,
+        role: Role,
         now: Instant,
     ) -> Session {
         Session {
             established_at: now,
-            is_initiator,
+            role,
             receiving_index: local_index,
             sending_index: peer_index,
             receiver: Arc::new(Key::new(LessSafeKey::new(
@@ -66,9 +73,8 @@ impl Session {
         self.established_at
     }
 
-    /// Whether we initiated the handshake that established this session.
-    pub(crate) fn is_initiator(&self) -> bool {
-        self.is_initiator
+    pub(crate) fn role(&self) -> Role {
+        self.role
     }
 
     pub(crate) fn expires_at(&self) -> Instant {
@@ -494,7 +500,7 @@ mod tests {
             Index::from_peer(0),
             &[0; 32],
             &[0; 32],
-            true,
+            Role::Initiator,
             Instant::now(),
         )
     }

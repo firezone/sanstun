@@ -9,7 +9,7 @@ use crate::message::{
     HANDSHAKE_INIT, HANDSHAKE_INIT_SZ, HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeInit,
     HandshakeResponse, PacketCookieReply,
 };
-use crate::session::Session;
+use crate::session::{Role, Session};
 use crate::tai64n::{Tai64N, TimeStamper};
 use aead::{AeadInPlace, KeyInit as _};
 use chacha20poly1305::XChaCha20Poly1305;
@@ -424,7 +424,7 @@ impl Handshake {
             Index::from_peer(peer_index),
             &temp3,
             &temp2,
-            true,
+            Role::Initiator,
             now,
         ))
     }
@@ -610,7 +610,7 @@ impl Handshake {
                 Index::from_peer(peer_index),
                 &temp2,
                 &temp3,
-                false,
+                Role::Responder,
                 now,
             ),
         ))

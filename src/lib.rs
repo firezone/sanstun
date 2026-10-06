@@ -25,7 +25,7 @@ use crate::handshake::Handshake;
 use crate::index::Index;
 use crate::message::DATA_OVERHEAD_SZ;
 use crate::ring_buffer::RingBuffer;
-use crate::session::Sessions;
+use crate::session::{Role, Sessions};
 use crate::tai64n::TimeStamper;
 use crate::timers::{TimerName, Timers};
 
@@ -190,7 +190,7 @@ impl Tunnel {
         if session.sending_counter_exhausted() || session.expired_at(now) {
             return None;
         }
-        if !session.should_use_at(now) && session.is_initiator() {
+        if !session.should_use_at(now) && session.role() == Role::Initiator {
             return None;
         }
 

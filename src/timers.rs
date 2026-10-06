@@ -1,4 +1,4 @@
-use crate::session::Session;
+use crate::session::{Role, Session};
 use crate::{Event, Keepalive, Tunnel};
 use std::iter;
 use std::ops::{Index, IndexMut};
@@ -110,7 +110,7 @@ impl Timers {
     /// As the initiator of the `current` session, we start a new handshake
     /// `REKEY_AFTER_TIME` after establishing it, if we have since sent data.
     pub(crate) fn rekey_after_time_on_send(&self, current: Option<&Session>) -> Option<Instant> {
-        let current = current.filter(|s| s.is_initiator())?;
+        let current = current.filter(|s| s.role() == Role::Initiator)?;
 
         if !self.carried_data(current) {
             return None;
@@ -125,7 +125,7 @@ impl Timers {
         &self,
         current: Option<&Session>,
     ) -> Option<Instant> {
-        let current = current.filter(|s| s.is_initiator())?;
+        let current = current.filter(|s| s.role() == Role::Initiator)?;
         let session_established = current.established_at();
 
         if session_established >= self[TimeLastDataPacketReceived] {
@@ -314,7 +314,7 @@ impl Tunnel {
             }
 
             // In case our session expired, create a new one iff we initiated it.
-            if expired.is_initiator() && !self.handshake.is_in_progress() {
+            if expired.role() == Role::Initiator && !self.handshake.is_in_progress() {
                 handshake_initiation_required = true;
             }
         }
