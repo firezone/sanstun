@@ -325,6 +325,7 @@ mod tests {
             .expect("Should open what we just sealed");
     }
 
+    /// <https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-xchacha-03#appendix-A.1>
     #[test]
     fn xaead_test_vector() {
         let plaintext = b"Ladies and Gentlemen of the class of '99: If I could offer you only one tip for the future, sunscreen would be it.";
