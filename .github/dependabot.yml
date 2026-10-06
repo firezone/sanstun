@@ -28,6 +28,7 @@ updates:
       rust-crypto:
         patterns:
           - blake2
+          - chacha20
           - hmac
   - package-ecosystem: rust-toolchain
     directory: /
