@@ -120,11 +120,6 @@ impl Interface {
 
     /// Creates a [`Tunnel`] between our static key and `peer_static_public`.
     ///
-    /// The tunnel's RNG is seeded from this `Interface`, so every tunnel derives distinct ephemeral keys.
-    /// Its [`Index`](crate::Index) comes from this `Interface` too and only repeats after 2^24 - 1
-    /// tunnels; route received messages to the tunnel whose [`Tunnel::index`] has the same
-    /// [`Index::global`](crate::Index::global) part as their receiver index.
-    ///
     /// Fails with [`Error::LowOrderPoint`] if `peer_static_public` is a low-order point.
     pub fn new_tunnel(
         &mut self,
