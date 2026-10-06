@@ -26,39 +26,6 @@ fn bench_blake2s_hash(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_blake2s_hmac(c: &mut Criterion) {
-    let mut group = c.benchmark_group("blake2s_hmac");
-
-    group.sample_size(1000);
-
-    for size in [16, 32] {
-        group.throughput(Throughput::Bytes(size as u64));
-
-        group.bench_with_input(BenchmarkId::new("blake2s_crate", size), &size, |b, _| {
-            let buf_in = vec![0u8; size];
-            let rng = SystemRandom::new();
-
-            b.iter_batched(
-                || {
-                    let mut key = [0u8; 32];
-                    rng.fill(&mut key).unwrap();
-                    key
-                },
-                |key| {
-                    use blake2::digest::Update;
-                    type HmacBlake2s = hmac::SimpleHmac<blake2::Blake2s256>;
-                    let mut hmac = HmacBlake2s::new_from_slice(&key).unwrap();
-                    hmac.update(&buf_in);
-                    hmac.finalize_fixed();
-                },
-                criterion::BatchSize::SmallInput,
-            );
-        });
-    }
-
-    group.finish();
-}
-
 fn bench_blake2s_keyed(c: &mut Criterion) {
     let mut group = c.benchmark_group("blake2s_keyed_mac");
 
@@ -90,10 +57,5 @@ fn bench_blake2s_keyed(c: &mut Criterion) {
     group.finish();
 }
 
-criterion::criterion_group!(
-    benches,
-    bench_blake2s_hash,
-    bench_blake2s_hmac,
-    bench_blake2s_keyed
-);
+criterion::criterion_group!(benches, bench_blake2s_hash, bench_blake2s_keyed);
 criterion::criterion_main!(benches);

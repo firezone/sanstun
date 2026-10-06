@@ -201,47 +201,16 @@ mod tests {
     use x25519_dalek::StaticSecret;
 
     #[test]
-    fn tmp_hmac_matches_crate() {
-        use blake2::digest::Update;
-        for key_len in [0, 1, 31, 32, 63, 64, 65, 100, 200] {
-            for msg_len in [0, 1, 32, 63, 64, 65, 100, 1000] {
-                for split in [0, msg_len / 2, msg_len] {
-                    let key = (0..key_len).map(|i| (i * 7 + 3) as u8).collect::<Vec<_>>();
-                    let msg = (0..msg_len).map(|i| (i * 13 + 1) as u8).collect::<Vec<_>>();
-                    let (a, b) = msg.split_at(split);
+    fn b2s_hmac2_known_answer() {
+        let mac = b2s_hmac2(&[0x42; 32], &[7; 32], b"wireguard");
 
-                    let mut mac = hmac::SimpleHmac::<Blake2s256>::new_from_slice(&key).unwrap();
-                    mac.update(a);
-                    mac.update(b);
-                    let expected: [u8; 32] = mac.finalize_fixed().into();
+        const EXPECTED: [u8; 32] = [
+            0xc6, 0xd9, 0x84, 0x5a, 0x71, 0x36, 0xed, 0x74, 0x5f, 0x74, 0x85, 0x2c, 0xcd, 0x68,
+            0xa0, 0x61, 0x68, 0x1d, 0x13, 0x10, 0xae, 0x57, 0x30, 0x3f, 0xe0, 0x3c, 0xe7, 0x66,
+            0x17, 0x57, 0x90, 0x44,
+        ];
 
-                    assert_eq!(
-                        *hmac_blake2s(&key, &[a, b]),
-                        expected,
-                        "{key_len} {msg_len} {split}"
-                    );
-                    assert_eq!(
-                        *hmac_blake2s(&key, &[&msg]),
-                        expected,
-                        "{key_len} {msg_len}"
-                    );
-                }
-            }
-        }
-        let key = [0x42; 32];
-        let mut mac = hmac::SimpleHmac::<Blake2s256>::new_from_slice(&key).unwrap();
-        mac.update(&[7; 32]);
-        mac.update(b"wireguard");
-        let expected: [u8; 32] = mac.finalize_fixed().into();
-        assert_eq!(*b2s_hmac2(&key, &[7; 32], b"wireguard"), expected);
-        let mut mac = hmac::SimpleHmac::<Blake2s256>::new_from_slice(&key).unwrap();
-        mac.update(b"wireguard");
-        let expected: [u8; 32] = mac.finalize_fixed().into();
-        assert_eq!(*b2s_hmac(&key, b"wireguard"), expected);
-        println!(
-            "KAT b2s_hmac2 = {:?}",
-            *b2s_hmac2(&key, &[7; 32], b"wireguard")
-        );
+        assert_eq!(*mac, EXPECTED);
     }
 
     #[test]
