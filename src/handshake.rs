@@ -59,12 +59,9 @@ impl std::fmt::Debug for NoiseParams {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("NoiseParams")
             .field("static_public", &self.static_public)
-            .field("static_private", &"<redacted>")
             .field("peer_static_public", &self.peer_static_public)
-            .field("static_shared", &"<redacted>")
             .field("sending_mac1_key", &self.sending_mac1_key)
-            .field("preshared_key", &"<redacted>")
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -81,10 +78,8 @@ impl std::fmt::Debug for HandshakeInitSentState {
         f.debug_struct("HandshakeInitSentState")
             .field("local_index", &self.local_index)
             .field("hash", &self.hash)
-            .field("chaining_key", &"<redacted>")
-            .field("ephemeral_private", &"<redacted>")
             .field("time_sent", &self.time_sent)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
