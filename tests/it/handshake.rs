@@ -2,12 +2,12 @@
 //! failures and replay of handshake messages.
 
 use crate::harness::{
-    HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, Outcome as _, Peer::A, Peer::B, Sim, TICK,
+    HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, Outcome as _, Peer::A, Peer::B, Sim,
     classify,
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use sanstun::{Error, Event, Interface, Packet, PublicKey};
+use sanstun::{Error, Interface, PublicKey};
 use std::time::{Duration, Instant};
 
 #[test]
@@ -112,43 +112,6 @@ fn delayed_response_to_a_superseded_initiation_is_accepted() {
     assert!(sim.is_established(A));
     assert!(sim.is_established(B));
     sim.assert_connectivity();
-}
-
-/// Initiations arriving faster than the responder's events are drained leave
-/// only the responses to the 16 newest ones queued.
-#[test]
-fn only_the_16_newest_events_are_queued() {
-    let mut sim = Sim::new();
-
-    let mut sender_indices = Vec::new();
-    for _ in 0..20 {
-        let init = sim.force_handshake_initiation(A);
-        let now = sim.now;
-        let packet = sim.receive(B, &init);
-        let Packet::HandshakeInit(p) = &packet else {
-            panic!("expected a handshake initiation, got {packet:?}");
-        };
-        sender_indices.push(p.sender_idx());
-        sim.tunn_mut(B).decapsulate(packet, now).unwrap();
-        sim.suspend(TICK);
-    }
-
-    let responses = std::iter::from_fn(|| sim.tunn_mut(B).poll_event())
-        .map(|event| match event {
-            Event::HandshakeResponse(response) => response.to_vec(),
-            other => panic!("expected a handshake response, got {other:?}"),
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(responses.len(), 16);
-    for (response, sender_idx) in [
-        (responses.first(), sender_indices[4]),
-        (responses.last(), sender_indices[19]),
-    ] {
-        let Packet::HandshakeResponse(response) = sim.receive(A, response.unwrap()) else {
-            panic!("expected a handshake response");
-        };
-        assert_eq!(response.receiver_idx(), sender_idx);
-    }
 }
 
 #[test]

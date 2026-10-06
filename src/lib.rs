@@ -35,8 +35,6 @@ use rand::{CryptoRng, SeedableRng};
 use std::time::{Duration, Instant};
 
 /// What the caller needs to do, as returned by [`Tunnel::poll_event`].
-///
-/// At most 16 events are queued; when full, the oldest is dropped.
 #[derive(Debug)]
 pub enum Event {
     /// Send this handshake initiation to the peer.

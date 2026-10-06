@@ -36,3 +36,65 @@ impl EventQueue {
         event
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::HandshakeResponseMessage;
+    use crate::message::HANDSHAKE_RESP_SZ;
+
+    #[test]
+    fn empty_queue_pops_nothing() {
+        assert!(EventQueue::default().pop().is_none());
+    }
+
+    #[test]
+    fn events_come_out_oldest_first() {
+        let mut queue = EventQueue::default();
+
+        push_all(&mut queue, 0..3);
+
+        assert_eq!(drain(&mut queue), [0, 1, 2]);
+    }
+
+    #[test]
+    fn full_queue_drops_the_oldest() {
+        let mut queue = EventQueue::default();
+
+        push_all(&mut queue, 0..20);
+
+        assert_eq!(drain(&mut queue), (4..20).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn wraps_around_after_interleaved_push_and_pop() {
+        let mut queue = EventQueue::default();
+
+        push_all(&mut queue, 0..10);
+        for expected in 0..5 {
+            assert_eq!(queue.pop().map(id), Some(expected));
+        }
+        push_all(&mut queue, 10..30);
+
+        assert_eq!(drain(&mut queue), (14..30).collect::<Vec<_>>());
+    }
+
+    fn push_all(queue: &mut EventQueue, ids: std::ops::Range<u8>) {
+        for id in ids {
+            queue.push(Event::HandshakeResponse(HandshakeResponseMessage(
+                [id; HANDSHAKE_RESP_SZ],
+            )));
+        }
+    }
+
+    fn drain(queue: &mut EventQueue) -> Vec<u8> {
+        std::iter::from_fn(|| queue.pop()).map(id).collect()
+    }
+
+    fn id(event: Event) -> u8 {
+        match event {
+            Event::HandshakeResponse(response) => response[0],
+            other => panic!("expected a handshake response, got {other:?}"),
+        }
+    }
+}
