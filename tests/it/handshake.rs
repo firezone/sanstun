@@ -187,18 +187,17 @@ fn tunnel_rejects_low_order_peer_static_key() {
         ],
     ];
     let now = Instant::now();
-    let mut ingress = Ingress::new(StaticSecret::from([1; 32]), 0, [0; 32], now);
+    let mut ingress = Ingress::new(
+        StaticSecret::from([1; 32]),
+        0,
+        [0; 32],
+        now,
+        Duration::from_secs(1_700_000_000),
+    );
 
     for point in low_order_points {
-        let tunnel = ingress.new_tunnel(
-            PublicKey::from(point),
-            None,
-            None,
-            Index::new_local(1),
-            now,
-            now,
-            Duration::from_secs(1_700_000_000),
-        );
+        let tunnel =
+            ingress.new_tunnel(PublicKey::from(point), None, None, Index::new_local(1), now);
 
         assert!(matches!(tunnel, Err(Error::LowOrderPoint)), "{point:x?}");
     }

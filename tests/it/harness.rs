@@ -250,8 +250,8 @@ impl Builder {
         } else {
             HANDSHAKE_RATE_LIMIT
         };
-        let mut ingress_a = Ingress::new(secret_a, HANDSHAKE_RATE_LIMIT, self.seed_a, start);
-        let mut ingress_b = Ingress::new(secret_b, limit_b, self.seed_b, start);
+        let mut ingress_a = Ingress::new(secret_a, HANDSHAKE_RATE_LIMIT, self.seed_a, start, unix);
+        let mut ingress_b = Ingress::new(secret_b, limit_b, self.seed_b, start, unix);
 
         let a = ingress_a
             .new_tunnel(
@@ -260,8 +260,6 @@ impl Builder {
                 None,
                 Index::new_local(1),
                 start,
-                start,
-                unix,
             )
             .expect("the test keys are valid");
 
@@ -277,8 +275,6 @@ impl Builder {
                 self.persistent_keepalive_b,
                 Index::new_local(2),
                 start,
-                start,
-                unix,
             )
             .expect("the test keys are valid");
 

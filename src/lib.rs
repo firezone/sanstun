@@ -24,6 +24,7 @@ pub use x25519_dalek::{PublicKey, StaticSecret};
 use crate::handshake::Handshake;
 use crate::message::DATA_OVERHEAD_SZ;
 use crate::session::Sessions;
+use crate::tai64n::TimeStamper;
 use crate::timers::{TimerName, Timers};
 
 use rand::SeedableRng;
@@ -90,8 +91,7 @@ impl Tunnel {
         index: Index,
         rng_seed: [u8; 32],
         now: Instant,
-        unix_instant: Instant,
-        unix: Duration,
+        stamper: TimeStamper,
     ) -> Result<Self, Error> {
         let static_public = PublicKey::from(&static_private);
         let handshake = Handshake::new(
@@ -100,8 +100,7 @@ impl Tunnel {
             peer_static_public,
             index,
             preshared_key,
-            unix_instant,
-            unix,
+            stamper,
         )?;
 
         Ok(Tunnel {

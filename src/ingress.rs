@@ -5,6 +5,7 @@ use crate::message::{
     HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeInit, HandshakeResponse, Macs, Packet,
     PacketCookieReply, PacketData,
 };
+use crate::tai64n::TimeStamper;
 use crate::{CookieReplyMessage, Error, Index, PublicKey, StaticSecret, Tunnel};
 
 use std::net::{IpAddr, SocketAddr};
@@ -51,6 +52,7 @@ pub struct Ingress {
     count: u64,
     /// The time the handshake count was last reset
     last_reset: Instant,
+    stamper: TimeStamper,
 }
 
 impl Ingress {
@@ -61,7 +63,16 @@ impl Ingress {
     ///
     /// `rng_seed` must come from a cryptographically secure source because the cookie secrets and
     /// the key material of every tunnel are derived from it.
-    pub fn new(static_private: StaticSecret, limit: u64, rng_seed: [u8; 32], now: Instant) -> Self {
+    ///
+    /// `unix` is the time since the Unix epoch at `now`, from which the timestamps of handshake
+    /// initiations are derived.
+    pub fn new(
+        static_private: StaticSecret,
+        limit: u64,
+        rng_seed: [u8; 32],
+        now: Instant,
+        unix: Duration,
+    ) -> Self {
         let mut rng = StdRng::from_seed(rng_seed);
         let static_public = PublicKey::from(&static_private);
         let mut cookie_secret = Zeroizing::new([0; 32]);
@@ -78,6 +89,7 @@ impl Ingress {
             limit,
             count: 0,
             last_reset: now,
+            stamper: TimeStamper::new(now, unix),
         }
     }
 
@@ -86,7 +98,6 @@ impl Ingress {
     /// The tunnel's RNG is seeded from this `Ingress`, so every tunnel derives distinct ephemeral keys.
     ///
     /// Fails with [`Error::LowOrderPoint`] if `peer_static_public` is a low-order point.
-    #[expect(clippy::too_many_arguments, reason = "We don't care that much.")]
     pub fn new_tunnel(
         &mut self,
         peer_static_public: PublicKey,
@@ -94,8 +105,6 @@ impl Ingress {
         persistent_keepalive: Option<u16>,
         index: Index,
         now: Instant,
-        unix_instant: Instant,
-        unix: Duration,
     ) -> Result<Tunnel, Error> {
         Tunnel::new(
             self.static_private.clone(),
@@ -105,8 +114,7 @@ impl Ingress {
             index,
             self.rng.random(),
             now,
-            unix_instant,
-            unix,
+            self.stamper.clone(),
         )
     }
 
@@ -377,7 +385,7 @@ mod tests {
     }
 
     fn under_load(now: Instant) -> Ingress {
-        Ingress::new(StaticSecret::from([1; 32]), 0, [2; 32], now)
+        Ingress::new(StaticSecret::from([1; 32]), 0, [2; 32], now, Duration::ZERO)
     }
 
     /// A handshake initiation with a valid mac1 and its mac2 keyed with `cookie`.

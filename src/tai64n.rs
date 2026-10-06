@@ -9,7 +9,7 @@ pub(crate) struct Tai64N {
     nano: u32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// This struct computes a [Tai64N](https://cr.yp.to/libtai/tai64.html) timestamp from current system time
 pub(crate) struct TimeStamper {
     unix: Duration,
