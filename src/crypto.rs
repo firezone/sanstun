@@ -166,45 +166,8 @@ fn xchacha20_subkey_and_nonce(key: &[u8; 32], nonce: &[u8; 24]) -> (Zeroizing<[u
     (hchacha20(key, hchacha20_nonce), chacha20_nonce)
 }
 
-/// HChaCha20 (draft-irtf-cfrg-xchacha-03, section 2.2).
 fn hchacha20(key: &[u8; 32], nonce: &[u8; 16]) -> Zeroizing<[u8; 32]> {
-    let mut state = Zeroizing::new([0u32; 16]);
-    state[..4].copy_from_slice(&[0x61707865, 0x3320646e, 0x79622d32, 0x6b206574]);
-    for (word, bytes) in state[4..12].iter_mut().zip(key.as_chunks().0) {
-        *word = u32::from_le_bytes(*bytes);
-    }
-    for (word, bytes) in state[12..].iter_mut().zip(nonce.as_chunks().0) {
-        *word = u32::from_le_bytes(*bytes);
-    }
-
-    for _ in 0..10 {
-        quarter_round(&mut state, 0, 4, 8, 12);
-        quarter_round(&mut state, 1, 5, 9, 13);
-        quarter_round(&mut state, 2, 6, 10, 14);
-        quarter_round(&mut state, 3, 7, 11, 15);
-        quarter_round(&mut state, 0, 5, 10, 15);
-        quarter_round(&mut state, 1, 6, 11, 12);
-        quarter_round(&mut state, 2, 7, 8, 13);
-        quarter_round(&mut state, 3, 4, 9, 14);
-    }
-
-    let mut subkey = Zeroizing::new([0u8; 32]);
-    let words = state[..4].iter().chain(&state[12..]);
-    for (bytes, word) in subkey.as_chunks_mut().0.iter_mut().zip(words) {
-        *bytes = word.to_le_bytes();
-    }
-    subkey
-}
-
-fn quarter_round(state: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize) {
-    state[a] = state[a].wrapping_add(state[b]);
-    state[d] = (state[d] ^ state[a]).rotate_left(16);
-    state[c] = state[c].wrapping_add(state[d]);
-    state[b] = (state[b] ^ state[c]).rotate_left(12);
-    state[a] = state[a].wrapping_add(state[b]);
-    state[d] = (state[d] ^ state[a]).rotate_left(8);
-    state[c] = state[c].wrapping_add(state[d]);
-    state[b] = (state[b] ^ state[c]).rotate_left(7);
+    Zeroizing::new(chacha20::hchacha::<chacha20::R20>(key.into(), nonce.into()).into())
 }
 
 /// The ChaCha20Poly1305 nonce for `counter`: 32 zero bits followed by the counter in little endian.

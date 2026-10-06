@@ -17,6 +17,7 @@ x25519-dalek = { version = "3.0.0", features = [
 ] }
 rand = { version = "0.10", default-features = false, features = ["std_rng"] }
 blake2 = "0.11.0"
+chacha20 = { version = "0.10", default-features = false, features = ["xchacha"] }
 hmac = "0.13"
 subtle = "2.6.1"
 crossbeam-utils = "0.8.20"
