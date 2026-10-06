@@ -406,11 +406,10 @@ impl PendingEncapsulate {
         let (header, rest) = message.split_at_mut(DATA_HEADER_SZ);
         let (data, tag) = rest.split_at_mut(padded_len);
 
-        let (message_type, rest) = header.split_at_mut(4);
-        let (receiver_index, counter) = rest.split_at_mut(4);
-        message_type.copy_from_slice(&DATA.to_le_bytes());
-        receiver_index.copy_from_slice(&self.receiver_index.to_le_bytes());
-        counter.copy_from_slice(&self.counter.to_le_bytes());
+        header.copy_from_slice(&data_header(
+            self.receiver_index.to_le_bytes(),
+            self.counter,
+        ));
 
         let (payload, padding) = data.split_at_mut(plaintext.len());
         payload.copy_from_slice(plaintext);
@@ -450,8 +449,7 @@ impl PendingDecapsulate {
     /// to authenticate. The returned [`Decrypted`] message owns `dst`; hand it to
     /// [`Tunnel::commit_decrypted`](crate::Tunnel::commit_decrypted).
     pub fn decrypt<B: AsMut<[u8]>>(self, message: &[u8], mut dst: B) -> Decrypted<B> {
-        let ciphertext = message.get(DATA_HEADER_SZ..).unwrap_or_default();
-        let plaintext_len = self.decrypt_in_place(ciphertext, dst.as_mut());
+        let plaintext_len = self.decrypt_in_place(message, dst.as_mut());
 
         Decrypted {
             receiving_index: self.receiving_index,
@@ -462,7 +460,15 @@ impl PendingDecapsulate {
         }
     }
 
-    fn decrypt_in_place(&self, ciphertext: &[u8], dst: &mut [u8]) -> Result<usize, Error> {
+    fn decrypt_in_place(&self, message: &[u8], dst: &mut [u8]) -> Result<usize, Error> {
+        let expected_header = data_header(self.receiving_index.to_le_bytes(), self.counter);
+        let Some((header, ciphertext)) = message.split_first_chunk::<DATA_HEADER_SZ>() else {
+            return Err(Error::InvalidAeadTag);
+        };
+        if *header != expected_header {
+            return Err(Error::InvalidAeadTag);
+        }
+
         let ct_len = ciphertext.len();
         let available = dst.len();
 
@@ -485,6 +491,14 @@ impl PendingDecapsulate {
 
         Ok(plaintext.len())
     }
+}
+
+fn data_header(receiver_index: [u8; 4], counter: u64) -> [u8; DATA_HEADER_SZ] {
+    let mut header = [0; DATA_HEADER_SZ];
+    header[..4].copy_from_slice(&DATA.to_le_bytes());
+    header[4..8].copy_from_slice(&receiver_index);
+    header[8..].copy_from_slice(&counter.to_le_bytes());
+    header
 }
 
 /// A data message decrypted by [`PendingDecapsulate::decrypt`], to be committed to the
@@ -555,6 +569,30 @@ mod tests {
         for _ in 0..2 * N_SESSIONS {
             assert_ne!(slot_of(sessions.next_index()), slot_of(current));
         }
+    }
+
+    #[test]
+    fn decrypt_rejects_a_message_with_a_different_header() {
+        let mut session = session(Index::new_local(0));
+        let mut message = [0; DATA_HEADER_SZ + 16 + AEAD_TAG_SZ];
+        session
+            .prepare_packet_data()
+            .encrypt_payload(b"hello", &mut message)
+            .unwrap();
+        message[8] = 1;
+
+        let pending = session
+            .prepare_receive_packet_data(PacketData {
+                receiver_idx: 0,
+                counter: 0,
+            })
+            .unwrap();
+        let decrypted = pending.decrypt(&message, [0; 32]);
+
+        assert!(matches!(
+            decrypted.plaintext_len,
+            Err(Error::InvalidAeadTag)
+        ));
     }
 
     fn session(receiving_index: Index) -> Session {
