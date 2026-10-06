@@ -85,7 +85,7 @@ impl HandshakeResponse<'_> {
 #[derive(Debug)]
 pub struct PacketCookieReply<'a> {
     pub(crate) receiver_idx: u32,
-    pub(crate) nonce: &'a [u8],
+    pub(crate) nonce: &'a [u8; 24],
     pub(crate) encrypted_cookie: &'a [u8],
 }
 

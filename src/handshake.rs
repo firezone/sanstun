@@ -2,7 +2,7 @@ use super::index::Index;
 use super::timers::COOKIE_EXPIRATION_TIME;
 use crate::crypto::{
     SharedKey, aead_chacha20_open, aead_chacha20_seal, b2s_hash, b2s_hmac, b2s_hmac2,
-    b2s_keyed_mac_16, dh,
+    b2s_keyed_mac_16, dh, xaead_open,
 };
 use crate::errors::Error;
 use crate::message::{
@@ -11,8 +11,6 @@ use crate::message::{
 };
 use crate::session::{Role, Session};
 use crate::tai64n::{Tai64N, TimeStamper};
-use aead::{AeadInPlace, KeyInit as _};
-use chacha20poly1305::XChaCha20Poly1305;
 use rand::rngs::StdRng;
 use std::fmt::Debug;
 use std::time::Instant;
@@ -450,13 +448,14 @@ impl Handshake {
         // msg.encrypted_cookie = XAEAD(HASH(LABEL_COOKIE || responder.static_public), msg.nonce, cookie, last_received_msg.mac1)
         let key = b2s_hash(LABEL_COOKIE, self.params.peer_static_public.as_bytes()); // TODO: pre-compute
 
-        let (encrypted_cookie, tag) = packet.encrypted_cookie.split_at(16);
         let mut cookie = [0u8; 16];
-        cookie.copy_from_slice(encrypted_cookie);
-        XChaCha20Poly1305::new_from_slice(&key)
-            .unwrap()
-            .decrypt_in_place_detached(packet.nonce.into(), &mac1[0..16], &mut cookie, tag.into())
-            .map_err(|_| Error::InvalidAeadTag)?;
+        xaead_open(
+            &mut cookie,
+            &key,
+            packet.nonce,
+            packet.encrypted_cookie,
+            &mac1[0..16],
+        )?;
 
         self.cookies.write_cookie = Some(WriteCookie {
             value: cookie,
