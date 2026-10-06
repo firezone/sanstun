@@ -261,6 +261,9 @@ impl Sessions {
 /// The nonce is fixed when the [`PendingEncapsulate`] is created, so encryptions may run in any
 /// order and on any thread: the receiver's sliding replay window accepts data messages that arrive
 /// out of order.
+///
+/// It holds its own handle to the session key and is not invalidated when the session expires,
+/// so encrypt it soon after creating it.
 #[derive(Debug)]
 #[must_use = "the data message is not sent until it is encrypted"]
 pub struct PendingEncapsulate {
