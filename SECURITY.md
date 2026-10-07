@@ -12,9 +12,7 @@ We use coordinated disclosure.
 We work privately with you to validate and fix the issue before public disclosure.
 Once a fix is available for supported versions, we publish a security advisory on this repository.
 
-## Scope
-
-Out of scope:
+## Out of scope
 
 - Social engineering or phishing attacks
 - Physical attacks
