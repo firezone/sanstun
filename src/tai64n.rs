@@ -3,7 +3,7 @@ use std::fmt::{self, Debug};
 use std::time::{Duration, Instant};
 
 /// This struct represents a 12 byte [Tai64N](https://cr.yp.to/libtai/tai64.html) timestamp.
-#[derive(PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Tai64N {
     secs: u64,
     nano: u32,

@@ -1,8 +1,10 @@
 use crate::PublicKey;
-use crate::handshake::ResponderState;
 use crate::index::Index;
+use crate::tai64n::Tai64N;
 
 use std::ops::Deref;
+
+use zeroize::Zeroizing;
 
 type MessageType = u32;
 pub(crate) const HANDSHAKE_INIT: MessageType = 1;
@@ -39,7 +41,12 @@ impl<'a> Macs<'a> {
 /// An authenticated handshake initiation, ready to be answered by its [`Tunnel`](crate::Tunnel).
 pub struct HandshakeInit {
     pub(crate) sender_idx: u32,
-    pub(crate) initiation: ResponderState,
+    pub(crate) peer_static_public: PublicKey,
+    pub(crate) peer_ephemeral_public: PublicKey,
+    /// The responder's Noise state after the initiation, from which it builds its response.
+    pub(crate) chaining_key: Zeroizing<[u8; 32]>,
+    pub(crate) hash: [u8; 32],
+    pub(crate) timestamp: Tai64N,
 }
 
 impl std::fmt::Debug for HandshakeInit {
@@ -66,7 +73,7 @@ impl HandshakeInit {
     /// for. Do not authorize anything or allocate state such as a new [`Tunnel`](crate::Tunnel)
     /// for a key you do not already know.
     pub fn peer_static_public(&self) -> PublicKey {
-        self.initiation.peer_static_public
+        self.peer_static_public
     }
 }
 

@@ -115,31 +115,24 @@ struct WriteCookie {
     received_at: Instant,
 }
 
-/// The responder's state after authenticating a handshake initiation, from which it builds its
-/// response.
-pub(crate) struct ResponderState {
-    chaining_key: Zeroizing<[u8; KEY_LEN]>,
-    hash: [u8; KEY_LEN],
-    peer_ephemeral_public: PublicKey,
-    pub(crate) peer_static_public: PublicKey,
-}
-
-/// Authenticates a handshake initiation, returning the responder's handshake state and the
-/// initiator's timestamp.
+/// Parses and authenticates a handshake initiation addressed to `static_public`.
 pub(crate) fn parse_handshake_init(
     static_private: &StaticSecret,
     static_public: &PublicKey,
-    unencrypted_ephemeral: &[u8; KEY_LEN],
-    encrypted_static: &[u8],
-    encrypted_timestamp: &[u8],
-) -> Result<(ResponderState, Tai64N), Error> {
+    datagram: &[u8; HANDSHAKE_INIT_SZ],
+) -> Result<HandshakeInit, Error> {
+    let sender_idx = u32::from_le_bytes(datagram[4..8].try_into().unwrap());
+    let unencrypted_ephemeral: [u8; KEY_LEN] = datagram[8..40].try_into().unwrap();
+    let encrypted_static = &datagram[40..88];
+    let encrypted_timestamp = &datagram[88..116];
+
     // initiator.chaining_key = HASH(CONSTRUCTION)
     let mut chaining_key = Zeroizing::new(INITIAL_CHAIN_KEY);
     // initiator.hash = HASH(HASH(initiator.chaining_key || IDENTIFIER) || responder.static_public)
     let mut hash = INITIAL_CHAIN_HASH;
     hash = b2s_hash(&hash, static_public.as_bytes());
     // msg.unencrypted_ephemeral = DH_PUBKEY(initiator.ephemeral_private)
-    let peer_ephemeral_public = PublicKey::from(*unencrypted_ephemeral);
+    let peer_ephemeral_public = PublicKey::from(unencrypted_ephemeral);
     // initiator.hash = HASH(initiator.hash || msg.unencrypted_ephemeral)
     hash = b2s_hash(&hash, peer_ephemeral_public.as_bytes());
     // temp = HMAC(initiator.chaining_key, msg.unencrypted_ephemeral)
@@ -176,15 +169,14 @@ pub(crate) fn parse_handshake_init(
     // initiator.hash = HASH(initiator.hash || msg.encrypted_timestamp)
     hash = b2s_hash(&hash, encrypted_timestamp);
 
-    Ok((
-        ResponderState {
-            chaining_key,
-            hash,
-            peer_ephemeral_public,
-            peer_static_public,
-        },
-        Tai64N::parse(&timestamp),
-    ))
+    Ok(HandshakeInit {
+        sender_idx,
+        peer_static_public,
+        peer_ephemeral_public,
+        chaining_key,
+        hash,
+        timestamp: Tai64N::parse(&timestamp),
+    })
 }
 
 /// Returns `(initiator.sending_key, initiator.receiving_key)` for the final chaining key.
@@ -318,13 +310,11 @@ impl Handshake {
         let HandshakeInit {
             // msg.sender_index = little_endian(initiator.sender_index)
             sender_idx: peer_index,
-            initiation:
-                ResponderState {
-                    chaining_key,
-                    hash,
-                    peer_ephemeral_public,
-                    peer_static_public,
-                },
+            peer_static_public,
+            peer_ephemeral_public,
+            chaining_key,
+            hash,
+            timestamp: _,
         } = packet;
 
         if !bool::from(

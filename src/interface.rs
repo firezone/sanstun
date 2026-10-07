@@ -3,8 +3,8 @@ use crate::handshake::{LABEL_COOKIE, LABEL_MAC1, parse_handshake_init};
 use crate::index::TunnelIndices;
 use crate::message::{
     COOKIE_REPLY, COOKIE_REPLY_SZ, DATA, DATA_OVERHEAD_SZ, HANDSHAKE_INIT, HANDSHAKE_INIT_SZ,
-    HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeInit, HandshakeResponse, Macs, Packet,
-    PacketCookieReply, PacketData,
+    HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeResponse, Macs, Packet, PacketCookieReply,
+    PacketData,
 };
 use crate::ratelimiter::RateLimiter;
 use crate::tai64n::{Tai64N, TimeStamper};
@@ -174,30 +174,23 @@ impl Interface {
                     return Ok(Received::CookieReply(reply));
                 }
 
-                let (initiation, timestamp) = parse_handshake_init(
+                let init = parse_handshake_init(
                     &self.static_private,
                     &self.static_public,
-                    datagram[8..40]
-                        .try_into()
-                        .expect("length already checked above"),
-                    &datagram[40..88],
-                    &datagram[88..116],
+                    datagram.try_into().expect("length already checked above"),
                 )?;
 
                 if let Some(last) = self
                     .last_handshake_timestamps
-                    .get_mut(&initiation.peer_static_public)
+                    .get_mut(&init.peer_static_public)
                 {
-                    if !timestamp.after(last) {
+                    if !init.timestamp.after(last) {
                         return Err(Error::WrongTai64nTimestamp);
                     }
-                    *last = timestamp;
+                    *last = init.timestamp;
                 }
 
-                Packet::HandshakeInit(HandshakeInit {
-                    sender_idx,
-                    initiation,
-                })
+                Packet::HandshakeInit(init)
             }
             (HANDSHAKE_RESP, HANDSHAKE_RESP_SZ) => {
                 let sender_idx = u32::from_le_bytes(datagram[4..8].try_into().unwrap());
