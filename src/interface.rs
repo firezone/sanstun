@@ -11,6 +11,7 @@ use crate::tai64n::{Tai64N, TimeStamper};
 use crate::{CookieReplyMessage, Error, PublicKey, StaticSecret, Tunnel};
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
@@ -135,9 +136,9 @@ impl Interface {
             self.stamper.clone(),
         )?;
 
-        self.last_handshake_timestamps
-            .entry(peer_static_public)
-            .or_insert_with(Tai64N::zero);
+        if let Entry::Vacant(entry) = self.last_handshake_timestamps.entry(peer_static_public) {
+            entry.insert(Tai64N::zero());
+        }
 
         Ok(tunnel)
     }
