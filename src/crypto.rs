@@ -2,11 +2,19 @@ use crate::errors::Error;
 use blake2::digest::consts::U16;
 use blake2::digest::{FixedOutput, KeyInit};
 use blake2::{Blake2s256, Blake2sMac, Digest};
+use rand::SeedableRng;
+use rand::rngs::StdRng;
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
 use x25519_dalek::{PublicKey, SharedSecret};
 use zeroize::Zeroizing;
 
 type HmacBlake2s = hmac::SimpleHmac<Blake2s256>;
+
+/// Re-keys `rng` from its own output, so that a later copy of its state cannot reproduce what it
+/// generated before (fast key erasure).
+pub(crate) fn erase_rng_history(rng: &mut StdRng) {
+    *rng = StdRng::from_rng(rng);
+}
 
 #[inline]
 pub(crate) fn b2s_hash(data1: &[u8], data2: &[u8]) -> [u8; 32] {

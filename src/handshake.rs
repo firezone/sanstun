@@ -2,7 +2,7 @@ use super::index::Index;
 use super::timers::COOKIE_EXPIRATION_TIME;
 use crate::crypto::{
     SharedKey, aead_chacha20_open, aead_chacha20_seal, b2s_hash, b2s_hmac, b2s_hmac2,
-    b2s_keyed_mac_16, dh, xaead_open,
+    b2s_keyed_mac_16, dh, erase_rng_history, xaead_open,
 };
 use crate::errors::Error;
 use crate::message::{
@@ -486,7 +486,8 @@ impl Handshake {
         let mut hash = INITIAL_CHAIN_HASH;
         hash = b2s_hash(&hash, self.params.peer_static_public.as_bytes());
         // initiator.ephemeral_private = DH_GENERATE()
-        let ephemeral_private = x25519_dalek::ReusableSecret::random_from_rng(rng);
+        let ephemeral_private = x25519_dalek::ReusableSecret::random_from_rng(&mut *rng);
+        erase_rng_history(rng);
         // msg.message_type = 1
         // msg.reserved_zero = { 0, 0, 0 }
         message_type.copy_from_slice(&HANDSHAKE_INIT.to_le_bytes());
@@ -564,7 +565,8 @@ impl Handshake {
         let (encrypted_nothing, _) = rest.split_at_mut(16);
 
         // responder.ephemeral_private = DH_GENERATE()
-        let ephemeral_private = x25519_dalek::ReusableSecret::random_from_rng(rng);
+        let ephemeral_private = x25519_dalek::ReusableSecret::random_from_rng(&mut *rng);
+        erase_rng_history(rng);
         // msg.message_type = 2
         // msg.reserved_zero = { 0, 0, 0 }
         message_type.copy_from_slice(&HANDSHAKE_RESP.to_le_bytes());

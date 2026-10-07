@@ -1,4 +1,6 @@
-use crate::crypto::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, xaead_seal};
+use crate::crypto::{
+    b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, erase_rng_history, xaead_seal,
+};
 use crate::handshake::{LABEL_COOKIE, LABEL_MAC1, decrypt_initiator_static};
 use crate::index::TunnelIndices;
 use crate::message::{
@@ -60,6 +62,7 @@ impl Interface {
         let mut cookie_secret = Zeroizing::new([0; 32]);
         rng.fill(&mut cookie_secret[..]);
         let indices = TunnelIndices::new(&mut rng);
+        erase_rng_history(&mut rng);
 
         Interface {
             static_private,
@@ -114,7 +117,7 @@ impl Interface {
     ) -> Result<Tunnel, Error> {
         let (index, index_lease) = self.indices.next();
 
-        Tunnel::new(
+        let tunnel = Tunnel::new(
             self.static_private.clone(),
             peer_static_public,
             preshared_key,
@@ -126,7 +129,10 @@ impl Interface {
             &mut self.rng,
             now,
             self.stamper.clone(),
-        )
+        );
+        erase_rng_history(&mut self.rng);
+
+        tunnel
     }
 
     /// Parses and verifies a datagram received from the network.
@@ -266,6 +272,7 @@ impl Interface {
     fn cookie_secret(&mut self, now: Instant) -> &[u8; 32] {
         if now.duration_since(self.cookie_secret_created_at) >= COOKIE_SECRET_MAX_AGE {
             self.rng.fill(&mut self.cookie_secret[..]);
+            erase_rng_history(&mut self.rng);
             self.cookie_secret_created_at = now;
         }
 
