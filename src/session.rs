@@ -1,9 +1,6 @@
 use super::{
     index::Index,
-    timers::{
-        REJECT_AFTER_MESSAGES, REJECT_AFTER_TIME, REKEY_AFTER_MESSAGES, REKEY_AFTER_TIME,
-        SHOULD_NOT_USE_AFTER_TIME,
-    },
+    timers::{REJECT_AFTER_MESSAGES, REJECT_AFTER_TIME, REKEY_AFTER_MESSAGES, REKEY_AFTER_TIME},
 };
 use crate::crypto::nonce;
 use crate::errors::Error;
@@ -118,8 +115,12 @@ impl Session {
         time >= self.expires_at()
     }
 
-    pub(crate) fn should_use_at(&self, time: Instant) -> bool {
-        time <= self.established_at + SHOULD_NOT_USE_AFTER_TIME
+    /// Whether new packets may still be sent on this session.
+    ///
+    /// A packet sent close to [`REJECT_AFTER_TIME`] may reach the peer after it expired the
+    /// session, so we stop `keepalive_timeout` before that.
+    pub(crate) fn should_use_at(&self, time: Instant, keepalive_timeout: Duration) -> bool {
+        time + keepalive_timeout <= self.established_at + REJECT_AFTER_TIME
     }
 
     /// Whether `key` is this session's receiving key.

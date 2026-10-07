@@ -199,7 +199,9 @@ impl Tunnel {
         if session.sending_counter_exhausted() || session.expired_at(now) {
             return None;
         }
-        if !session.should_use_at(now) && session.role() == Role::Initiator {
+        if !session.should_use_at(now, self.timers.keepalive_timeout)
+            && session.role() == Role::Initiator
+        {
             return None;
         }
 

@@ -15,16 +15,6 @@ pub(crate) const REKEY_AFTER_MESSAGES: u64 = 1 << 60;
 /// never overflows.
 pub(crate) const REJECT_AFTER_MESSAGES: u64 = u64::MAX - (1 << 13);
 
-/// Time-period after which a session should no longer be used for new packets.
-///
-/// In order for [`REKEY_AFTER_TIME`] to take effect, at least one data packet needs to be sent on a session.
-/// If this data packet is sent close to the expire of the session ([`REJECT_AFTER_TIME`]), the session
-/// may be expired by the time the packet reaches the receiver (and thus will not be able to be decrypted).
-///
-/// To avoid this, we stop using the session after [`REJECT_AFTER_TIME`] - [`KEEPALIVE_TIMEOUT`].
-pub(crate) const SHOULD_NOT_USE_AFTER_TIME: Duration =
-    Duration::from_secs(REJECT_AFTER_TIME.as_secs() - KEEPALIVE_TIMEOUT.as_secs());
-
 #[derive(Debug)]
 pub(crate) enum TimerName {
     /// Time the last handshake completed, whether or not its session is in use
