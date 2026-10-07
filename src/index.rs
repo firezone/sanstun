@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Weak};
 
-use rand::RngExt;
 use rand::rngs::StdRng;
+use rand::{RngExt, SeedableRng};
 
 /// Identifies a session of a [`Tunnel`](super::Tunnel).
 ///
@@ -48,16 +48,16 @@ impl Index {
     }
 }
 
-/// Hands out the indices of new tunnels, skipping those of tunnels that are still alive.
+/// Hands out random indices for new tunnels, skipping those of tunnels that are still alive.
 pub(crate) struct TunnelIndices {
-    lfsr: IndexLfsr,
+    rng: StdRng,
     in_use: HashMap<u32, Weak<()>>,
 }
 
 impl TunnelIndices {
     pub(crate) fn new(rng: &mut StdRng) -> Self {
         TunnelIndices {
-            lfsr: IndexLfsr::new(rng),
+            rng: StdRng::from_rng(rng),
             in_use: HashMap::new(),
         }
     }
@@ -72,7 +72,7 @@ impl TunnelIndices {
         }
 
         loop {
-            let index = self.lfsr.next();
+            let index = Index::new_local(self.rng.random::<u32>() & 0xff_ffff);
 
             if self
                 .in_use
@@ -86,45 +86,6 @@ impl TunnelIndices {
             self.in_use.insert(index.global(), Arc::downgrade(&lease));
 
             return (index, lease);
-        }
-    }
-}
-
-/// Hands out the global part of local indices in a pseudorandom order, so that they reveal
-/// neither how many tunnels exist nor which index comes next.
-///
-/// A linear-feedback shift register visits every non-zero 24-bit value once before repeating, so
-/// indices only repeat after 2^24 - 1 tunnels.
-#[derive(Clone)]
-struct IndexLfsr {
-    lfsr: u32,
-    mask: u32,
-}
-
-impl IndexLfsr {
-    fn new(rng: &mut StdRng) -> Self {
-        IndexLfsr {
-            lfsr: random_index(rng),
-            mask: random_index(rng),
-        }
-    }
-
-    fn next(&mut self) -> Index {
-        const LFSR_POLY: u32 = 0xd80000;
-
-        let value = self.lfsr - 1;
-        self.lfsr = (self.lfsr >> 1) ^ (0u32.wrapping_sub(self.lfsr & 1) & LFSR_POLY);
-
-        Index::new_local(value ^ self.mask)
-    }
-}
-
-/// A random, non-zero 24-bit number.
-fn random_index(rng: &mut StdRng) -> u32 {
-    loop {
-        let i = rng.random::<u32>() & 0xff_ffff;
-        if i != 0 {
-            return i;
         }
     }
 }
@@ -145,32 +106,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lfsr_visits_every_global_index_once() {
-        use rand::SeedableRng as _;
-
-        let mut lfsr = IndexLfsr::new(&mut StdRng::from_seed([1; 32]));
-        let mut seen = vec![false; 1 << 24];
-
-        for _ in 0..(1 << 24) - 1 {
-            let global = lfsr.next().global();
-            assert!(!seen[global as usize], "{global} handed out twice");
-            seen[global as usize] = true;
-        }
-    }
-
-    #[test]
     fn tunnel_indices_skip_live_tunnels_and_reuse_dropped_ones() {
         use rand::SeedableRng as _;
 
-        let mut indices = TunnelIndices::new(&mut StdRng::from_seed([1; 32]));
-        let start = indices.lfsr.clone();
+        let fresh = || TunnelIndices::new(&mut StdRng::from_seed([1; 32]));
+        let mut indices = fresh();
         let (taken, lease) = indices.next();
 
-        indices.lfsr = start.clone();
+        indices.rng = fresh().rng;
         assert_ne!(indices.next().0, taken);
 
         drop(lease);
-        indices.lfsr = start;
+        indices.rng = fresh().rng;
         assert_eq!(indices.next().0, taken);
     }
 
