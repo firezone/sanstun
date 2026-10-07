@@ -175,6 +175,46 @@ mod tests {
     }
 
     #[test]
+    fn next_tunnel_index_cannot_be_predicted_from_previous_ones() {
+        use rand::SeedableRng as _;
+
+        let mut indices = TunnelIndices::new(&mut StdRng::from_seed([1; 32]));
+        let [o0, o1, o2, o3] = std::array::from_fn(|_| indices.next().0.global());
+
+        let predictions = predict_next_global_index([o0, o1, o2]);
+
+        assert_ne!(
+            predictions,
+            [o3],
+            "an observer of three tunnel indices predicted the fourth"
+        );
+    }
+
+    /// What an observer of three consecutive tunnel indices on the wire predicts the next one to
+    /// be, knowing only the public LFSR polynomial.
+    ///
+    /// Each index is `(state - 1) ^ mask`, so every guess of the 24-bit mask determines the
+    /// LFSR states, and only the guesses consistent with the LFSR's steps survive.
+    fn predict_next_global_index(observed: [u32; 3]) -> Vec<u32> {
+        const POLY: u32 = 0xd80000;
+        let step = |s: u32| (s >> 1) ^ (0u32.wrapping_sub(s & 1) & POLY);
+
+        let mut predictions = Vec::new();
+
+        for mask in 0..1 << 24 {
+            let [s0, s1, s2] = observed.map(|o| (o ^ mask) + 1);
+
+            if step(s0) == s1 && step(s1) == s2 {
+                predictions.push((step(s2) - 1) ^ mask);
+            }
+        }
+
+        predictions.sort_unstable();
+        predictions.dedup();
+        predictions
+    }
+
+    #[test]
     fn incrementing_never_changes_global_part() {
         let mut index = Index::new_local(0xab_cdef);
 
