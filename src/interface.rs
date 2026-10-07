@@ -1,5 +1,5 @@
 use crate::crypto::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, xaead_seal};
-use crate::handshake::{LABEL_COOKIE, LABEL_MAC1, authenticate_initiation};
+use crate::handshake::{LABEL_COOKIE, LABEL_MAC1, parse_handshake_init};
 use crate::index::TunnelIndices;
 use crate::message::{
     COOKIE_REPLY, COOKIE_REPLY_SZ, DATA, DATA_OVERHEAD_SZ, HANDSHAKE_INIT, HANDSHAKE_INIT_SZ,
@@ -174,7 +174,7 @@ impl Interface {
                     return Ok(Received::CookieReply(reply));
                 }
 
-                let (initiation, timestamp) = authenticate_initiation(
+                let (initiation, timestamp) = parse_handshake_init(
                     &self.static_private,
                     &self.static_public,
                     datagram[8..40]
