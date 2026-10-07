@@ -75,10 +75,18 @@ pub struct Tunnel {
 impl Tunnel {
     /// Whether the connection expired, as announced by [`Event::ConnectionExpired`].
     ///
-    /// An expired tunnel is meant to be dropped: it no longer acts on its timers, so polling it
-    /// further is not useful.
+    /// An expired tunnel is meant to be dropped: it has no timeout, formats no handshake
+    /// initiation and fails everything else with [`Error::ConnectionExpired`].
     pub fn is_expired(&self) -> bool {
         self.handshake.is_expired()
+    }
+
+    fn ensure_not_expired(&self) -> Result<(), Error> {
+        if self.is_expired() {
+            return Err(Error::ConnectionExpired);
+        }
+
+        Ok(())
     }
 
     #[expect(clippy::too_many_arguments, reason = "We don't care that much.")]
@@ -154,6 +162,8 @@ impl Tunnel {
 
     /// Prepares a data message, deferring writing and encrypting it to the returned [`PendingEncapsulate`].
     pub fn encapsulate_data(&mut self, now: Instant) -> Result<PendingEncapsulate, Error> {
+        self.ensure_not_expired()?;
+
         let pending = self
             .sending_session(now)
             .ok_or(Error::NoCurrentSession)?
@@ -170,6 +180,8 @@ impl Tunnel {
         _keepalive: Keepalive,
         now: Instant,
     ) -> Result<KeepaliveMessage, Error> {
+        self.ensure_not_expired()?;
+
         let mut message = [0u8; DATA_OVERHEAD_SZ];
         self.sending_session(now)
             .ok_or(Error::NoCurrentSession)?
@@ -205,6 +217,8 @@ impl Tunnel {
         packet: Packet<'_>,
         now: Instant,
     ) -> Result<Option<PendingDecapsulate>, Error> {
+        self.ensure_not_expired()?;
+
         match packet {
             Packet::HandshakeInit(p) => self.handle_handshake_init(p, now)?,
             Packet::HandshakeResponse(p) => self.handle_handshake_response(p, now)?,
@@ -221,6 +235,8 @@ impl Tunnel {
         decrypted: Decrypted<B>,
         now: Instant,
     ) -> Result<Committed<B>, Error> {
+        self.ensure_not_expired()?;
+
         let Decrypted {
             receiving_index: remote_idx,
             counter,
@@ -335,17 +351,14 @@ impl Tunnel {
     /// Formats a new handshake initiation message.
     ///
     /// If `force_resend` is true will send a new handshake, even if a handshake is already in progress.
+    /// Returns `None` once the tunnel [expired](Tunnel::is_expired).
     pub fn format_handshake_initiation(
         &mut self,
         force_resend: bool,
         now: Instant,
     ) -> Option<HandshakeInitiationMessage> {
-        if self.handshake.is_in_progress() && !force_resend {
+        if self.is_expired() || (self.handshake.is_in_progress() && !force_resend) {
             return None;
-        }
-
-        if self.handshake.is_expired() {
-            self.timers.clear(now);
         }
 
         let starting_new_handshake = !self.handshake.is_in_progress();
@@ -384,6 +397,10 @@ impl Tunnel {
 
     /// Advances the timers to `now`, queuing whatever is due for [`Tunnel::poll_event`].
     pub fn handle_timeout(&mut self, now: Instant) {
+        if self.is_expired() {
+            return;
+        }
+
         self.timers.tick(TimerName::TimeLastUpdate, now);
 
         if self.timers.take_due_handshake(now).is_some() {
@@ -426,10 +443,6 @@ impl Tunnel {
             if expired_current.role() == Role::Initiator && !self.handshake.is_in_progress() {
                 handshake_initiation_required = true;
             }
-        }
-
-        if self.handshake.is_expired() {
-            return;
         }
 
         // Clear cookie after COOKIE_EXPIRATION_TIME
@@ -574,8 +587,13 @@ impl Tunnel {
     /// Calling it earlier than the given [`Instant`] is safe but unlikely to
     /// have any effect. Driving the state machine by repeatedly polling at the
     /// returned [`Instant`] is sufficient: there is no need to call
-    /// [`Tunnel::handle_timeout`] on a fixed interval.
+    /// [`Tunnel::handle_timeout`] on a fixed interval. Returns `None` once the tunnel
+    /// [expired](Tunnel::is_expired).
     pub fn poll_timeout(&self) -> Option<(Instant, &'static str)> {
+        if self.is_expired() {
+            return None;
+        }
+
         let (next, reason) = self.next_deadline()?;
         let last_update = self.timers[TimerName::TimeLastUpdate];
 

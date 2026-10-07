@@ -56,7 +56,7 @@ fn handshake_retries_cease_after_rekey_attempt_time() {
 }
 
 #[test]
-fn expired_tunnel_recovers_on_explicit_handshake() {
+fn expired_tunnel_stays_expired() {
     let mut sim = Sim::new();
     sim.cut_link();
     let init = sim.initiate_handshake(A);
@@ -65,11 +65,23 @@ fn expired_tunnel_recovers_on_explicit_handshake() {
     assert!(sim.tunn(A).is_expired());
 
     sim.heal_link();
-    let init = sim.initiate_handshake(A);
-    sim.route(A, init);
+    let now = sim.now;
+    assert!(sim.tunn(A).poll_timeout().is_none());
+    assert!(
+        sim.tunn_mut(A)
+            .format_handshake_initiation(true, now)
+            .is_none()
+    );
+    assert!(matches!(
+        sim.try_encapsulate(A, &ipv4_packet(b"data")),
+        Err(Error::ConnectionExpired)
+    ));
 
-    assert!(!sim.tunn(A).is_expired());
-    sim.assert_connectivity();
+    let init = sim.initiate_handshake(B);
+    sim.route(B, init);
+
+    assert!(sim.tunn(A).is_expired());
+    assert!(matches!(sim.errors(A), [.., Error::ConnectionExpired]));
 }
 
 #[test]
@@ -280,7 +292,7 @@ fn responder_discards_the_session_after_reject_after_time() {
     assert!(!sim.is_established(B));
     assert!(matches!(
         sim.try_encapsulate(B, &ipv4_packet(b"too late")),
-        Err(Error::NoCurrentSession)
+        Err(Error::ConnectionExpired)
     ));
     assert!(
         sim.errors(B).is_empty(),
