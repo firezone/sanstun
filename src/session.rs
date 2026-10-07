@@ -205,7 +205,7 @@ const N_SESSIONS: u8 = 8;
 pub(crate) struct Sessions {
     slots: [Option<Session>; N_SESSIONS as usize],
     /// Index of most recently used session.
-    current: Index,
+    current: Option<Index>,
     /// The most recently allocated local index.
     last_index: Index,
 }
@@ -215,7 +215,7 @@ impl Sessions {
     pub(crate) fn new(index: Index) -> Self {
         Self {
             slots: Default::default(),
-            current: Index::default(),
+            current: None,
             last_index: index,
         }
     }
@@ -250,11 +250,11 @@ impl Sessions {
 
     /// The most recently used session, if it still exists.
     pub(crate) fn current(&self) -> Option<&Session> {
-        self.get(self.current)
+        self.get(self.current?)
     }
 
     pub(crate) fn current_mut(&mut self) -> Option<&mut Session> {
-        self.get_mut(self.current)
+        self.get_mut(self.current?)
     }
 
     /// The session in the slot of `index`, which may have a different index.
@@ -271,8 +271,7 @@ impl Sessions {
 
     /// Update the index of the currently used session, if needed
     pub(crate) fn set_current(&mut self, new_idx: Index) {
-        let cur_idx = self.current;
-        if cur_idx == new_idx {
+        if self.current == Some(new_idx) {
             // There is nothing to do, already using this session, this is the common case
             return;
         }
@@ -289,7 +288,7 @@ impl Sessions {
             return;
         }
 
-        self.current = new_idx;
+        self.current = Some(new_idx);
         tracing::debug!(idx = %new_idx, "New session");
     }
 
@@ -297,6 +296,7 @@ impl Sessions {
         for session in &mut self.slots {
             *session = None;
         }
+        self.current = None;
     }
 
     /// Discards every session past [`REJECT_AFTER_TIME`].
@@ -310,7 +310,7 @@ impl Sessions {
                 continue;
             };
 
-            let is_current = self.current == session.receiving_index;
+            let is_current = self.current == Some(session.receiving_index);
 
             tracing::debug!(
                 session = %session.receiving_index,
@@ -319,6 +319,7 @@ impl Sessions {
             );
 
             if is_current {
+                self.current = None;
                 expired_current = Some(session);
             }
         }
