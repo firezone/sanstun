@@ -219,3 +219,19 @@ fn tunnel_rejects_low_order_peer_static_key() {
         assert!(matches!(tunnel, Err(Error::LowOrderPoint)), "{point:x?}");
     }
 }
+
+/// A Unix time too large for a TAI64N timestamp is clamped, so building a
+/// handshake initiation does not panic.
+#[test]
+fn out_of_range_unix_time_does_not_panic() {
+    let now = Instant::now();
+    let peer = Interface::new(&mut StdRng::from_seed([1; 32]), now, Duration::ZERO);
+    let mut interface = Interface::new(&mut StdRng::from_seed([0; 32]), now, Duration::MAX);
+    let mut tunnel = interface
+        .new_tunnel(peer.static_public(), None, None, now)
+        .unwrap();
+
+    let initiation = tunnel.format_handshake_initiation(false, now + secs(1));
+
+    assert!(initiation.is_some());
+}

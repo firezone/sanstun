@@ -7,6 +7,7 @@ use crate::harness::{
     assert_close, assert_fires_at, ipv4_packet, secs,
 };
 use sanstun::Error;
+use std::time::Duration;
 
 /// §6.4: an unanswered handshake initiation is retransmitted after
 /// `REKEY_TIMEOUT + jitter`, where jitter is up to 333ms.
@@ -102,6 +103,40 @@ fn rekey_attempt_time_is_configurable() {
 
     assert!(sim.sent_at(A, Kind::Init).iter().all(|at| *at < secs(10)));
     assert!(sim.tunn(A).is_expired());
+}
+
+/// A timer setting out of range is clamped to what the protocol allows, so
+/// the tunnel keeps working instead of panicking once the timer is used.
+#[test]
+fn out_of_range_rekey_attempt_time_does_not_panic() {
+    let mut sim = Sim::new();
+    sim.tunn_mut(A).set_rekey_attempt_time(Duration::MAX);
+    sim.cut_link();
+
+    let init = sim.initiate_handshake(A);
+    sim.route(A, init);
+    sim.advance(secs(1));
+    sim.heal_link();
+
+    sim.assert_connectivity();
+}
+
+#[test]
+fn out_of_range_keepalive_timeout_does_not_panic() {
+    let mut sim = Sim::connected();
+    sim.tunn_mut(A).set_keepalive_timeout(Duration::MAX);
+
+    sim.assert_connectivity();
+    sim.advance(secs(1));
+}
+
+#[test]
+fn out_of_range_rekey_timeout_does_not_panic() {
+    let mut sim = Sim::connected();
+    sim.tunn_mut(A).set_rekey_timeout(Duration::MAX);
+
+    sim.assert_connectivity();
+    sim.advance(secs(1));
 }
 
 /// §6.2: if the initiator sent data on a session whose keys are older than
