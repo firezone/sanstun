@@ -5,7 +5,7 @@ use rand::{CryptoRng, Rng, SeedableRng, TryCryptoRng, TryRng};
 
 /// A [`StdRng`] that re-keys itself from its own output after every use (fast key erasure), so a
 /// copy of its state cannot reproduce anything it generated before.
-pub(crate) struct ForwardSecureRng(pub(crate) StdRng);
+pub(crate) struct ForwardSecureRng(StdRng);
 
 impl ForwardSecureRng {
     pub(crate) fn new(seed: &mut impl CryptoRng) -> Self {
@@ -43,3 +43,31 @@ impl TryRng for ForwardSecureRng {
 }
 
 impl TryCryptoRng for ForwardSecureRng {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// [`StdRng`] compares by key, stream and position, so if the state left after a use equals
+    /// the starting generator at some position, the state still holds the starting key and
+    /// reproduces everything drawn before.
+    #[test]
+    fn state_after_use_does_not_reproduce_earlier_output() {
+        let start = || StdRng::from_rng(&mut StdRng::from_seed([1; 32]));
+        let mut rng = ForwardSecureRng::new(&mut StdRng::from_seed([1; 32]));
+
+        rng.next_u64();
+
+        for words in 0..64 {
+            let mut earlier = start();
+            for _ in 0..words {
+                earlier.next_u32();
+            }
+
+            assert_ne!(
+                earlier, rng.0,
+                "state is the starting generator after {words} words"
+            );
+        }
+    }
+}
