@@ -75,8 +75,8 @@ pub struct Tunnel {
 impl Tunnel {
     /// Whether the connection expired, as announced by [`Event::ConnectionExpired`].
     ///
-    /// An expired tunnel is meant to be dropped: it no longer has a timeout, sends or receives
-    /// nothing and fails with [`Error::ConnectionExpired`].
+    /// An expired tunnel is meant to be dropped: it has no timeout, formats no handshake
+    /// initiation and fails everything else with [`Error::ConnectionExpired`].
     pub fn is_expired(&self) -> bool {
         self.handshake.is_expired()
     }
