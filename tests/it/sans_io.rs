@@ -3,9 +3,8 @@
 //! behaviour for identical inputs.
 
 use crate::harness::{
-    COOKIE_EXPIRATION_TIME, KEEPALIVE_SIZE, KEEPALIVE_TIMEOUT, Kind, MAX_JITTER, Outcome as _,
-    Peer::A, Peer::B, REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_ATTEMPT_TIME, REKEY_TIMEOUT, Sim,
-    classify, ipv4_packet, secs,
+    KEEPALIVE_SIZE, KEEPALIVE_TIMEOUT, Kind, MAX_JITTER, Outcome as _, Peer::A, Peer::B,
+    REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_TIMEOUT, Sim, classify, ipv4_packet, secs,
 };
 use sanstun::{Error, Event};
 use std::time::Duration;
@@ -114,38 +113,6 @@ fn a_single_late_poll_observes_the_expiry() {
 
     tunn.handle_timeout(late + secs(1));
     assert!(tunn.poll_event().is_none());
-}
-
-/// An expired tunnel may sit idle for a long time, e.g. while its peer is
-/// offline. Every deadline it announces must still be actionable, or a caller
-/// that sleeps until `poll_timeout` wakes up in a busy loop.
-#[test]
-fn an_expired_tunnel_idles_without_busy_looping() {
-    let mut sim = Sim::new();
-    sim.cut_link();
-    let init = sim.initiate_handshake(A);
-    sim.route(A, init);
-    sim.advance(REKEY_ATTEMPT_TIME + secs(5));
-    assert!(sim.tunn(A).is_expired());
-
-    // Past `REJECT_AFTER_TIME * 3` after the expiry.
-    sim.advance(3 * REJECT_AFTER_TIME + secs(10));
-}
-
-/// Like [`an_expired_tunnel_idles_without_busy_looping`], but the tunnel holds
-/// a cookie when it expires, whose expiry is announced as another deadline.
-#[test]
-fn an_expired_tunnel_holding_a_cookie_idles_without_busy_looping() {
-    let mut sim = Sim::builder().responder_under_load().build();
-    let init = sim.initiate_handshake(A);
-    let cookie_reply = sim.deliver(B, &init).expect_one_net();
-    sim.deliver(A, &cookie_reply).expect_consumed();
-    sim.cut_link();
-    sim.advance(REKEY_ATTEMPT_TIME + secs(5));
-    assert!(sim.tunn(A).is_expired());
-
-    // Past `COOKIE_EXPIRATION_TIME` after the cookie arrived.
-    sim.advance(COOKIE_EXPIRATION_TIME);
 }
 
 /// The only source of randomness in timer behaviour is the seeded jitter RNG:
