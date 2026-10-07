@@ -458,6 +458,7 @@ impl Handshake {
             &mac1[0..16],
         )?;
 
+        self.cookies.last_mac1 = None;
         self.cookies.write_cookie = Some(WriteCookie {
             value: cookie,
             received_at: now,

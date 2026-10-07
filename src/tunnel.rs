@@ -29,7 +29,9 @@ pub enum Event {
     KeepaliveDue(Keepalive),
     /// The connection expired and all session state was dropped.
     ///
-    /// Emitted once per expiry, see [`Tunnel::is_expired`].
+    /// Emitted once per expiry. Drop the [`Tunnel`] and create a new one with
+    /// [`Interface::new_tunnel`](crate::Interface::new_tunnel) to reach the peer again, see
+    /// [`Tunnel::is_expired`].
     ConnectionExpired,
 }
 
@@ -71,6 +73,10 @@ pub struct Tunnel {
 }
 
 impl Tunnel {
+    /// Whether the connection expired, as announced by [`Event::ConnectionExpired`].
+    ///
+    /// An expired tunnel is meant to be dropped: it no longer acts on its timers, so polling it
+    /// further is not useful.
     pub fn is_expired(&self) -> bool {
         self.handshake.is_expired()
     }
@@ -305,7 +311,6 @@ impl Tunnel {
         tracing::debug!(%local_idx, "Received cookie_reply");
 
         self.handshake.receive_cookie_reply(p, now)?;
-        self.timers.tick(TimerName::TimeLastPacketReceived, now);
 
         tracing::debug!(%local_idx, "Did set cookie");
 
