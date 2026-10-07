@@ -38,9 +38,9 @@ It is your responsibility to pick the correct `Tunnel` based on the destination 
 
 ### Handshake routing
 
-A handshake initiation is routed by the static public key the initiator claims, via `HandshakeInit::peer_static_public`.
-Anyone can claim any key, so the claim is only proven once `Tunnel::decapsulate` accepts the initiation.
-Do not trust it, log it as the sender or create a `Tunnel` for an unknown key based on it.
+A handshake initiation is routed by the initiator's static public key, via `HandshakeInit::peer_static_public`.
+`Interface::receive` authenticates it and, for keys you created a `Tunnel` for, rejects replayed initiations.
+Anyone can generate a key pair though, so do not create a `Tunnel` for an unknown key based on it.
 
 ### Inner IP packet validation
 

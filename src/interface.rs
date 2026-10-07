@@ -1,15 +1,17 @@
 use crate::crypto::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, xaead_seal};
-use crate::handshake::{LABEL_COOKIE, LABEL_MAC1, decrypt_initiator_static};
+use crate::handshake::{LABEL_COOKIE, LABEL_MAC1, parse_handshake_init};
 use crate::index::TunnelIndices;
 use crate::message::{
     COOKIE_REPLY, COOKIE_REPLY_SZ, DATA, DATA_OVERHEAD_SZ, HANDSHAKE_INIT, HANDSHAKE_INIT_SZ,
-    HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeInit, HandshakeResponse, Macs, Packet,
-    PacketCookieReply, PacketData,
+    HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeResponse, Macs, Packet, PacketCookieReply,
+    PacketData,
 };
 use crate::ratelimiter::RateLimiter;
-use crate::tai64n::TimeStamper;
+use crate::tai64n::{Tai64N, TimeStamper};
 use crate::{CookieReplyMessage, Error, PublicKey, StaticSecret, Tunnel};
 
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
@@ -40,6 +42,8 @@ pub struct Interface {
     stamper: TimeStamper,
     indices: TunnelIndices,
     rate_limiter: RateLimiter,
+    /// The newest handshake timestamp accepted from each peer we created a tunnel for.
+    last_handshake_timestamps: HashMap<PublicKey, Tai64N>,
 }
 
 impl Interface {
@@ -72,6 +76,7 @@ impl Interface {
             stamper: TimeStamper::new(now, unix),
             indices,
             rate_limiter: RateLimiter::new(now),
+            last_handshake_timestamps: HashMap::new(),
         }
     }
 
@@ -105,6 +110,9 @@ impl Interface {
     /// Creates a [`Tunnel`] between our static key and `peer_static_public`.
     ///
     /// Fails with [`Error::LowOrderPoint`] if `peer_static_public` is a low-order point.
+    ///
+    /// From then on, the [`Interface`] rejects replayed handshake initiations from
+    /// `peer_static_public`, including across tunnels that replace this one.
     pub fn new_tunnel(
         &mut self,
         peer_static_public: PublicKey,
@@ -114,7 +122,7 @@ impl Interface {
     ) -> Result<Tunnel, Error> {
         let (index, index_lease) = self.indices.next();
 
-        Tunnel::new(
+        let tunnel = Tunnel::new(
             self.static_private.clone(),
             peer_static_public,
             preshared_key,
@@ -126,7 +134,13 @@ impl Interface {
             &mut self.rng,
             now,
             self.stamper.clone(),
-        )
+        )?;
+
+        if let Entry::Vacant(entry) = self.last_handshake_timestamps.entry(peer_static_public) {
+            entry.insert(Tai64N::zero());
+        }
+
+        Ok(tunnel)
     }
 
     /// Parses and verifies a datagram received from the network.
@@ -135,6 +149,9 @@ impl Interface {
     /// Under load, handshake messages with a valid cookie are additionally limited to 20 per
     /// second with a burst of 5 per source, where a source is an IPv4 address or an IPv6 /64.
     /// Messages over that budget are rejected with [`Error::RateLimited`] and should be dropped.
+    ///
+    /// A handshake initiation from a peer we created a tunnel for is rejected with
+    /// [`Error::WrongTai64nTimestamp`] unless it is newer than the last one accepted from it.
     ///
     /// `src_addr` is the address and port the datagram came from, which cookies are bound to.
     pub fn receive<'a>(
@@ -157,18 +174,23 @@ impl Interface {
                     return Ok(Received::CookieReply(reply));
                 }
 
-                Packet::HandshakeInit(HandshakeInit {
-                    sender_idx,
-                    encrypted_timestamp: &datagram[88..116],
-                    initiator: decrypt_initiator_static(
-                        &self.static_private,
-                        &self.static_public,
-                        datagram[8..40]
-                            .try_into()
-                            .expect("length already checked above"),
-                        &datagram[40..88],
-                    )?,
-                })
+                let init = parse_handshake_init(
+                    &self.static_private,
+                    &self.static_public,
+                    datagram.try_into().expect("length already checked above"),
+                )?;
+
+                if let Some(last) = self
+                    .last_handshake_timestamps
+                    .get_mut(&init.peer_static_public)
+                {
+                    if !init.timestamp.after(last) {
+                        return Err(Error::WrongTai64nTimestamp);
+                    }
+                    *last = init.timestamp;
+                }
+
+                Packet::HandshakeInit(init)
             }
             (HANDSHAKE_RESP, HANDSHAKE_RESP_SZ) => {
                 let sender_idx = u32::from_le_bytes(datagram[4..8].try_into().unwrap());
@@ -377,6 +399,25 @@ mod tests {
 
         assert!(matches!(within, Ok(None)));
         assert!(matches!(after, Ok(Some(_))));
+    }
+
+    #[test]
+    fn initiations_from_unknown_peers_leave_no_state() {
+        let now = Instant::now();
+        let mut initiator = Interface::new(&mut StdRng::from_seed([1; 32]), now, Duration::ZERO);
+        let mut responder = Interface::new(&mut StdRng::from_seed([2; 32]), now, Duration::ZERO);
+        let mut tunnel = initiator
+            .new_tunnel(responder.static_public(), None, None, now)
+            .unwrap();
+        let init = tunnel.format_handshake_initiation(false, now).unwrap();
+
+        let received = responder.receive("1.2.3.4:51820".parse().unwrap(), &init, now);
+
+        assert!(matches!(
+            received,
+            Ok(Received::Packet(Packet::HandshakeInit(_)))
+        ));
+        assert!(responder.last_handshake_timestamps.is_empty());
     }
 
     fn under_load(now: Instant) -> Interface {

@@ -1,8 +1,10 @@
 use crate::PublicKey;
-use crate::handshake::InitiatorStatic;
 use crate::index::Index;
+use crate::tai64n::Tai64N;
 
 use std::ops::Deref;
+
+use zeroize::Zeroizing;
 
 type MessageType = u32;
 pub(crate) const HANDSHAKE_INIT: MessageType = 1;
@@ -36,14 +38,18 @@ impl<'a> Macs<'a> {
     }
 }
 
-/// A handshake initiation whose initiator's static public key we decrypted.
-pub struct HandshakeInit<'a> {
+/// An authenticated handshake initiation, ready to be answered by its [`Tunnel`](crate::Tunnel).
+pub struct HandshakeInit {
     pub(crate) sender_idx: u32,
-    pub(crate) encrypted_timestamp: &'a [u8],
-    pub(crate) initiator: InitiatorStatic,
+    pub(crate) peer_static_public: PublicKey,
+    pub(crate) peer_ephemeral_public: PublicKey,
+    /// The responder's Noise state after the initiation, from which it builds its response.
+    pub(crate) chaining_key: Zeroizing<[u8; 32]>,
+    pub(crate) hash: [u8; 32],
+    pub(crate) timestamp: Tai64N,
 }
 
-impl std::fmt::Debug for HandshakeInit<'_> {
+impl std::fmt::Debug for HandshakeInit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HandshakeInit")
             .field("sender_idx", &self.sender_idx)
@@ -52,25 +58,22 @@ impl std::fmt::Debug for HandshakeInit<'_> {
     }
 }
 
-impl HandshakeInit<'_> {
+impl HandshakeInit {
     pub fn sender_idx(&self) -> u32 {
         self.sender_idx
     }
 
-    /// The static public key the initiator claims, to look up the [`Tunnel`](crate::Tunnel) it
-    /// belongs to.
+    /// The initiator's static public key, to look up the [`Tunnel`](crate::Tunnel) it belongs to.
     ///
-    /// The claim is not yet authenticated: anyone who knows our public key can send an
-    /// initiation that carries any static key. Only once [`Tunnel::decapsulate`] accepts this
-    /// message has the initiator proven that it holds the matching private key.
+    /// [`Interface::receive`](crate::Interface::receive) has authenticated it: the initiator
+    /// holds the matching private key. For a key we created a tunnel for, the initiation is also
+    /// newer than any accepted before, so it is not a replay.
     ///
-    /// Until then, use it for routing only: do not log it as the identity of the sender,
-    /// authorize anything based on it, or allocate state such as a new
-    /// [`Tunnel`](crate::Tunnel) for a key you do not already know.
-    ///
-    /// [`Tunnel::decapsulate`]: crate::Tunnel::decapsulate
+    /// Anyone can generate a key pair, and replays are not detected for keys we have no tunnel
+    /// for. Do not authorize anything or allocate state such as a new [`Tunnel`](crate::Tunnel)
+    /// for a key you do not already know.
     pub fn peer_static_public(&self) -> PublicKey {
-        self.initiator.peer_static_public
+        self.peer_static_public
     }
 }
 
@@ -126,7 +129,7 @@ impl PacketData {
 /// It can only be obtained from [`Interface::receive`](crate::Interface::receive), which verifies it.
 #[derive(Debug)]
 pub enum Packet<'a> {
-    HandshakeInit(HandshakeInit<'a>),
+    HandshakeInit(HandshakeInit),
     HandshakeResponse(HandshakeResponse<'a>),
     PacketCookieReply(PacketCookieReply<'a>),
     PacketData(PacketData),

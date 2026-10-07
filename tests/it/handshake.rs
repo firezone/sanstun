@@ -95,6 +95,21 @@ fn replayed_handshake_initiation_is_rejected() {
     assert!(matches!(error, Error::WrongTai64nTimestamp));
 }
 
+// The timestamp only protects against replay if the responder remembers the
+// newest one it accepted. Callers replace the tunnel to a peer, e.g. once it
+// expired, so the `Interface` must remember it, not the `Tunnel`.
+#[test]
+fn replayed_handshake_initiation_is_rejected_after_the_tunnel_is_replaced() {
+    let mut sim = Sim::new();
+    let init = sim.initiate_handshake(A);
+    sim.deliver(B, &init).expect_one_net();
+
+    sim.replace_tunnel(B);
+    let error = sim.deliver(B, &init).expect_err();
+
+    assert!(matches!(error, Error::WrongTai64nTimestamp));
+}
+
 // sanstun keeps two outgoing handshakes in flight so that a delayed
 // response to an earlier initiation is not lost on flaky networks.
 #[test]
