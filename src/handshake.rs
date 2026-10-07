@@ -115,8 +115,9 @@ struct WriteCookie {
     received_at: Instant,
 }
 
-/// The responder's handshake state after consuming a handshake initiation.
-pub(crate) struct ConsumedInitiation {
+/// A handshake initiation whose sender proved it holds the claimed static key, with the state the
+/// responder needs to answer it.
+pub(crate) struct AuthenticatedInitiation {
     chaining_key: Zeroizing<[u8; KEY_LEN]>,
     hash: [u8; KEY_LEN],
     peer_ephemeral_public: PublicKey,
@@ -125,13 +126,13 @@ pub(crate) struct ConsumedInitiation {
 
 /// Authenticates a handshake initiation, returning the responder's handshake state and the
 /// initiator's timestamp.
-pub(crate) fn consume_initiation(
+pub(crate) fn authenticate_initiation(
     static_private: &StaticSecret,
     static_public: &PublicKey,
     unencrypted_ephemeral: &[u8; KEY_LEN],
     encrypted_static: &[u8],
     encrypted_timestamp: &[u8],
-) -> Result<(ConsumedInitiation, Tai64N), Error> {
+) -> Result<(AuthenticatedInitiation, Tai64N), Error> {
     // initiator.chaining_key = HASH(CONSTRUCTION)
     let mut chaining_key = Zeroizing::new(INITIAL_CHAIN_KEY);
     // initiator.hash = HASH(HASH(initiator.chaining_key || IDENTIFIER) || responder.static_public)
@@ -176,7 +177,7 @@ pub(crate) fn consume_initiation(
     hash = b2s_hash(&hash, encrypted_timestamp);
 
     Ok((
-        ConsumedInitiation {
+        AuthenticatedInitiation {
             chaining_key,
             hash,
             peer_ephemeral_public,
@@ -318,7 +319,7 @@ impl Handshake {
             // msg.sender_index = little_endian(initiator.sender_index)
             sender_idx: peer_index,
             initiation:
-                ConsumedInitiation {
+                AuthenticatedInitiation {
                     chaining_key,
                     hash,
                     peer_ephemeral_public,

@@ -1,5 +1,5 @@
 use crate::PublicKey;
-use crate::handshake::ConsumedInitiation;
+use crate::handshake::AuthenticatedInitiation;
 use crate::index::Index;
 
 use std::ops::Deref;
@@ -39,7 +39,7 @@ impl<'a> Macs<'a> {
 /// An authenticated handshake initiation, ready to be answered by its [`Tunnel`](crate::Tunnel).
 pub struct HandshakeInit {
     pub(crate) sender_idx: u32,
-    pub(crate) initiation: ConsumedInitiation,
+    pub(crate) initiation: AuthenticatedInitiation,
 }
 
 impl std::fmt::Debug for HandshakeInit {
