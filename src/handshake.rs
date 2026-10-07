@@ -2,7 +2,7 @@ use super::index::Index;
 use super::timers::COOKIE_EXPIRATION_TIME;
 use crate::crypto::{
     SharedKey, aead_chacha20_open, aead_chacha20_seal, b2s_hash, b2s_hmac, b2s_hmac2,
-    b2s_keyed_mac_16, dh, erase_rng_history, xaead_open,
+    b2s_keyed_mac_16, dh, xaead_open,
 };
 use crate::errors::Error;
 use crate::message::{
@@ -11,7 +11,7 @@ use crate::message::{
 };
 use crate::session::{Role, Session};
 use crate::tai64n::{Tai64N, TimeStamper};
-use rand::rngs::StdRng;
+use rand::CryptoRng;
 use std::fmt::Debug;
 use std::time::Instant;
 use subtle::ConstantTimeEq as _;
@@ -277,7 +277,7 @@ impl Handshake {
     pub(super) fn initiate_handshake(
         &mut self,
         local_index: Index,
-        rng: &mut StdRng,
+        rng: &mut impl CryptoRng,
         now: Instant,
     ) -> [u8; HANDSHAKE_INIT_SZ] {
         let (mut initiation, state) = self.format_handshake_initiation(local_index, rng, now);
@@ -294,7 +294,7 @@ impl Handshake {
         &mut self,
         packet: HandshakeInit,
         local_index: Index,
-        rng: &mut StdRng,
+        rng: &mut impl CryptoRng,
         now: Instant,
     ) -> Result<([u8; HANDSHAKE_RESP_SZ], Session), Error> {
         let HandshakeInit {
@@ -470,7 +470,7 @@ impl Handshake {
     fn format_handshake_initiation(
         &self,
         local_index: Index,
-        rng: &mut StdRng,
+        rng: &mut impl CryptoRng,
         now: Instant,
     ) -> ([u8; HANDSHAKE_INIT_SZ], HandshakeInitSentState) {
         let mut dst = [0u8; HANDSHAKE_INIT_SZ];
@@ -487,8 +487,7 @@ impl Handshake {
         let mut hash = INITIAL_CHAIN_HASH;
         hash = b2s_hash(&hash, self.params.peer_static_public.as_bytes());
         // initiator.ephemeral_private = DH_GENERATE()
-        let ephemeral_private = x25519_dalek::ReusableSecret::random_from_rng(&mut *rng);
-        erase_rng_history(rng);
+        let ephemeral_private = x25519_dalek::ReusableSecret::random_from_rng(rng);
         // msg.message_type = 1
         // msg.reserved_zero = { 0, 0, 0 }
         message_type.copy_from_slice(&HANDSHAKE_INIT.to_le_bytes());
@@ -554,7 +553,7 @@ impl Handshake {
         peer_ephemeral_public: PublicKey,
         local_index: Index,
         peer_index: u32,
-        rng: &mut StdRng,
+        rng: &mut impl CryptoRng,
         now: Instant,
     ) -> Result<([u8; HANDSHAKE_RESP_SZ], Session), Error> {
         let mut dst = [0u8; HANDSHAKE_RESP_SZ];
@@ -566,8 +565,7 @@ impl Handshake {
         let (encrypted_nothing, _) = rest.split_at_mut(16);
 
         // responder.ephemeral_private = DH_GENERATE()
-        let ephemeral_private = x25519_dalek::ReusableSecret::random_from_rng(&mut *rng);
-        erase_rng_history(rng);
+        let ephemeral_private = x25519_dalek::ReusableSecret::random_from_rng(rng);
         // msg.message_type = 2
         // msg.reserved_zero = { 0, 0, 0 }
         message_type.copy_from_slice(&HANDSHAKE_RESP.to_le_bytes());

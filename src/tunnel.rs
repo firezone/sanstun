@@ -10,8 +10,8 @@ use crate::session::{self, Decrypted, PendingDecapsulate, PendingEncapsulate, Ro
 use crate::tai64n::TimeStamper;
 use crate::timers::{MAX_JITTER, TimerName, Timers};
 
-use rand::rngs::StdRng;
-use rand::{CryptoRng, RngExt, SeedableRng};
+use crate::rng::ForwardSecureRng;
+use rand::{CryptoRng, RngExt};
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use std::iter;
@@ -65,7 +65,7 @@ pub struct Tunnel {
     handshake: Handshake,
     sessions: Sessions,
     timers: Timers,
-    rng: StdRng,
+    rng: ForwardSecureRng,
     events: RingBuffer<Event, 16>,
 
     /// Reserves this tunnel's index in its [`Interface`](crate::Interface) while the tunnel is alive.
@@ -106,7 +106,7 @@ impl Tunnel {
             handshake,
             sessions: Sessions::new(index),
             timers: Timers::new(persistent_keepalive, now),
-            rng: StdRng::from_rng(rng),
+            rng: ForwardSecureRng::new(rng),
             events: RingBuffer::new(),
             _index_lease: index_lease,
         })
@@ -687,6 +687,8 @@ impl Tunnel {
 mod tests {
     use super::*;
     use rand::Rng as _;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
 
     /// How many words of keystream the attacker searches for the leaked state's position.
     const MAX_WORDS: usize = 1024;
@@ -709,7 +711,7 @@ mod tests {
             .expect("no handshake is in progress");
         let on_the_wire = PublicKey::from(<[u8; 32]>::try_from(&initiation[8..40]).unwrap());
 
-        let leaked = &tunnel.rng;
+        let leaked = &tunnel.rng.0;
         let Some(words_drawn) =
             (0..MAX_WORDS).find(|&n| advanced(starting_rng(seed), n) == *leaked)
         else {

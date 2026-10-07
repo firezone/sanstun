@@ -27,6 +27,7 @@ mod message;
 mod ratelimiter;
 mod replay;
 mod ring_buffer;
+mod rng;
 mod session;
 mod tai64n;
 mod timers;

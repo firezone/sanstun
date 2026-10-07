@@ -1,6 +1,4 @@
-use crate::crypto::{
-    b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, erase_rng_history, xaead_seal,
-};
+use crate::crypto::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, xaead_seal};
 use crate::handshake::{LABEL_COOKIE, LABEL_MAC1, decrypt_initiator_static};
 use crate::index::TunnelIndices;
 use crate::message::{
@@ -15,8 +13,8 @@ use crate::{CookieReplyMessage, Error, PublicKey, StaticSecret, Tunnel};
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
-use rand::rngs::StdRng;
-use rand::{CryptoRng, RngExt, SeedableRng};
+use crate::rng::ForwardSecureRng;
+use rand::{CryptoRng, RngExt};
 use subtle::ConstantTimeEq as _;
 use zeroize::Zeroizing;
 
@@ -38,7 +36,7 @@ pub struct Interface {
     mac1_key: [u8; 32],
     cookie_key: [u8; 32],
 
-    rng: StdRng,
+    rng: ForwardSecureRng,
     stamper: TimeStamper,
     indices: TunnelIndices,
     rate_limiter: RateLimiter,
@@ -56,13 +54,12 @@ impl Interface {
     /// `unix` is the time since the Unix epoch at `now`, from which the timestamps of handshake
     /// initiations are derived.
     pub fn new(rng: &mut impl CryptoRng, now: Instant, unix: Duration) -> Self {
-        let mut rng = StdRng::from_rng(rng);
+        let mut rng = ForwardSecureRng::new(rng);
         let static_private = StaticSecret::from(rng.random::<[u8; 32]>());
         let static_public = PublicKey::from(&static_private);
         let mut cookie_secret = Zeroizing::new([0; 32]);
         rng.fill(&mut cookie_secret[..]);
         let indices = TunnelIndices::new(&mut rng);
-        erase_rng_history(&mut rng);
 
         Interface {
             static_private,
@@ -117,7 +114,7 @@ impl Interface {
     ) -> Result<Tunnel, Error> {
         let (index, index_lease) = self.indices.next();
 
-        let tunnel = Tunnel::new(
+        Tunnel::new(
             self.static_private.clone(),
             peer_static_public,
             preshared_key,
@@ -129,10 +126,7 @@ impl Interface {
             &mut self.rng,
             now,
             self.stamper.clone(),
-        );
-        erase_rng_history(&mut self.rng);
-
-        tunnel
+        )
     }
 
     /// Parses and verifies a datagram received from the network.
@@ -272,7 +266,6 @@ impl Interface {
     fn cookie_secret(&mut self, now: Instant) -> &[u8; 32] {
         if now.duration_since(self.cookie_secret_created_at) >= COOKIE_SECRET_MAX_AGE {
             self.rng.fill(&mut self.cookie_secret[..]);
-            erase_rng_history(&mut self.rng);
             self.cookie_secret_created_at = now;
         }
 
@@ -328,6 +321,8 @@ pub enum Received<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
 
     #[test]
     fn cookies_differ_across_address_families() {
