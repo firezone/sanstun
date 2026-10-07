@@ -13,8 +13,8 @@ use crate::{CookieReplyMessage, Error, PublicKey, StaticSecret, Tunnel};
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
-use rand::rngs::StdRng;
-use rand::{CryptoRng, RngExt, SeedableRng};
+use crate::rng::ForwardSecureRng;
+use rand::{CryptoRng, RngExt};
 use subtle::ConstantTimeEq as _;
 use zeroize::Zeroizing;
 
@@ -36,7 +36,7 @@ pub struct Interface {
     mac1_key: [u8; 32],
     cookie_key: [u8; 32],
 
-    rng: StdRng,
+    rng: ForwardSecureRng,
     stamper: TimeStamper,
     indices: TunnelIndices,
     rate_limiter: RateLimiter,
@@ -54,7 +54,7 @@ impl Interface {
     /// `unix` is the time since the Unix epoch at `now`, from which the timestamps of handshake
     /// initiations are derived.
     pub fn new(rng: &mut impl CryptoRng, now: Instant, unix: Duration) -> Self {
-        let mut rng = StdRng::from_rng(rng);
+        let mut rng = ForwardSecureRng::new(rng);
         let static_private = StaticSecret::from(rng.random::<[u8; 32]>());
         let static_public = PublicKey::from(&static_private);
         let mut cookie_secret = Zeroizing::new([0; 32]);
@@ -321,6 +321,8 @@ pub enum Received<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rand::SeedableRng;
+    use rand::rngs::StdRng;
 
     #[test]
     fn cookies_differ_across_address_families() {

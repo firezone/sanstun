@@ -3,7 +3,7 @@ use std::fmt;
 use std::sync::{Arc, Weak};
 
 use rand::rngs::StdRng;
-use rand::{RngExt, SeedableRng};
+use rand::{CryptoRng, RngExt, SeedableRng};
 
 /// Identifies a session of a [`Tunnel`](super::Tunnel).
 ///
@@ -55,7 +55,7 @@ pub(crate) struct TunnelIndices {
 }
 
 impl TunnelIndices {
-    pub(crate) fn new(rng: &mut StdRng) -> Self {
+    pub(crate) fn new(rng: &mut impl CryptoRng) -> Self {
         TunnelIndices {
             rng: StdRng::from_rng(rng),
             in_use: HashMap::new(),

@@ -11,7 +11,7 @@ use crate::message::{
 };
 use crate::session::{Role, Session};
 use crate::tai64n::{Tai64N, TimeStamper};
-use rand::rngs::StdRng;
+use rand::CryptoRng;
 use std::fmt::Debug;
 use std::time::Instant;
 use subtle::ConstantTimeEq as _;
@@ -277,7 +277,7 @@ impl Handshake {
     pub(super) fn initiate_handshake(
         &mut self,
         local_index: Index,
-        rng: &mut StdRng,
+        rng: &mut impl CryptoRng,
         now: Instant,
     ) -> [u8; HANDSHAKE_INIT_SZ] {
         let (mut initiation, state) = self.format_handshake_initiation(local_index, rng, now);
@@ -294,7 +294,7 @@ impl Handshake {
         &mut self,
         packet: HandshakeInit,
         local_index: Index,
-        rng: &mut StdRng,
+        rng: &mut impl CryptoRng,
         now: Instant,
     ) -> Result<([u8; HANDSHAKE_RESP_SZ], Session), Error> {
         let HandshakeInit {
@@ -470,7 +470,7 @@ impl Handshake {
     fn format_handshake_initiation(
         &self,
         local_index: Index,
-        rng: &mut StdRng,
+        rng: &mut impl CryptoRng,
         now: Instant,
     ) -> ([u8; HANDSHAKE_INIT_SZ], HandshakeInitSentState) {
         let mut dst = [0u8; HANDSHAKE_INIT_SZ];
@@ -553,7 +553,7 @@ impl Handshake {
         peer_ephemeral_public: PublicKey,
         local_index: Index,
         peer_index: u32,
-        rng: &mut StdRng,
+        rng: &mut impl CryptoRng,
         now: Instant,
     ) -> Result<([u8; HANDSHAKE_RESP_SZ], Session), Error> {
         let mut dst = [0u8; HANDSHAKE_RESP_SZ];

@@ -10,8 +10,8 @@ use crate::session::{self, Decrypted, PendingDecapsulate, PendingEncapsulate, Ro
 use crate::tai64n::TimeStamper;
 use crate::timers::{MAX_JITTER, TimerName, Timers};
 
-use rand::rngs::StdRng;
-use rand::{CryptoRng, RngExt, SeedableRng};
+use crate::rng::ForwardSecureRng;
+use rand::{CryptoRng, RngExt};
 use x25519_dalek::{PublicKey, StaticSecret};
 
 use std::iter;
@@ -65,7 +65,7 @@ pub struct Tunnel {
     handshake: Handshake,
     sessions: Sessions,
     timers: Timers,
-    rng: StdRng,
+    rng: ForwardSecureRng,
     events: RingBuffer<Event, 16>,
 
     /// Reserves this tunnel's index in its [`Interface`](crate::Interface) while the tunnel is alive.
@@ -106,7 +106,7 @@ impl Tunnel {
             handshake,
             sessions: Sessions::new(index),
             timers: Timers::new(persistent_keepalive, now),
-            rng: StdRng::from_rng(rng),
+            rng: ForwardSecureRng::new(rng),
             events: RingBuffer::new(),
             _index_lease: index_lease,
         })
