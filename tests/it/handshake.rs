@@ -7,7 +7,7 @@ use crate::harness::{
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use sanstun::{Error, Interface, PublicKey};
+use sanstun::{Error, Interface, Packet, PublicKey};
 use std::time::{Duration, Instant};
 
 #[test]
@@ -78,6 +78,27 @@ fn responder_rejects_initiator_with_unexpected_static_key() {
         0,
         "responder must stay silent"
     );
+    assert!(!sim.is_established(B));
+}
+
+// §5.4.2: the initiator's static key is encrypted under the ephemeral DH
+// only, so anyone who knows the responder's public key can claim any static
+// key. The claim is only proven by the timestamp, which needs the static DH.
+#[test]
+fn claimed_static_key_is_only_proven_by_the_tunnel() {
+    let mut sim = Sim::new();
+    let victim = sim.tunn(B).remote_static_public();
+    let responder = sim.tunn(A).remote_static_public();
+
+    let init = forged_initiation(responder, victim);
+
+    let Packet::HandshakeInit(claim) = sim.receive(B, &init) else {
+        panic!("expected a handshake initiation");
+    };
+    assert_eq!(claim.peer_static_public(), victim);
+
+    let error = sim.deliver(B, &init).expect_err();
+    assert!(matches!(error, Error::InvalidAeadTag));
     assert!(!sim.is_established(B));
 }
 
@@ -218,4 +239,67 @@ fn tunnel_rejects_low_order_peer_static_key() {
 
         assert!(matches!(tunnel, Err(Error::LowOrderPoint)), "{point:x?}");
     }
+}
+
+/// A handshake initiation to `responder` that claims `claimed` as its static
+/// key, built without the private key of `claimed` (§5.4.2).
+fn forged_initiation(responder: PublicKey, claimed: PublicKey) -> Vec<u8> {
+    use blake2::digest::consts::U16;
+    use blake2::digest::{FixedOutput as _, KeyInit as _};
+    use blake2::{Blake2s256, Blake2sMac, Digest as _};
+    use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
+
+    fn hash(a: &[u8], b: &[u8]) -> [u8; 32] {
+        Blake2s256::new()
+            .chain_update(a)
+            .chain_update(b)
+            .finalize()
+            .into()
+    }
+    fn hmac(key: &[u8], data: &[u8]) -> [u8; 32] {
+        use hmac::Mac as _;
+        let mut mac = hmac::SimpleHmac::<Blake2s256>::new_from_slice(key).unwrap();
+        mac.update(data);
+        mac.finalize().into_bytes().into()
+    }
+
+    let ephemeral = [0x66; 32];
+    let ephemeral_public = x25519_dalek::x25519(ephemeral, x25519_dalek::X25519_BASEPOINT_BYTES);
+
+    let chaining_key = hash(b"Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s", &[]);
+    let h = hash(&chaining_key, b"WireGuard v1 zx2c4 Jason@zx2c4.com");
+    let h = hash(&h, responder.as_bytes());
+    let h = hash(&h, &ephemeral_public);
+    let chaining_key = hmac(&hmac(&chaining_key, &ephemeral_public), &[1]);
+    let temp = hmac(
+        &chaining_key,
+        &x25519_dalek::x25519(ephemeral, *responder.as_bytes()),
+    );
+    let chaining_key = hmac(&temp, &[1]);
+    let key = hmac(&temp, &[&chaining_key[..], &[2]].concat());
+
+    let mut encrypted_static = claimed.as_bytes().to_vec();
+    LessSafeKey::new(UnboundKey::new(&CHACHA20_POLY1305, &key).unwrap())
+        .seal_in_place_append_tag(
+            Nonce::assume_unique_for_key([0; 12]),
+            Aad::from(h),
+            &mut encrypted_static,
+        )
+        .unwrap();
+
+    let mut init = Vec::with_capacity(HANDSHAKE_INIT_SIZE);
+    init.extend_from_slice(&1u32.to_le_bytes());
+    init.extend_from_slice(&42u32.to_le_bytes());
+    init.extend_from_slice(&ephemeral_public);
+    init.extend_from_slice(&encrypted_static);
+    init.extend_from_slice(&[0; 12 + 16]); // Without the static DH, the timestamp is garbage.
+
+    let mac1_key = hash(b"mac1----", responder.as_bytes());
+    let mut mac = Blake2sMac::<U16>::new_from_slice(&mac1_key).unwrap();
+    blake2::digest::Update::update(&mut mac, &init);
+    let mac1: [u8; 16] = mac.finalize_fixed().into();
+    init.extend_from_slice(&mac1);
+    init.extend_from_slice(&[0; 16]);
+
+    init
 }

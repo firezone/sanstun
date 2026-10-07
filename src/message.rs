@@ -57,8 +57,18 @@ impl HandshakeInit<'_> {
         self.sender_idx
     }
 
-    /// The initiator's static public key, e.g. to look up the [`Tunnel`](crate::Tunnel) it
+    /// The static public key the initiator claims, to look up the [`Tunnel`](crate::Tunnel) it
     /// belongs to.
+    ///
+    /// The claim is not yet authenticated: anyone who knows our public key can send an
+    /// initiation that carries any static key. Only once [`Tunnel::decapsulate`] accepts this
+    /// message has the initiator proven that it holds the matching private key.
+    ///
+    /// Until then, use it for routing only: do not log it as the identity of the sender,
+    /// authorize anything based on it, or allocate state such as a new
+    /// [`Tunnel`](crate::Tunnel) for a key you do not already know.
+    ///
+    /// [`Tunnel::decapsulate`]: crate::Tunnel::decapsulate
     pub fn peer_static_public(&self) -> PublicKey {
         self.initiator.peer_static_public
     }
