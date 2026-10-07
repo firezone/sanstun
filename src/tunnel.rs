@@ -305,7 +305,6 @@ impl Tunnel {
         tracing::debug!(%local_idx, "Received cookie_reply");
 
         self.handshake.receive_cookie_reply(p, now)?;
-        self.timers.tick(TimerName::TimeLastPacketReceived, now);
 
         tracing::debug!(%local_idx, "Did set cookie");
 
