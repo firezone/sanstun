@@ -72,6 +72,33 @@ fn expired_tunnel_recovers_on_explicit_handshake() {
     sim.assert_connectivity();
 }
 
+/// An expired tunnel also recovers when the peer initiates the handshake:
+/// its timers run again, e.g. it answers data with a passive keepalive.
+#[test]
+fn expired_tunnel_recovers_on_handshake_from_peer() {
+    let mut sim = Sim::new();
+    sim.cut_link();
+    let init = sim.initiate_handshake(A);
+    sim.route(A, init);
+    sim.advance(secs(95));
+    assert!(sim.tunn(A).is_expired());
+
+    sim.heal_link();
+    let init = sim.initiate_handshake(B);
+    sim.route(B, init);
+    assert!(!sim.tunn(A).is_expired(), "the handshake from B revives A");
+
+    sim.clear_log();
+    sim.send_ip(B, &ipv4_packet(b"ping"));
+    let start = sim.elapsed();
+    sim.advance(KEEPALIVE_TIMEOUT + 2 * TICK);
+
+    assert!(!sim.tunn(A).is_expired());
+    let keepalives = sim.sent_at(A, Kind::Keepalive);
+    assert_eq!(keepalives.len(), 1, "expected one passive keepalive");
+    assert_close(keepalives[0], start + KEEPALIVE_TIMEOUT);
+}
+
 #[test]
 fn rekey_timeout_is_configurable() {
     let mut sim = Sim::new();
