@@ -2,8 +2,8 @@
 //! failures and replay of handshake messages.
 
 use crate::harness::{
-    HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, Outcome as _, Peer::A, Peer::B, Sim,
-    classify, ipv4_packet, secs,
+    HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, Outcome as _, Peer::A, Peer::B,
+    REJECT_AFTER_TIME, Sim, classify, ipv4_packet, secs,
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
@@ -144,6 +144,36 @@ fn unconfirmed_sessions_never_replace_the_current_one() {
     let ip_packet = ipv4_packet(b"still on the confirmed session");
     let datagram = sim.encapsulate(B, &ip_packet);
     assert_eq!(sim.deliver(A, &datagram).expect_one_ip(), ip_packet);
+}
+
+// §6.1: a responder only sends on a session the initiator confirmed. That
+// holds after the old current session expired, too, even once the session
+// part of the local index wraps around and hands out that session's index
+// again.
+#[test]
+fn responder_waits_for_confirmation_after_its_session_index_wraps() {
+    let mut sim = Sim::connected();
+    sim.cut_link();
+    sim.advance(REJECT_AFTER_TIME + secs(1));
+    assert!(matches!(
+        sim.try_encapsulate(B, &ipv4_packet(b"no session")),
+        Err(Error::NoCurrentSession)
+    ));
+
+    // The session part of the index has 8 bits, so the 256th index B hands
+    // out is the one of its expired session.
+    for _ in 0..256 {
+        sim.suspend(Duration::from_millis(200));
+        let init = sim.force_handshake_initiation(A);
+        sim.deliver(B, &init).expect_one_net();
+    }
+
+    // None of the responses reached A, so A has none of these sessions.
+    let sent = sim.try_encapsulate(B, &ipv4_packet(b"into the void"));
+    assert!(
+        matches!(sent, Err(Error::NoCurrentSession)),
+        "B sends on a session A never confirmed: {sent:?}"
+    );
 }
 
 #[test]
