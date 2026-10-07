@@ -201,6 +201,30 @@ fn the_announced_session_expiry_is_actionable() {
     );
 }
 
+/// A peer that never comes online: its tunnel expires `REJECT_AFTER_TIME * 3`
+/// after creation. Sitting idle after that must not leave a deadline behind
+/// that polling never clears, or a caller sleeping until `poll_timeout` spins.
+#[test]
+fn an_idle_expired_tunnel_announces_only_actionable_deadlines() {
+    let mut sim = Sim::new();
+    sim.advance(3 * REJECT_AFTER_TIME);
+    assert!(sim.tunn(A).is_expired());
+
+    let tunn = sim.tunn_mut(A);
+    let Some((wake, reason)) = tunn.poll_timeout() else {
+        return;
+    };
+
+    // Poll exactly when told to, then ask again.
+    tunn.handle_timeout(wake);
+
+    assert_ne!(
+        tunn.poll_timeout().map(|(instant, _)| instant),
+        Some(wake),
+        "polling at the announced {reason:?} deadline left it outstanding"
+    );
+}
+
 /// All randomness is derived from the caller's seed: two pairs of tunnels
 /// built from the same inputs must emit byte-identical handshakes.
 #[test]
