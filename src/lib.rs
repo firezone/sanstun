@@ -6,9 +6,9 @@
 //!
 //! - **Cryptokey routing:** a decrypted packet only proves which peer sent it. Drop it unless its
 //!   source address is one that peer is allowed to use.
-//! - **Handshake routing:** [`HandshakeInit::peer_static_public`] is an unauthenticated claim
-//!   until [`Tunnel::decapsulate`] accepts the initiation. Use it only to find the tunnel; do not
-//!   trust it, log it as the sender or create a tunnel for an unknown key based on it.
+//! - **Handshake routing:** [`HandshakeInit::peer_static_public`] is authenticated, but anyone
+//!   can generate a key pair and replays are only rejected for keys we created a tunnel for. Do
+//!   not create a tunnel for an unknown key based on it.
 //! - **Packet validation:** the plaintext of a data message is zero-padded to a multiple of 16
 //!   bytes. Parse the IP packet, check its declared length and strip the padding before passing it
 //!   on.

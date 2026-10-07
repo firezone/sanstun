@@ -251,6 +251,8 @@ fn exhaust(sim: &mut Sim, src: SocketAddr) {
 /// [`Interface`](sanstun::Interface) of `B` rather than being rate-limited.
 #[track_caller]
 fn passes(sim: &mut Sim, src: SocketAddr) -> bool {
+    // `B` rejects an initiation with the same timestamp as the previous one as a replay.
+    sim.now += Duration::from_micros(1);
     let init = sim.force_handshake_initiation(A);
 
     match sim.try_receive_from(B, &init, src) {

@@ -99,8 +99,6 @@ pub(crate) struct Handshake {
     /// Current handshake state
     state: HandshakeState,
     cookies: Cookies,
-    /// The timestamp of the last handshake we received
-    last_handshake_timestamp: Tai64N,
     stamper: TimeStamper,
 }
 
@@ -117,20 +115,23 @@ struct WriteCookie {
     received_at: Instant,
 }
 
-/// The responder's handshake state after decrypting the initiator's static public key.
-pub(crate) struct InitiatorStatic {
+/// The responder's handshake state after consuming a handshake initiation.
+pub(crate) struct ConsumedInitiation {
     chaining_key: Zeroizing<[u8; KEY_LEN]>,
     hash: [u8; KEY_LEN],
     peer_ephemeral_public: PublicKey,
     pub(crate) peer_static_public: PublicKey,
 }
 
-pub(crate) fn decrypt_initiator_static(
+/// Authenticates a handshake initiation, returning the responder's handshake state and the
+/// initiator's timestamp.
+pub(crate) fn consume_initiation(
     static_private: &StaticSecret,
     static_public: &PublicKey,
     unencrypted_ephemeral: &[u8; KEY_LEN],
     encrypted_static: &[u8],
-) -> Result<InitiatorStatic, Error> {
+    encrypted_timestamp: &[u8],
+) -> Result<(ConsumedInitiation, Tai64N), Error> {
     // initiator.chaining_key = HASH(CONSTRUCTION)
     let mut chaining_key = Zeroizing::new(INITIAL_CHAIN_KEY);
     // initiator.hash = HASH(HASH(initiator.chaining_key || IDENTIFIER) || responder.static_public)
@@ -157,15 +158,32 @@ pub(crate) fn decrypt_initiator_static(
     let mut peer_static_public = [0u8; KEY_LEN];
     // msg.encrypted_static = AEAD(key, 0, initiator.static_public, initiator.hash)
     aead_chacha20_open(&mut peer_static_public, &key, 0, encrypted_static, &hash)?;
+    let peer_static_public = PublicKey::from(peer_static_public);
     // initiator.hash = HASH(initiator.hash || msg.encrypted_static)
     hash = b2s_hash(&hash, encrypted_static);
 
-    Ok(InitiatorStatic {
-        chaining_key,
-        hash,
-        peer_ephemeral_public,
-        peer_static_public: PublicKey::from(peer_static_public),
-    })
+    // temp = HMAC(initiator.chaining_key, DH(initiator.static_private, responder.static_public))
+    let static_shared = dh(static_private, &peer_static_public)?;
+    let temp = b2s_hmac(&chaining_key, static_shared.as_bytes());
+    // initiator.chaining_key = HMAC(temp, 0x1)
+    chaining_key = b2s_hmac(&temp, &[0x01]);
+    // key = HMAC(temp, initiator.chaining_key || 0x2)
+    let key = b2s_hmac2(&temp, &chaining_key, &[0x02]);
+    // msg.encrypted_timestamp = AEAD(key, 0, TAI64N(), initiator.hash)
+    let mut timestamp = [0u8; TIMESTAMP_LEN];
+    aead_chacha20_open(&mut timestamp, &key, 0, encrypted_timestamp, &hash)?;
+    // initiator.hash = HASH(initiator.hash || msg.encrypted_timestamp)
+    hash = b2s_hash(&hash, encrypted_timestamp);
+
+    Ok((
+        ConsumedInitiation {
+            chaining_key,
+            hash,
+            peer_ephemeral_public,
+            peer_static_public,
+        },
+        Tai64N::parse(&timestamp),
+    ))
 }
 
 /// Returns `(initiator.sending_key, initiator.receiving_key)` for the final chaining key.
@@ -227,7 +245,6 @@ impl Handshake {
             params,
             previous: HandshakeState::None,
             state: HandshakeState::None,
-            last_handshake_timestamp: Tai64N::zero(),
             stamper,
             cookies: Default::default(),
         })
@@ -300,11 +317,10 @@ impl Handshake {
         let HandshakeInit {
             // msg.sender_index = little_endian(initiator.sender_index)
             sender_idx: peer_index,
-            encrypted_timestamp,
-            initiator:
-                InitiatorStatic {
-                    mut chaining_key,
-                    mut hash,
+            initiation:
+                ConsumedInitiation {
+                    chaining_key,
+                    hash,
                     peer_ephemeral_public,
                     peer_static_public,
                 },
@@ -318,29 +334,6 @@ impl Handshake {
         ) {
             return Err(Error::WrongKey);
         }
-
-        // temp = HMAC(initiator.chaining_key, DH(initiator.static_private, responder.static_public))
-        let temp = b2s_hmac(&chaining_key, self.params.static_shared.as_bytes());
-        // initiator.chaining_key = HMAC(temp, 0x1)
-        chaining_key = b2s_hmac(&temp, &[0x01]);
-        // key = HMAC(temp, initiator.chaining_key || 0x2)
-        let key = b2s_hmac2(&temp, &chaining_key, &[0x02]);
-        // msg.encrypted_timestamp = AEAD(key, 0, TAI64N(), initiator.hash)
-        let mut timestamp = [0u8; TIMESTAMP_LEN];
-        aead_chacha20_open(&mut timestamp, &key, 0, encrypted_timestamp, &hash)?;
-
-        let timestamp = Tai64N::parse(&timestamp);
-
-        tracing::debug!(new_handshake_ts = %timestamp, last_handshake_ts = %self.last_handshake_timestamp);
-
-        if !timestamp.after(&self.last_handshake_timestamp) {
-            // Possibly a replay
-            return Err(Error::WrongTai64nTimestamp);
-        }
-        self.last_handshake_timestamp = timestamp;
-
-        // initiator.hash = HASH(initiator.hash || msg.encrypted_timestamp)
-        hash = b2s_hash(&hash, encrypted_timestamp);
 
         let (mut response, session) = self.format_handshake_response(
             hash,
