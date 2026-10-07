@@ -4,8 +4,9 @@
 //! echoing the cookie in mac2.
 
 use crate::harness::{
-    COOKIE_EXPIRATION_TIME, COOKIE_REPLY_SIZE, HANDSHAKE_INIT_SIZE, Kind, Outcome as _, Peer::A,
-    Peer::B, Sim, classify, secs,
+    COOKIE_EXPIRATION_TIME, COOKIE_REPLY_SIZE, HANDSHAKE_INIT_SIZE, KEEPALIVE_TIMEOUT, Kind,
+    Outcome as _, Peer::A, Peer::B, REKEY_TIMEOUT, Sim, assert_fires_at, classify, ipv4_packet,
+    secs,
 };
 use sanstun::{Error, Received};
 use std::net::SocketAddr;
@@ -160,6 +161,44 @@ fn cookie_reply_out_of_the_blue_is_rejected() {
     assert!(matches!(error, Error::UnexpectedPacket));
 }
 
+/// §5.4.7: a cookie reply only answers the one handshake message whose mac1 it
+/// is bound to. Once consumed, a replay of it is rejected.
+#[test]
+fn cookie_reply_is_only_accepted_once() {
+    let mut sim = Sim::builder().responder_under_load().build();
+    let init = sim.initiate_handshake(A);
+    let reply = sim.deliver(B, &init).expect_one_net();
+    sim.deliver(A, &reply).expect_consumed();
+
+    let error = sim.deliver(A, &reply).expect_err();
+
+    assert!(matches!(error, Error::UnexpectedPacket));
+}
+
+/// A cookie reply is not proof that the peer is alive: anyone who saw our
+/// handshake initiation can get one by replaying it to the peer from their own
+/// address. It must not stop us from noticing that our data goes unanswered
+/// (§6.3, `KEEPALIVE_TIMEOUT + REKEY_TIMEOUT`).
+#[test]
+fn cookie_reply_does_not_count_as_a_reply_to_unanswered_data() {
+    let mut sim = Sim::new();
+    let init = sim.initiate_handshake(A);
+    sim.route(A, init.clone());
+    let cookie_reply = solicit_cookie_reply(&mut sim, &init, addr("192.0.2.66:4444"));
+    sim.clear_log();
+
+    sim.advance(secs(1));
+    sim.cut_link();
+    sim.send_ip(A, &ipv4_packet(b"into the void"));
+    sim.advance(secs(5));
+    sim.deliver(A, &cookie_reply).expect_consumed();
+    sim.advance(secs(11));
+
+    let inits = sim.sent_at(A, Kind::Init);
+    assert_eq!(inits.len(), 1, "expected a new handshake, got {inits:?}");
+    assert_fires_at(inits[0], secs(1) + KEEPALIVE_TIMEOUT + REKEY_TIMEOUT);
+}
+
 /// Under load, a source with a valid cookie gets a burst of 5 handshake
 /// messages before further ones are rejected, ahead of any Diffie-Hellman.
 #[test]
@@ -235,6 +274,19 @@ fn fetch_cookie(sim: &mut Sim, src: SocketAddr) {
     };
 
     sim.deliver(A, &reply).expect_consumed();
+}
+
+/// Replays `init` to `B` from `src` until `B` is under load and answers with a
+/// cookie reply, as an on-path attacker who saw `init` could.
+#[track_caller]
+fn solicit_cookie_reply(sim: &mut Sim, init: &[u8], src: SocketAddr) -> Vec<u8> {
+    for _ in 0..100 {
+        if let Ok(Received::CookieReply(reply)) = sim.try_receive_from(B, init, src) {
+            return reply.to_vec();
+        }
+    }
+
+    panic!("expected the replayed initiation to put B under load");
 }
 
 /// Fetches a cookie for `src` and uses up its burst.
