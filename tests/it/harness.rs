@@ -358,6 +358,20 @@ impl Sim {
         &mut self.node_mut(peer).tunn
     }
 
+    /// Replace the tunnel of `peer` with a fresh one to the same remote static key, created by
+    /// the same [`Interface`], as a caller does after dropping a tunnel.
+    pub fn replace_tunnel(&mut self, peer: Peer) {
+        let now = self.now;
+        let node = self.node_mut(peer);
+        let remote = node.tunn.remote_static_public();
+        let psk = node.tunn.preshared_key().clone();
+
+        node.tunn = node
+            .interface
+            .new_tunnel(remote, Some(psk), None, now)
+            .expect("the test keys are valid");
+    }
+
     pub fn elapsed(&self) -> Duration {
         self.now - self.start
     }
