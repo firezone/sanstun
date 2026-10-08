@@ -438,6 +438,19 @@ fn initiator_stops_sending_on_a_session_close_to_expiry() {
     );
 }
 
+#[test]
+fn initiator_cutoff_follows_the_configured_keepalive_timeout() {
+    let mut sim = Sim::connected();
+    sim.tunn_mut(A).set_keepalive_timeout(secs(30));
+
+    sim.advance(REJECT_AFTER_TIME - secs(30) + secs(1));
+
+    assert!(matches!(
+        sim.try_encapsulate(A, &ipv4_packet(b"risky")),
+        Err(Error::NoCurrentSession)
+    ));
+}
+
 /// The responder has no way to renew the session itself, so it keeps using it
 /// right up to `REJECT_AFTER_TIME`.
 #[test]
