@@ -42,7 +42,7 @@ mod tunnel;
 
 pub use errors::Error;
 pub use interface::{Interface, Received};
-pub use keys::{PublicKey, StaticSecret};
+pub use keys::{PresharedKey, PublicKey, StaticSecret};
 pub use message::{
     CookieReplyMessage, DataMessage, HandshakeInit, HandshakeInitiationMessage, HandshakeResponse,
     HandshakeResponseMessage, KeepaliveMessage, Packet, PacketCookieReply, PacketData,

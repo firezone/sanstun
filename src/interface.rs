@@ -8,7 +8,7 @@ use crate::message::{
 };
 use crate::ratelimiter::RateLimiter;
 use crate::tai64n::{Tai64N, TimeStamper};
-use crate::{CookieReplyMessage, Error, PublicKey, StaticSecret, Tunnel};
+use crate::{CookieReplyMessage, Error, PresharedKey, PublicKey, StaticSecret, Tunnel};
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -116,7 +116,7 @@ impl Interface {
     pub fn new_tunnel(
         &mut self,
         peer_static_public: PublicKey,
-        preshared_key: Option<StaticSecret>,
+        preshared_key: Option<PresharedKey>,
         persistent_keepalive: Option<u16>,
         now: Instant,
     ) -> Result<Tunnel, Error> {

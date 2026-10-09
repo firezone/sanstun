@@ -5,7 +5,7 @@ use crate::crypto::{
     b2s_keyed_mac_16, dh, xaead_open,
 };
 use crate::errors::Error;
-use crate::keys::{PublicKey, StaticSecret};
+use crate::keys::{PresharedKey, PublicKey, StaticSecret};
 use crate::message::{
     HANDSHAKE_INIT, HANDSHAKE_INIT_SZ, HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeInit,
     HandshakeResponse, PacketCookieReply,
@@ -50,7 +50,7 @@ struct NoiseParams {
     /// A preshared key.
     ///
     /// Initialized to all zeroes by default.
-    preshared_key: StaticSecret,
+    preshared_key: PresharedKey,
 }
 
 impl std::fmt::Debug for NoiseParams {
@@ -203,7 +203,7 @@ impl NoiseParams {
         static_private: StaticSecret,
         static_public: PublicKey,
         peer_static_public: PublicKey,
-        preshared_key: Option<StaticSecret>,
+        preshared_key: Option<PresharedKey>,
     ) -> Result<NoiseParams, Error> {
         let static_shared = dh(&static_private, &peer_static_public)?;
         let initial_sending_mac_key = b2s_hash(LABEL_MAC1, peer_static_public.as_bytes());
@@ -214,7 +214,7 @@ impl NoiseParams {
             peer_static_public,
             static_shared,
             sending_mac1_key: initial_sending_mac_key,
-            preshared_key: preshared_key.unwrap_or_else(|| StaticSecret::from([0u8; 32])),
+            preshared_key: preshared_key.unwrap_or_else(|| PresharedKey::from([0u8; 32])),
         })
     }
 }
@@ -224,7 +224,7 @@ impl Handshake {
         static_private: StaticSecret,
         static_public: PublicKey,
         peer_static_public: PublicKey,
-        preshared_key: Option<StaticSecret>,
+        preshared_key: Option<PresharedKey>,
         stamper: TimeStamper,
     ) -> Result<Handshake, Error> {
         let params = NoiseParams::new(
@@ -245,10 +245,6 @@ impl Handshake {
 
     pub(crate) fn remote_static_public(&self) -> PublicKey {
         self.params.peer_static_public
-    }
-
-    pub(crate) fn preshared_key(&self) -> &StaticSecret {
-        &self.params.preshared_key
     }
 
     pub(crate) fn is_in_progress(&self) -> bool {
