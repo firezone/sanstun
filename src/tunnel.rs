@@ -1,6 +1,6 @@
 use crate::errors::Error;
 use crate::handshake::Handshake;
-use crate::index::Index;
+use crate::index::{Index, TunnelId};
 use crate::message::{
     DATA_OVERHEAD_SZ, HandshakeInit, HandshakeInitiationMessage, HandshakeResponse,
     HandshakeResponseMessage, KeepaliveMessage, Packet, PacketCookieReply, PacketData,
@@ -123,7 +123,7 @@ impl Tunnel {
     /// Identifies this tunnel among those of its [`Interface`](crate::Interface).
     ///
     /// Route a received [`Packet`] here if its [`Packet::tunnel_id`] matches.
-    pub fn id(&self) -> u32 {
+    pub fn id(&self) -> TunnelId {
         self.sessions.tunnel_id()
     }
 
