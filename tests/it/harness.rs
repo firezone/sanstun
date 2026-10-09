@@ -243,7 +243,10 @@ impl Builder {
 
         let (secret_a, secret_b) = match self.static_keys {
             Some((a, b)) => (StaticSecret::from(a), StaticSecret::from(b)),
-            None => (StaticSecret::random(), StaticSecret::random()),
+            None => (
+                StaticSecret::from(rand::random::<[u8; 32]>()),
+                StaticSecret::from(rand::random::<[u8; 32]>()),
+            ),
         };
         let public_a = PublicKey::from(&secret_a);
         let public_b = PublicKey::from(&secret_b);
@@ -265,7 +268,7 @@ impl Builder {
             .expect("the test keys are valid");
 
         let expected_by_b = if self.responder_expects_different_key {
-            PublicKey::from(&StaticSecret::random())
+            PublicKey::from(&StaticSecret::from(rand::random::<[u8; 32]>()))
         } else {
             public_a
         };

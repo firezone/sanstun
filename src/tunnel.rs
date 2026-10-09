@@ -1,6 +1,7 @@
 use crate::errors::Error;
 use crate::handshake::Handshake;
 use crate::index::Index;
+use crate::keys::{PublicKey, StaticSecret};
 use crate::message::{
     DATA_OVERHEAD_SZ, HandshakeInit, HandshakeInitiationMessage, HandshakeResponse,
     HandshakeResponseMessage, KeepaliveMessage, Packet, PacketCookieReply, PacketData,
@@ -12,7 +13,6 @@ use crate::timers::{MAX_JITTER, TimerName, Timers};
 
 use crate::rng::ForwardSecureRng;
 use rand::{CryptoRng, RngExt};
-use x25519_dalek::{PublicKey, StaticSecret};
 
 use std::iter;
 use std::sync::Arc;

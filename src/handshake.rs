@@ -5,6 +5,7 @@ use crate::crypto::{
     b2s_keyed_mac_16, dh, xaead_open,
 };
 use crate::errors::Error;
+use crate::keys::{PublicKey, StaticSecret};
 use crate::message::{
     HANDSHAKE_INIT, HANDSHAKE_INIT_SZ, HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeInit,
     HandshakeResponse, PacketCookieReply,
@@ -15,7 +16,6 @@ use rand::CryptoRng;
 use std::fmt::Debug;
 use std::time::Instant;
 use subtle::ConstantTimeEq as _;
-use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
 pub(crate) const LABEL_MAC1: &[u8; 8] = b"mac1----";
@@ -224,7 +224,7 @@ impl Handshake {
         static_private: StaticSecret,
         static_public: PublicKey,
         peer_static_public: PublicKey,
-        preshared_key: Option<x25519_dalek::StaticSecret>,
+        preshared_key: Option<StaticSecret>,
         stamper: TimeStamper,
     ) -> Result<Handshake, Error> {
         let params = NoiseParams::new(
@@ -478,7 +478,8 @@ impl Handshake {
         // msg.sender_index = little_endian(initiator.sender_index)
         sender_index.copy_from_slice(&local_index.to_le_bytes());
         // msg.unencrypted_ephemeral = DH_PUBKEY(initiator.ephemeral_private)
-        unencrypted_ephemeral.copy_from_slice(PublicKey::from(&ephemeral_private).as_bytes());
+        unencrypted_ephemeral
+            .copy_from_slice(x25519_dalek::PublicKey::from(&ephemeral_private).as_bytes());
         // initiator.hash = HASH(initiator.hash || msg.unencrypted_ephemeral)
         hash = b2s_hash(&hash, unencrypted_ephemeral);
         // temp = HMAC(initiator.chaining_key, msg.unencrypted_ephemeral)
@@ -558,7 +559,8 @@ impl Handshake {
         // msg.receiver_index = little_endian(initiator.sender_index)
         receiver_index.copy_from_slice(&peer_index.to_le_bytes());
         // msg.unencrypted_ephemeral = DH_PUBKEY(initiator.ephemeral_private)
-        unencrypted_ephemeral.copy_from_slice(PublicKey::from(&ephemeral_private).as_bytes());
+        unencrypted_ephemeral
+            .copy_from_slice(x25519_dalek::PublicKey::from(&ephemeral_private).as_bytes());
         // responder.hash = HASH(responder.hash || msg.unencrypted_ephemeral)
         hash = b2s_hash(&hash, unencrypted_ephemeral);
         // temp = HMAC(responder.chaining_key, msg.unencrypted_ephemeral)
