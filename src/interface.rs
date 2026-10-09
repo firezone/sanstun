@@ -8,7 +8,7 @@ use crate::message::{
 };
 use crate::ratelimiter::RateLimiter;
 use crate::tai64n::{Tai64N, TimeStamper};
-use crate::{CookieReplyMessage, Error, PresharedKey, PublicKey, StaticSecret, Tunnel};
+use crate::{CookieReplyMessage, Error, PublicKey, StaticSecret, Tunnel, TunnelConfig};
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -116,8 +116,7 @@ impl Interface {
     pub fn new_tunnel(
         &mut self,
         peer_static_public: PublicKey,
-        preshared_key: Option<PresharedKey>,
-        persistent_keepalive: Option<u16>,
+        config: TunnelConfig,
         now: Instant,
     ) -> Result<Tunnel, Error> {
         let (index, index_lease) = self.indices.next();
@@ -125,10 +124,7 @@ impl Interface {
         let tunnel = Tunnel::new(
             self.static_private.clone(),
             peer_static_public,
-            preshared_key,
-            persistent_keepalive
-                .filter(|secs| *secs != 0)
-                .map(|secs| Duration::from_secs(secs.into())),
+            config,
             index,
             index_lease,
             &mut self.rng,
@@ -407,7 +403,7 @@ mod tests {
         let mut initiator = Interface::new(&mut StdRng::from_seed([1; 32]), now, Duration::ZERO);
         let mut responder = Interface::new(&mut StdRng::from_seed([2; 32]), now, Duration::ZERO);
         let mut tunnel = initiator
-            .new_tunnel(responder.static_public(), None, None, now)
+            .new_tunnel(responder.static_public(), TunnelConfig::default(), now)
             .unwrap();
         let init = tunnel.format_handshake_initiation(false, now).unwrap();
 

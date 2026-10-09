@@ -260,7 +260,7 @@ fn unanswered_data_triggers_a_new_handshake() {
 /// user traffic at all.
 #[test]
 fn persistent_keepalive_fires_on_its_interval() {
-    let mut sim = Sim::builder().persistent_keepalive_b(25).build();
+    let mut sim = Sim::builder().persistent_keepalive_b(secs(25)).build();
     sim.establish();
     sim.clear_log();
 
@@ -276,6 +276,17 @@ fn persistent_keepalive_fires_on_its_interval() {
         sim.sent_at(A, Kind::Keepalive).is_empty(),
         "keepalives are not data and must not be answered"
     );
+}
+
+#[test]
+fn zero_persistent_keepalive_is_off() {
+    let mut sim = Sim::builder().persistent_keepalive_b(secs(0)).build();
+    sim.establish();
+    sim.clear_log();
+
+    sim.advance(secs(80));
+
+    assert!(sim.sent_at(B, Kind::Keepalive).is_empty());
 }
 
 /// §6.1: sessions are discarded `REJECT_AFTER_TIME` after they were

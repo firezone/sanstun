@@ -48,4 +48,4 @@ pub use message::{
     HandshakeResponseMessage, KeepaliveMessage, Packet, PacketCookieReply, PacketData,
 };
 pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
-pub use tunnel::{Committed, Event, Keepalive, Tunnel};
+pub use tunnel::{Committed, Event, Keepalive, Tunnel, TunnelConfig};
