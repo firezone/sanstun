@@ -1,5 +1,7 @@
 use std::fmt;
 
+use zeroize::Zeroizing;
+
 /// An X25519 public key.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct PublicKey([u8; 32]);
@@ -66,15 +68,38 @@ impl fmt::Debug for StaticSecret {
     }
 }
 
+/// A WireGuard preshared key, zeroized on drop.
+pub struct PresharedKey(Zeroizing<[u8; 32]>);
+
+impl PresharedKey {
+    pub(crate) fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
+impl From<[u8; 32]> for PresharedKey {
+    fn from(bytes: [u8; 32]) -> Self {
+        Self(Zeroizing::new(bytes))
+    }
+}
+
+impl fmt::Debug for PresharedKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("PresharedKey(..)")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn debug_redacts_only_the_secret() {
+    fn debug_redacts_only_the_secrets() {
         let secret = StaticSecret::from([0xab; 32]);
+        let psk = PresharedKey::from([0xab; 32]);
 
         assert_eq!(format!("{secret:?}"), "StaticSecret(..)");
+        assert_eq!(format!("{psk:?}"), "PresharedKey(..)");
         assert_eq!(
             format!("{:?}", PublicKey::from([0xab; 32])),
             format!("PublicKey({})", "ab".repeat(32))

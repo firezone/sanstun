@@ -16,7 +16,7 @@ use rand::rngs::StdRng;
 use sanstun::Error;
 use sanstun::{Committed, Decrypted, Packet, PendingDecapsulate, Tunnel};
 use sanstun::{Interface, Received};
-use sanstun::{PublicKey, StaticSecret};
+use sanstun::{PresharedKey, PublicKey, StaticSecret};
 
 // Protocol constants from the WireGuard whitepaper (§6.1, table on p. 14).
 // They are deliberately redefined here instead of imported: the tests assert
@@ -177,6 +177,7 @@ impl Outcome for Vec<Out> {
 struct Node {
     tunn: Tunnel,
     interface: Interface,
+    psk: Option<[u8; 32]>,
     addr: SocketAddr,
     inbox: Vec<Vec<u8>>,
     errors: Vec<Error>,
@@ -264,7 +265,7 @@ impl Builder {
             .with_handshake_limit(limit_b);
 
         let a = interface_a
-            .new_tunnel(public_b, self.psk_a.map(StaticSecret::from), None, start)
+            .new_tunnel(public_b, self.psk_a.map(PresharedKey::from), None, start)
             .expect("the test keys are valid");
 
         let expected_by_b = if self.responder_expects_different_key {
@@ -275,7 +276,7 @@ impl Builder {
         let b = interface_b
             .new_tunnel(
                 expected_by_b,
-                self.psk_b.map(StaticSecret::from),
+                self.psk_b.map(PresharedKey::from),
                 self.persistent_keepalive_b,
                 start,
             )
@@ -288,6 +289,7 @@ impl Builder {
                 Node {
                     tunn: a,
                     interface: interface_a,
+                    psk: self.psk_a,
                     addr: "10.0.0.1:51820".parse().unwrap(),
                     inbox: Vec::new(),
                     errors: Vec::new(),
@@ -297,6 +299,7 @@ impl Builder {
                 Node {
                     tunn: b,
                     interface: interface_b,
+                    psk: self.psk_b,
                     addr: "10.0.0.2:51820".parse().unwrap(),
                     inbox: Vec::new(),
                     errors: Vec::new(),
@@ -367,11 +370,10 @@ impl Sim {
         let now = self.now;
         let node = self.node_mut(peer);
         let remote = node.tunn.remote_static_public();
-        let psk = node.tunn.preshared_key().clone();
 
         node.tunn = node
             .interface
-            .new_tunnel(remote, Some(psk), None, now)
+            .new_tunnel(remote, node.psk.map(PresharedKey::from), None, now)
             .expect("the test keys are valid");
     }
 
