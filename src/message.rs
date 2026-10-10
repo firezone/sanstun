@@ -59,10 +59,6 @@ impl std::fmt::Debug for HandshakeInit {
 }
 
 impl HandshakeInit {
-    pub fn sender_idx(&self) -> u32 {
-        self.sender_idx
-    }
-
     /// The initiator's static public key, to look up the [`Tunnel`](crate::Tunnel) it belongs to.
     ///
     /// [`Interface::receive`](crate::Interface::receive) has authenticated it: the initiator
@@ -85,16 +81,6 @@ pub struct HandshakeResponse<'a> {
     pub(crate) encrypted_nothing: &'a [u8],
 }
 
-impl HandshakeResponse<'_> {
-    pub fn sender_idx(&self) -> u32 {
-        self.sender_idx
-    }
-
-    pub fn receiver_idx(&self) -> u32 {
-        self.receiver_idx
-    }
-}
-
 #[derive(Debug)]
 pub struct PacketCookieReply<'a> {
     pub(crate) receiver_idx: u32,
@@ -102,26 +88,10 @@ pub struct PacketCookieReply<'a> {
     pub(crate) encrypted_cookie: &'a [u8],
 }
 
-impl PacketCookieReply<'_> {
-    pub fn receiver_idx(&self) -> u32 {
-        self.receiver_idx
-    }
-}
-
 #[derive(Debug)]
 pub struct PacketData {
     pub(crate) receiver_idx: u32,
     pub(crate) counter: u64,
-}
-
-impl PacketData {
-    pub fn receiver_idx(&self) -> u32 {
-        self.receiver_idx
-    }
-
-    pub fn counter(&self) -> u64 {
-        self.counter
-    }
 }
 
 /// A message received from the network.
