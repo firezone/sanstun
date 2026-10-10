@@ -584,57 +584,43 @@ impl Tunnel {
     }
 
     /// Returns the [`Instant`] at which [`Tunnel::handle_timeout`] next needs to
-    /// be called, together with a human-readable reason for debugging.
+    /// be called.
     ///
     /// Calling it earlier than the given [`Instant`] is safe but unlikely to
     /// have any effect. Driving the state machine by repeatedly polling at the
     /// returned [`Instant`] is sufficient: there is no need to call
     /// [`Tunnel::handle_timeout`] on a fixed interval. Returns `None` once the tunnel
     /// [expired](Tunnel::is_expired).
-    pub fn poll_timeout(&self) -> Option<(Instant, &'static str)> {
+    pub fn poll_timeout(&self) -> Option<Instant> {
         if self.is_expired() {
             return None;
         }
 
-        let (next, reason) = self.next_deadline()?;
+        let next = self.next_deadline()?;
         let last_update = self.timers[TimerName::TimeLastUpdate];
 
         // Never announce an [`Instant`] in the past: a deadline may already have
         // elapsed by the time the caller polls us.
-        Some((next.max(last_update), reason))
+        Some(next.max(last_update))
     }
 
-    fn next_deadline(&self) -> Option<(Instant, &'static str)> {
+    fn next_deadline(&self) -> Option<Instant> {
         // Mimic `handle_timeout`: if we have a handshake scheduled, no other timer matters.
         if let Some(scheduled_handshake) = self.timers.scheduled_handshake() {
-            return Some((scheduled_handshake, "scheduled handshake"));
+            return Some(scheduled_handshake);
         }
 
         let common_timers = iter::empty()
-            .chain(
-                self.sessions
-                    .next_expiry()
-                    .map(|instant| (instant, "next expired session")),
-            )
-            .chain(
-                self.handshake
-                    .cookie_expiration()
-                    .map(|instant| (instant, "cookie expiration")),
-            )
-            .chain(iter::once((
-                self.timers.reject_after_time(),
-                "reject-after-time",
-            )));
+            .chain(self.sessions.next_expiry())
+            .chain(self.handshake.cookie_expiration())
+            .chain(iter::once(self.timers.reject_after_time()));
 
         if let Some((rekey_timeout, _)) = self.handshake_rekey_timeout() {
             // While a handshake is in progress, only the handshake timers matter.
             common_timers
-                .chain(iter::once((rekey_timeout, "rekey-timeout")))
-                .chain(iter::once((
-                    self.timers.rekey_attempt_time(),
-                    "rekey-attempt",
-                )))
-                .min_by_key(|(instant, _)| *instant)
+                .chain(iter::once(rekey_timeout))
+                .chain(iter::once(self.timers.rekey_attempt_time()))
+                .min()
         } else {
             // Persistent keep-alive only makes sense if the current session is active.
             let persistent_keepalive = self
@@ -643,30 +629,13 @@ impl Tunnel {
                 .and_then(|_| self.timers.next_persistent_keepalive());
 
             common_timers
-                .chain(
-                    self.rekey_after_time_on_send()
-                        .map(|instant| (instant, "rekey-after-time (on send)")),
-                )
-                .chain(
-                    self.rekey_after_messages()
-                        .map(|instant| (instant, "rekey-after-messages")),
-                )
-                .chain(
-                    self.reject_after_time_on_receive()
-                        .map(|instant| (instant, "reject-after-time (on receive)")),
-                )
-                .chain(
-                    self.timers
-                        .rekey_after_time_without_response()
-                        .map(|instant| (instant, "rekey-after-time (without response)")),
-                )
-                .chain(
-                    self.timers
-                        .keepalive_after_time_without_send()
-                        .map(|instant| (instant, "keepalive-after-time (without send)")),
-                )
-                .chain(persistent_keepalive.map(|instant| (instant, "persistent keep-alive")))
-                .min_by_key(|(instant, _)| *instant)
+                .chain(self.rekey_after_time_on_send())
+                .chain(self.rekey_after_messages())
+                .chain(self.reject_after_time_on_receive())
+                .chain(self.timers.rekey_after_time_without_response())
+                .chain(self.timers.keepalive_after_time_without_send())
+                .chain(persistent_keepalive)
+                .min()
         }
     }
 
