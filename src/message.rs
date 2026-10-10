@@ -1,5 +1,5 @@
 use crate::PublicKey;
-use crate::index::Index;
+use crate::index::{Index, TunnelId};
 use crate::tai64n::Tai64N;
 
 use std::ops::Deref;
@@ -139,7 +139,7 @@ impl Packet<'_> {
     /// The [`Tunnel::id`](crate::Tunnel::id) of the tunnel this message is addressed to.
     ///
     /// `None` for a handshake initiation, which is routed by [`HandshakeInit::peer_static_public`] instead.
-    pub fn tunnel_id(&self) -> Option<u32> {
+    pub fn tunnel_id(&self) -> Option<TunnelId> {
         let receiver_idx = match self {
             Packet::HandshakeInit(_) => return None,
             Packet::HandshakeResponse(p) => p.receiver_idx,
@@ -147,7 +147,7 @@ impl Packet<'_> {
             Packet::PacketData(p) => p.receiver_idx,
         };
 
-        Some(Index::from_peer(receiver_idx).global())
+        Some(Index::from_peer(receiver_idx).tunnel_id())
     }
 }
 

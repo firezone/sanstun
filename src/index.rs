@@ -5,6 +5,10 @@ use std::sync::{Arc, Weak};
 use rand::rngs::StdRng;
 use rand::{CryptoRng, RngExt, SeedableRng};
 
+/// Identifies a [`Tunnel`](crate::Tunnel) among those of its [`Interface`](crate::Interface).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TunnelId(u32);
+
 /// Identifies a session of a [`Tunnel`](super::Tunnel).
 ///
 /// The top 24 bits identify the tunnel.
@@ -40,6 +44,10 @@ impl Index {
     /// The part of the index that identifies the tunnel.
     pub(crate) fn global(&self) -> u32 {
         self.0 >> 8
+    }
+
+    pub(crate) fn tunnel_id(&self) -> TunnelId {
+        TunnelId(self.global())
     }
 
     /// The rotating session part of the index.

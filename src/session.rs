@@ -1,5 +1,5 @@
 use super::{
-    index::Index,
+    index::{Index, TunnelId},
     timers::{REJECT_AFTER_MESSAGES, REJECT_AFTER_TIME, REKEY_AFTER_MESSAGES, REKEY_AFTER_TIME},
 };
 use crate::crypto::nonce;
@@ -222,8 +222,8 @@ impl Sessions {
     }
 
     /// The part of every local index that identifies the tunnel.
-    pub(crate) fn tunnel_id(&self) -> u32 {
-        self.last_index.global()
+    pub(crate) fn tunnel_id(&self) -> TunnelId {
+        self.last_index.tunnel_id()
     }
 
     /// Allocates the local index of a new session.

@@ -40,6 +40,7 @@ mod timers;
 mod tunnel;
 
 pub use errors::Error;
+pub use index::TunnelId;
 pub use interface::{Interface, Received};
 pub use message::{
     CookieReplyMessage, DataMessage, HandshakeInit, HandshakeInitiationMessage, HandshakeResponse,
