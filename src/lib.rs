@@ -41,6 +41,7 @@ mod timers;
 mod tunnel;
 
 pub use errors::Error;
+pub use index::TunnelId;
 pub use interface::{Interface, Received};
 pub use keys::{PresharedKey, PublicKey, StaticSecret};
 pub use message::{

@@ -445,7 +445,6 @@ impl Sim {
             let next = [Peer::A, Peer::B]
                 .into_iter()
                 .filter_map(|peer| self.tunn(peer).poll_timeout())
-                .map(|(at, _reason)| at)
                 .min()
                 // Never move backwards: a deadline may have elapsed already.
                 .map(|at| at.max(self.now))
