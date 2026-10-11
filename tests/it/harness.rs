@@ -17,6 +17,7 @@ use sanstun::Error;
 use sanstun::{Committed, Decrypted, Packet, PendingDecapsulate, Tunnel, TunnelConfig};
 use sanstun::{Interface, Received};
 use sanstun::{PresharedKey, PublicKey, StaticSecret};
+use zeroize::Zeroizing;
 
 // Protocol constants from the WireGuard whitepaper (§6.1, table on p. 14).
 // They are deliberately redefined here instead of imported: the tests assert
@@ -177,7 +178,7 @@ impl Outcome for Vec<Out> {
 fn tunnel_config(psk: Option<[u8; 32]>, persistent_keepalive: Option<Duration>) -> TunnelConfig {
     let mut config = TunnelConfig::default();
     if let Some(psk) = psk {
-        config = config.with_preshared_key(PresharedKey::from(psk));
+        config = config.with_preshared_key(PresharedKey::from(Zeroizing::new(psk)));
     }
     if let Some(interval) = persistent_keepalive {
         config = config.with_persistent_keepalive(interval);
@@ -255,10 +256,13 @@ impl Builder {
         let unix = Duration::from_secs(1_700_000_000);
 
         let (secret_a, secret_b) = match self.static_keys {
-            Some((a, b)) => (StaticSecret::from(a), StaticSecret::from(b)),
+            Some((a, b)) => (
+                StaticSecret::from(Zeroizing::new(a)),
+                StaticSecret::from(Zeroizing::new(b)),
+            ),
             None => (
-                StaticSecret::from(rand::random::<[u8; 32]>()),
-                StaticSecret::from(rand::random::<[u8; 32]>()),
+                StaticSecret::from(Zeroizing::new(rand::random())),
+                StaticSecret::from(Zeroizing::new(rand::random())),
             ),
         };
         let public_a = PublicKey::from(&secret_a);
@@ -281,7 +285,7 @@ impl Builder {
             .expect("the test keys are valid");
 
         let expected_by_b = if self.responder_expects_different_key {
-            PublicKey::from(&StaticSecret::from(rand::random::<[u8; 32]>()))
+            PublicKey::from(&StaticSecret::from(Zeroizing::new(rand::random())))
         } else {
             public_a
         };

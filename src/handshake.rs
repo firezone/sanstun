@@ -214,7 +214,8 @@ impl NoiseParams {
             peer_static_public,
             static_shared,
             sending_mac1_key: initial_sending_mac_key,
-            preshared_key: preshared_key.unwrap_or_else(|| PresharedKey::from([0u8; 32])),
+            preshared_key: preshared_key
+                .unwrap_or_else(|| PresharedKey::from(Zeroizing::new([0u8; 32]))),
         })
     }
 }
