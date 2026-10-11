@@ -7,7 +7,7 @@ use crate::harness::{
 };
 use rand::SeedableRng;
 use rand::rngs::StdRng;
-use sanstun::{Error, Interface, PublicKey};
+use sanstun::{Error, Interface, PublicKey, TunnelConfig};
 use std::time::{Duration, Instant};
 
 #[test]
@@ -259,7 +259,7 @@ fn tunnel_rejects_low_order_peer_static_key() {
     );
 
     for point in low_order_points {
-        let tunnel = interface.new_tunnel(PublicKey::from(point), None, None, now);
+        let tunnel = interface.new_tunnel(PublicKey::from(point), TunnelConfig::default(), now);
 
         assert!(matches!(tunnel, Err(Error::LowOrderPoint)), "{point:x?}");
     }

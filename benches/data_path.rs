@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use criterion::{BatchSize, Criterion};
-use sanstun::{Event, Interface, Received, Tunnel};
+use sanstun::{Event, Interface, Received, Tunnel, TunnelConfig};
 
 const PACKET_SIZES: [usize; 2] = [64, 1280];
 
@@ -136,10 +136,10 @@ fn established_tunnels(addr: SocketAddr, now: Instant) -> (Tunnel, Interface, Tu
     let mut interface_a = Interface::new(&mut rand::rng(), now, unix);
     let mut interface_b = Interface::new(&mut rand::rng(), now, unix);
     let mut a = interface_a
-        .new_tunnel(interface_b.static_public(), None, None, now)
+        .new_tunnel(interface_b.static_public(), TunnelConfig::default(), now)
         .unwrap();
     let mut b = interface_b
-        .new_tunnel(interface_a.static_public(), None, None, now)
+        .new_tunnel(interface_a.static_public(), TunnelConfig::default(), now)
         .unwrap();
 
     let initiation = a.format_handshake_initiation(false, now).unwrap();

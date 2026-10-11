@@ -14,7 +14,7 @@ use rand::SeedableRng;
 use rand::rngs::StdRng;
 
 use sanstun::Error;
-use sanstun::{Committed, Decrypted, Packet, PendingDecapsulate, Tunnel};
+use sanstun::{Committed, Decrypted, Packet, PendingDecapsulate, Tunnel, TunnelConfig};
 use sanstun::{Interface, Received};
 use sanstun::{PresharedKey, PublicKey, StaticSecret};
 use zeroize::Zeroizing;
@@ -175,6 +175,18 @@ impl Outcome for Vec<Out> {
     }
 }
 
+fn tunnel_config(psk: Option<[u8; 32]>, persistent_keepalive: Option<Duration>) -> TunnelConfig {
+    let mut config = TunnelConfig::default();
+    if let Some(psk) = psk {
+        config = config.with_preshared_key(PresharedKey::from(Zeroizing::new(psk)));
+    }
+    if let Some(interval) = persistent_keepalive {
+        config = config.with_persistent_keepalive(interval);
+    }
+
+    config
+}
+
 struct Node {
     tunn: Tunnel,
     interface: Interface,
@@ -189,7 +201,7 @@ struct Node {
 pub struct Builder {
     psk_a: Option<[u8; 32]>,
     psk_b: Option<[u8; 32]>,
-    persistent_keepalive_b: Option<u16>,
+    persistent_keepalive_b: Option<Duration>,
     seed_a: [u8; 32],
     seed_b: [u8; 32],
     static_keys: Option<([u8; 32], [u8; 32])>,
@@ -208,8 +220,8 @@ impl Builder {
         self
     }
 
-    pub fn persistent_keepalive_b(mut self, interval_secs: u16) -> Self {
-        self.persistent_keepalive_b = Some(interval_secs);
+    pub fn persistent_keepalive_b(mut self, interval: Duration) -> Self {
+        self.persistent_keepalive_b = Some(interval);
         self
     }
 
@@ -269,13 +281,7 @@ impl Builder {
             .with_handshake_limit(limit_b);
 
         let a = interface_a
-            .new_tunnel(
-                public_b,
-                self.psk_a
-                    .map(|psk| PresharedKey::from(Zeroizing::new(psk))),
-                None,
-                start,
-            )
+            .new_tunnel(public_b, tunnel_config(self.psk_a, None), start)
             .expect("the test keys are valid");
 
         let expected_by_b = if self.responder_expects_different_key {
@@ -286,9 +292,7 @@ impl Builder {
         let b = interface_b
             .new_tunnel(
                 expected_by_b,
-                self.psk_b
-                    .map(|psk| PresharedKey::from(Zeroizing::new(psk))),
-                self.persistent_keepalive_b,
+                tunnel_config(self.psk_b, self.persistent_keepalive_b),
                 start,
             )
             .expect("the test keys are valid");
@@ -384,12 +388,7 @@ impl Sim {
 
         node.tunn = node
             .interface
-            .new_tunnel(
-                remote,
-                node.psk.map(|psk| PresharedKey::from(Zeroizing::new(psk))),
-                None,
-                now,
-            )
+            .new_tunnel(remote, tunnel_config(node.psk, None), now)
             .expect("the test keys are valid");
     }
 

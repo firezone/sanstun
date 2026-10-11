@@ -60,6 +60,32 @@ impl<B> std::fmt::Debug for Committed<B> {
     }
 }
 
+/// The optional settings of a [`Tunnel`], passed to
+/// [`Interface::new_tunnel`](crate::Interface::new_tunnel).
+#[derive(Debug, Default)]
+pub struct TunnelConfig {
+    preshared_key: Option<PresharedKey>,
+    persistent_keepalive: Option<Duration>,
+}
+
+impl TunnelConfig {
+    /// Mixes `preshared_key` into every handshake.
+    pub fn with_preshared_key(mut self, preshared_key: PresharedKey) -> Self {
+        self.preshared_key = Some(preshared_key);
+
+        self
+    }
+
+    /// Sends a keepalive once `interval` passed since the last message we sent.
+    ///
+    /// A zero `interval` leaves the persistent keepalive off.
+    pub fn with_persistent_keepalive(mut self, interval: Duration) -> Self {
+        self.persistent_keepalive = Some(interval).filter(|interval| !interval.is_zero());
+
+        self
+    }
+}
+
 /// A point-to-point WireGuard connection
 pub struct Tunnel {
     handshake: Handshake,
@@ -93,8 +119,7 @@ impl Tunnel {
     pub(crate) fn new(
         static_private: StaticSecret,
         peer_static_public: PublicKey,
-        preshared_key: Option<PresharedKey>,
-        persistent_keepalive: Option<Duration>,
+        config: TunnelConfig,
         index: Index,
         index_lease: Arc<()>,
         rng: &mut impl CryptoRng,
@@ -106,14 +131,14 @@ impl Tunnel {
             static_private,
             static_public,
             peer_static_public,
-            preshared_key,
+            config.preshared_key,
             stamper,
         )?;
 
         Ok(Tunnel {
             handshake,
             sessions: Sessions::new(index),
-            timers: Timers::new(persistent_keepalive, now),
+            timers: Timers::new(config.persistent_keepalive, now),
             rng: ForwardSecureRng::new(rng),
             events: RingBuffer::new(),
             _index_lease: index_lease,
