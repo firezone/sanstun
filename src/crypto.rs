@@ -1,9 +1,10 @@
+use crate::PublicKey;
 use crate::errors::Error;
 use blake2::digest::consts::U16;
 use blake2::digest::{FixedOutput, KeyInit};
 use blake2::{Blake2s256, Blake2sMac, Digest};
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
-use x25519_dalek::{PublicKey, SharedSecret};
+use x25519_dalek::SharedSecret;
 use zeroize::Zeroizing;
 
 type HmacBlake2s = hmac::SimpleHmac<Blake2s256>;
@@ -179,7 +180,7 @@ pub(crate) fn nonce(counter: u64) -> [u8; 12] {
 ///
 /// Rejects the all-zero result of a low-order `public` key, as WireGuard's `mix_dh` does.
 pub(crate) fn dh(private: &impl x25519::Secret, public: &PublicKey) -> Result<SharedKey, Error> {
-    let shared = private.diffie_hellman(public);
+    let shared = private.diffie_hellman(&public.to_dalek());
 
     if !shared.was_contributory() {
         return Err(Error::LowOrderPoint);
@@ -198,7 +199,8 @@ impl SharedKey {
 }
 
 mod x25519 {
-    use x25519_dalek::{PublicKey, ReusableSecret, SharedSecret, StaticSecret};
+    use crate::StaticSecret;
+    use x25519_dalek::{PublicKey, ReusableSecret, SharedSecret};
 
     pub trait Secret {
         fn diffie_hellman(&self, public: &PublicKey) -> SharedSecret;
@@ -207,7 +209,7 @@ mod x25519 {
     impl Secret for StaticSecret {
         #[expect(clippy::disallowed_methods, reason = "This is `dh`'s implementation.")]
         fn diffie_hellman(&self, public: &PublicKey) -> SharedSecret {
-            StaticSecret::diffie_hellman(self, public)
+            self.as_dalek().diffie_hellman(public)
         }
     }
 
@@ -222,11 +224,11 @@ mod x25519 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use x25519_dalek::StaticSecret;
+    use crate::StaticSecret;
 
     #[test]
     fn dh_rejects_low_order_points() {
-        let private = StaticSecret::from([1; 32]);
+        let private = StaticSecret::from(Zeroizing::new([1; 32]));
         let p_minus_1 = {
             let mut p = [0xff; 32];
             p[0] = 0xec;
@@ -262,8 +264,8 @@ mod tests {
 
     #[test]
     fn dh_agrees_on_valid_keys() {
-        let a = StaticSecret::from([1; 32]);
-        let b = StaticSecret::from([2; 32]);
+        let a = StaticSecret::from(Zeroizing::new([1; 32]));
+        let b = StaticSecret::from(Zeroizing::new([2; 32]));
 
         let ab = dh(&a, &PublicKey::from(&b)).unwrap();
         let ba = dh(&b, &PublicKey::from(&a)).unwrap();

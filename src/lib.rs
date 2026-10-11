@@ -29,6 +29,7 @@ mod errors;
 mod handshake;
 mod index;
 mod interface;
+mod keys;
 mod message;
 mod ratelimiter;
 mod replay;
@@ -42,10 +43,10 @@ mod tunnel;
 pub use errors::Error;
 pub use index::TunnelId;
 pub use interface::{Interface, Received};
+pub use keys::{PresharedKey, PublicKey, StaticSecret};
 pub use message::{
     CookieReplyMessage, DataMessage, HandshakeInit, HandshakeInitiationMessage, HandshakeResponse,
     HandshakeResponseMessage, KeepaliveMessage, Packet, PacketCookieReply, PacketData,
 };
 pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
 pub use tunnel::{Committed, Event, Keepalive, Tunnel};
-pub use x25519_dalek::{PublicKey, StaticSecret};

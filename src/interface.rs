@@ -8,7 +8,7 @@ use crate::message::{
 };
 use crate::ratelimiter::RateLimiter;
 use crate::tai64n::{Tai64N, TimeStamper};
-use crate::{CookieReplyMessage, Error, PublicKey, StaticSecret, Tunnel};
+use crate::{CookieReplyMessage, Error, PresharedKey, PublicKey, StaticSecret, Tunnel};
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -59,7 +59,9 @@ impl Interface {
     /// initiations are derived.
     pub fn new(rng: &mut impl CryptoRng, now: Instant, unix: Duration) -> Self {
         let mut rng = ForwardSecureRng::new(rng);
-        let static_private = StaticSecret::from(rng.random::<[u8; 32]>());
+        let mut static_private = Zeroizing::new([0; 32]);
+        rng.fill(&mut static_private[..]);
+        let static_private = StaticSecret::from(static_private);
         let static_public = PublicKey::from(&static_private);
         let mut cookie_secret = Zeroizing::new([0; 32]);
         rng.fill(&mut cookie_secret[..]);
@@ -116,7 +118,7 @@ impl Interface {
     pub fn new_tunnel(
         &mut self,
         peer_static_public: PublicKey,
-        preshared_key: Option<StaticSecret>,
+        preshared_key: Option<PresharedKey>,
         persistent_keepalive: Option<u16>,
         now: Instant,
     ) -> Result<Tunnel, Error> {

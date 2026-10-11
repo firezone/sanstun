@@ -1,6 +1,7 @@
 use crate::errors::Error;
 use crate::handshake::Handshake;
 use crate::index::{Index, TunnelId};
+use crate::keys::{PresharedKey, PublicKey, StaticSecret};
 use crate::message::{
     DATA_OVERHEAD_SZ, HandshakeInit, HandshakeInitiationMessage, HandshakeResponse,
     HandshakeResponseMessage, KeepaliveMessage, Packet, PacketCookieReply, PacketData,
@@ -12,7 +13,6 @@ use crate::timers::{MAX_JITTER, TimerName, Timers};
 
 use crate::rng::ForwardSecureRng;
 use rand::{CryptoRng, RngExt};
-use x25519_dalek::{PublicKey, StaticSecret};
 
 use std::iter;
 use std::sync::Arc;
@@ -93,7 +93,7 @@ impl Tunnel {
     pub(crate) fn new(
         static_private: StaticSecret,
         peer_static_public: PublicKey,
-        preshared_key: Option<StaticSecret>,
+        preshared_key: Option<PresharedKey>,
         persistent_keepalive: Option<Duration>,
         index: Index,
         index_lease: Arc<()>,
@@ -129,10 +129,6 @@ impl Tunnel {
 
     pub fn remote_static_public(&self) -> PublicKey {
         self.handshake.remote_static_public()
-    }
-
-    pub fn preshared_key(&self) -> &StaticSecret {
-        self.handshake.preshared_key()
     }
 
     /// Set the `REKEY_ATTEMPT_TIME`.
