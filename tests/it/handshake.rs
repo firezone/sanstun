@@ -5,10 +5,9 @@ use crate::harness::{
     HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, Outcome as _, Peer::A, Peer::B,
     REJECT_AFTER_TIME, Sim, classify, ipv4_packet, secs,
 };
-use rand::SeedableRng;
-use rand::rngs::StdRng;
 use sanstun::{Error, Interface, PublicKey, TunnelConfig};
 use std::time::{Duration, Instant};
+use zeroize::Zeroizing;
 
 #[test]
 fn handshake_completes_in_one_round_trip() {
@@ -253,7 +252,7 @@ fn tunnel_rejects_low_order_peer_static_key() {
     ];
     let now = Instant::now();
     let mut interface = Interface::new(
-        &mut StdRng::from_seed([0; 32]),
+        Zeroizing::new([0; 32]),
         now,
         Duration::from_secs(1_700_000_000),
     );
