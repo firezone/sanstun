@@ -17,6 +17,7 @@ use sanstun::Error;
 use sanstun::{Committed, Decrypted, Packet, PendingDecapsulate, Tunnel};
 use sanstun::{Interface, Received};
 use sanstun::{PresharedKey, PublicKey, StaticSecret};
+use zeroize::Zeroizing;
 
 // Protocol constants from the WireGuard whitepaper (§6.1, table on p. 14).
 // They are deliberately redefined here instead of imported: the tests assert
@@ -243,10 +244,13 @@ impl Builder {
         let unix = Duration::from_secs(1_700_000_000);
 
         let (secret_a, secret_b) = match self.static_keys {
-            Some((a, b)) => (StaticSecret::from(a), StaticSecret::from(b)),
+            Some((a, b)) => (
+                StaticSecret::from(Zeroizing::new(a)),
+                StaticSecret::from(Zeroizing::new(b)),
+            ),
             None => (
-                StaticSecret::from(rand::random::<[u8; 32]>()),
-                StaticSecret::from(rand::random::<[u8; 32]>()),
+                StaticSecret::from(Zeroizing::new(rand::random())),
+                StaticSecret::from(Zeroizing::new(rand::random())),
             ),
         };
         let public_a = PublicKey::from(&secret_a);
@@ -265,18 +269,25 @@ impl Builder {
             .with_handshake_limit(limit_b);
 
         let a = interface_a
-            .new_tunnel(public_b, self.psk_a.map(PresharedKey::from), None, start)
+            .new_tunnel(
+                public_b,
+                self.psk_a
+                    .map(|psk| PresharedKey::from(Zeroizing::new(psk))),
+                None,
+                start,
+            )
             .expect("the test keys are valid");
 
         let expected_by_b = if self.responder_expects_different_key {
-            PublicKey::from(&StaticSecret::from(rand::random::<[u8; 32]>()))
+            PublicKey::from(&StaticSecret::from(Zeroizing::new(rand::random())))
         } else {
             public_a
         };
         let b = interface_b
             .new_tunnel(
                 expected_by_b,
-                self.psk_b.map(PresharedKey::from),
+                self.psk_b
+                    .map(|psk| PresharedKey::from(Zeroizing::new(psk))),
                 self.persistent_keepalive_b,
                 start,
             )
@@ -373,7 +384,12 @@ impl Sim {
 
         node.tunn = node
             .interface
-            .new_tunnel(remote, node.psk.map(PresharedKey::from), None, now)
+            .new_tunnel(
+                remote,
+                node.psk.map(|psk| PresharedKey::from(Zeroizing::new(psk))),
+                None,
+                now,
+            )
             .expect("the test keys are valid");
     }
 

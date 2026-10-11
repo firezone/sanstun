@@ -56,9 +56,9 @@ impl StaticSecret {
     }
 }
 
-impl From<[u8; 32]> for StaticSecret {
-    fn from(bytes: [u8; 32]) -> Self {
-        Self(x25519_dalek::StaticSecret::from(bytes))
+impl From<Zeroizing<[u8; 32]>> for StaticSecret {
+    fn from(bytes: Zeroizing<[u8; 32]>) -> Self {
+        Self(x25519_dalek::StaticSecret::from(*bytes))
     }
 }
 
@@ -77,9 +77,9 @@ impl PresharedKey {
     }
 }
 
-impl From<[u8; 32]> for PresharedKey {
-    fn from(bytes: [u8; 32]) -> Self {
-        Self(Zeroizing::new(bytes))
+impl From<Zeroizing<[u8; 32]>> for PresharedKey {
+    fn from(bytes: Zeroizing<[u8; 32]>) -> Self {
+        Self(bytes)
     }
 }
 
@@ -95,8 +95,8 @@ mod tests {
 
     #[test]
     fn debug_redacts_only_the_secrets() {
-        let secret = StaticSecret::from([0xab; 32]);
-        let psk = PresharedKey::from([0xab; 32]);
+        let secret = StaticSecret::from(Zeroizing::new([0xab; 32]));
+        let psk = PresharedKey::from(Zeroizing::new([0xab; 32]));
 
         assert_eq!(format!("{secret:?}"), "StaticSecret(..)");
         assert_eq!(format!("{psk:?}"), "PresharedKey(..)");

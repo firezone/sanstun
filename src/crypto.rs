@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn dh_rejects_low_order_points() {
-        let private = StaticSecret::from([1; 32]);
+        let private = StaticSecret::from(Zeroizing::new([1; 32]));
         let p_minus_1 = {
             let mut p = [0xff; 32];
             p[0] = 0xec;
@@ -264,8 +264,8 @@ mod tests {
 
     #[test]
     fn dh_agrees_on_valid_keys() {
-        let a = StaticSecret::from([1; 32]);
-        let b = StaticSecret::from([2; 32]);
+        let a = StaticSecret::from(Zeroizing::new([1; 32]));
+        let b = StaticSecret::from(Zeroizing::new([2; 32]));
 
         let ab = dh(&a, &PublicKey::from(&b)).unwrap();
         let ba = dh(&b, &PublicKey::from(&a)).unwrap();

@@ -59,7 +59,9 @@ impl Interface {
     /// initiations are derived.
     pub fn new(rng: &mut impl CryptoRng, now: Instant, unix: Duration) -> Self {
         let mut rng = ForwardSecureRng::new(rng);
-        let static_private = StaticSecret::from(rng.random::<[u8; 32]>());
+        let mut static_private = Zeroizing::new([0; 32]);
+        rng.fill(&mut static_private[..]);
+        let static_private = StaticSecret::from(static_private);
         let static_public = PublicKey::from(&static_private);
         let mut cookie_secret = Zeroizing::new([0; 32]);
         rng.fill(&mut cookie_secret[..]);
