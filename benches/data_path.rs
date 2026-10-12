@@ -123,11 +123,11 @@ fn decapsulate(
     message: &[u8],
     now: Instant,
 ) -> sanstun::PendingDecapsulate {
-    let Received::Packet(packet) = interface.receive(addr, message, now).unwrap() else {
+    let Received::Message(message) = interface.receive(addr, message, now).unwrap() else {
         unreachable!()
     };
 
-    tunnel.decapsulate(packet, now).unwrap().unwrap()
+    tunnel.decapsulate(message, now).unwrap().unwrap()
 }
 
 /// Completes a handshake between two tunnels, returning the initiator and the responder together
@@ -144,18 +144,18 @@ fn established_tunnels(addr: SocketAddr, now: Instant) -> (Tunnel, Interface, Tu
         .unwrap();
 
     let initiation = a.initiate_handshake(now).unwrap();
-    let Received::Packet(packet) = interface_b.receive(addr, &initiation, now).unwrap() else {
+    let Received::Message(message) = interface_b.receive(addr, &initiation, now).unwrap() else {
         unreachable!()
     };
-    b.decapsulate(packet, now).unwrap();
+    b.decapsulate(message, now).unwrap();
 
-    let Some(Event::HandshakeResponse(response)) = b.poll_event() else {
+    let Some(Event::SendHandshakeResponse(response)) = b.poll_event() else {
         unreachable!()
     };
-    let Received::Packet(packet) = interface_a.receive(addr, &response, now).unwrap() else {
+    let Received::Message(message) = interface_a.receive(addr, &response, now).unwrap() else {
         unreachable!()
     };
-    a.decapsulate(packet, now).unwrap();
+    a.decapsulate(message, now).unwrap();
 
     (a, interface_b, b)
 }

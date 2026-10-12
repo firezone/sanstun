@@ -308,9 +308,9 @@ fn passes(sim: &mut Sim, src: SocketAddr) -> bool {
     let init = sim.force_handshake_initiation(A);
 
     match sim.try_receive_from(B, &init, src) {
-        Ok(Received::Packet(_)) => true,
+        Ok(Received::Message(_)) => true,
         Err(Error::RateLimited) => false,
-        other => panic!("expected a packet or a rate limit, got {other:?}"),
+        other => panic!("expected a message or a rate limit, got {other:?}"),
     }
 }
 

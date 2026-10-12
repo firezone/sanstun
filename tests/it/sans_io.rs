@@ -34,10 +34,10 @@ fn scheduled_handshake_honours_poll_timeout() {
 
     // ... and emitted exactly once when the announced instant is polled.
     tunn.handle_timeout(wake);
-    let Some(Event::HandshakeInitiation(packet)) = tunn.poll_event() else {
+    let Some(Event::SendHandshakeInitiation(initiation)) = tunn.poll_event() else {
         panic!("expected the scheduled handshake initiation");
     };
-    assert_eq!(classify(&packet), Kind::Init);
+    assert_eq!(classify(&initiation), Kind::Init);
     tunn.handle_timeout(wake);
     assert!(tunn.poll_event().is_none());
 }

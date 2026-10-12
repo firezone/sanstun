@@ -135,70 +135,79 @@ pub struct TransportData {
 /// ```
 ///
 /// ```compile_fail
-/// fn duplicate(packet: sanstun::Packet) -> (sanstun::Packet, sanstun::Packet) {
-///     (packet.clone(), packet)
+/// fn duplicate(
+///     message: sanstun::ReceivedMessage,
+/// ) -> (sanstun::ReceivedMessage, sanstun::ReceivedMessage) {
+///     (message.clone(), message)
 /// }
 /// ```
 #[derive(Debug)]
-pub enum Packet {
+pub enum ReceivedMessage {
     HandshakeInitiation(HandshakeInitiation),
     HandshakeResponse(HandshakeResponse),
     CookieReply(CookieReply),
     TransportData(TransportData),
 }
 
-impl Packet {
+impl ReceivedMessage {
     /// The [`Tunnel::id`](crate::Tunnel::id) of the tunnel this message is addressed to.
     ///
     /// `None` for a handshake initiation, which is routed by [`HandshakeInitiation::peer_static_public`] instead.
     pub fn tunnel_id(&self) -> Option<TunnelId> {
         let receiver_idx = match self {
-            Packet::HandshakeInitiation(_) => return None,
-            Packet::HandshakeResponse(p) => p.receiver_idx,
-            Packet::CookieReply(p) => p.receiver_idx,
-            Packet::TransportData(p) => p.receiver_idx,
+            ReceivedMessage::HandshakeInitiation(_) => return None,
+            ReceivedMessage::HandshakeResponse(p) => p.receiver_idx,
+            ReceivedMessage::CookieReply(p) => p.receiver_idx,
+            ReceivedMessage::TransportData(p) => p.receiver_idx,
         };
 
         Some(Index::from_peer(receiver_idx).tunnel_id())
     }
 }
 
-macro_rules! owned_message {
-    ($(#[$doc:meta])* $name:ident, $len:expr) => {
-        $(#[$doc])*
-        #[derive(Debug)]
-        pub struct $name(pub(crate) [u8; $len]);
-
-        impl Deref for $name {
-            type Target = [u8];
-
-            fn deref(&self) -> &[u8] {
-                &self.0
-            }
-        }
-    };
+/// Bytes to send to the peer as one UDP datagram.
+///
+/// Only sanstun produces it:
+///
+/// ```compile_fail
+/// let _ = sanstun::Datagram {
+///     buf: [0; 148],
+///     len: 0,
+/// };
+/// ```
+///
+/// ```compile_fail
+/// let _ = sanstun::Datagram::new([0; 148]);
+/// ```
+pub struct Datagram {
+    buf: [u8; HANDSHAKE_INIT_SZ],
+    len: usize,
 }
 
-owned_message!(
-    /// A handshake initiation to send to the network.
-    HandshakeInitiationMessage,
-    HANDSHAKE_INIT_SZ
-);
-owned_message!(
-    /// A handshake response to send to the network.
-    HandshakeResponseMessage,
-    HANDSHAKE_RESP_SZ
-);
-owned_message!(
-    /// A cookie reply to send to the network.
-    CookieReplyMessage,
-    COOKIE_REPLY_SZ
-);
-owned_message!(
-    /// A keepalive, i.e. an encrypted empty data message, to send to the network.
-    KeepaliveMessage,
-    DATA_OVERHEAD_SZ
-);
+impl Datagram {
+    pub(crate) fn new<const N: usize>(bytes: [u8; N]) -> Self {
+        const { assert!(N <= HANDSHAKE_INIT_SZ) };
+
+        let mut buf = [0; HANDSHAKE_INIT_SZ];
+        buf[..N].copy_from_slice(&bytes);
+
+        Self { buf, len: N }
+    }
+}
+
+impl Deref for Datagram {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
+}
+
+impl std::fmt::Debug for Datagram {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("Datagram").field(&&**self).finish()
+    }
+}
 
 /// An encrypted data message to send to the network, in the buffer it was written into.
 #[derive(Debug)]

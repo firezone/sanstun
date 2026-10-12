@@ -33,8 +33,8 @@ fn data_messages_are_zero_padded_to_a_multiple_of_16_bytes() {
         let plaintext = vec![0xff; len];
         let datagram = sim.encapsulate(A, &plaintext);
         let now = sim.now;
-        let packet = sim.receive(B, &datagram);
-        let Ok(Some(pending)) = sim.tunn_mut(B).decapsulate(packet, now) else {
+        let message = sim.receive(B, &datagram);
+        let Ok(Some(pending)) = sim.tunn_mut(B).decapsulate(message, now) else {
             panic!("expected a data message");
         };
         let decrypted = pending.decrypt(&datagram, vec![0u8; 4096]);
@@ -88,9 +88,9 @@ fn handshake_response_leaves_the_keepalive_to_the_caller() {
     let response = sim.deliver(B, &init).expect_one_net();
     let now = sim.now;
 
-    let packet = sim.receive(A, &response);
+    let message = sim.receive(A, &response);
     let tunn = sim.tunn_mut(A);
-    assert!(tunn.decapsulate(packet, now).unwrap().is_none());
+    assert!(tunn.decapsulate(message, now).unwrap().is_none());
     let event = tunn.poll_event();
     let Some(Event::KeepaliveDue(keepalive)) = event else {
         panic!("expected a due keepalive, got {event:?}");
@@ -141,8 +141,8 @@ fn data_messages_name_the_receiving_tunnel() {
     let mut sim = Sim::connected();
     let datagram = sim.encapsulate(A, b"hello");
 
-    let packet = sim.receive(B, &datagram);
+    let message = sim.receive(B, &datagram);
 
-    assert_eq!(packet.tunnel_id(), Some(sim.tunn(B).id()));
+    assert_eq!(message.tunnel_id(), Some(sim.tunn(B).id()));
     assert_ne!(sim.tunn(A).id(), sim.tunn(B).id());
 }
