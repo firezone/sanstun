@@ -2,6 +2,7 @@ use std::convert::Infallible;
 
 use rand::rngs::StdRng;
 use rand::{CryptoRng, Rng, SeedableRng, TryCryptoRng, TryRng};
+use zeroize::Zeroizing;
 
 /// A [`StdRng`] that re-keys itself from its own output after every use (fast key erasure), so a
 /// copy of its state cannot reproduce anything it generated before.
@@ -10,6 +11,10 @@ pub(crate) struct ForwardSecureRng(StdRng);
 impl ForwardSecureRng {
     pub(crate) fn new(seed: &mut impl CryptoRng) -> Self {
         Self(StdRng::from_rng(seed))
+    }
+
+    pub(crate) fn from_seed(seed: Zeroizing<[u8; 32]>) -> Self {
+        Self(StdRng::from_seed(*seed))
     }
 
     fn rekey(&mut self) {

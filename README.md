@@ -49,9 +49,9 @@ The buffer may still be padded.
 
 ### Randomness
 
-It is your responsibility to supply a randomness source with enough entropy.
+It is your responsibility to supply a seed with enough entropy.
 Being sans-IO means the library is fully deterministic including all cryptography operations.
-Supplying identically seeded randomness sources will produce **the same keys, nonces, cookies etc**.
+Supplying identical seeds will produce **the same keys, nonces, cookies etc**.
 This is great for testing but needs to be taken seriously for production usecases.
 
 With great power comes great responsibility.
@@ -65,7 +65,7 @@ The time passed in needs to be monotonically increasing, otherwise other peers m
 For a WireGuard implementation to be secure, it is not enough to just use sound & audited cryptography primitives.
 The API of `sanstun` is designed to guide you towards using it in a safe manner by enforcing many aspects through the type-system.
 For example, it is not possible to directly create a `Tunnel`.
-Instead, `Interface` serves as a factory for new tunnels and derives all key material from a `CryptoRng`.
+Instead, `Interface` serves as a factory for new tunnels and derives all key material from a seed.
 It is also not possible to handle inbound traffic in `sanstun` without going through a rate limiter.
 This ensures expensive crypto operations like DH cannot be triggered arbitrarily by remote peers.
 

@@ -10,9 +10,6 @@ use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
-use rand::SeedableRng;
-use rand::rngs::StdRng;
-
 use sanstun::Error;
 use sanstun::{Committed, Decrypted, Packet, PendingDecapsulate, Tunnel, TunnelConfig};
 use sanstun::{Interface, Received};
@@ -273,10 +270,10 @@ impl Builder {
         } else {
             HANDSHAKE_RATE_LIMIT
         };
-        let mut interface_a = Interface::new(&mut StdRng::from_seed(self.seed_a), start, unix)
+        let mut interface_a = Interface::new(Zeroizing::new(self.seed_a), start, unix)
             .with_static_private(secret_a)
             .with_handshake_limit(HANDSHAKE_RATE_LIMIT);
-        let mut interface_b = Interface::new(&mut StdRng::from_seed(self.seed_b), start, unix)
+        let mut interface_b = Interface::new(Zeroizing::new(self.seed_b), start, unix)
             .with_static_private(secret_b)
             .with_handshake_limit(limit_b);
 

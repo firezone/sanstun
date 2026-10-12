@@ -16,7 +16,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use crate::rng::ForwardSecureRng;
-use rand::{CryptoRng, RngExt};
+use rand::RngExt;
 use subtle::ConstantTimeEq as _;
 use zeroize::Zeroizing;
 
@@ -49,16 +49,15 @@ pub struct Interface {
 impl Interface {
     /// Creates a new [`Interface`],
     ///
-    /// `rng` seeds the generator that the static key, the cookie secrets, the tunnel indices and
-    /// the key material of every tunnel are derived from. It must draw fresh entropy from the
-    /// operating system for every instance, e.g. `rand::rng()`. Seeding from a fixed value is
-    /// only safe in tests: instances with the same seed derive the same keys and thus reuse
-    /// nonces.
+    /// `seed` seeds the generator that the static key, the cookie secrets, the tunnel indices and
+    /// the key material of every tunnel are derived from. It must be fresh entropy from the
+    /// operating system for every instance, e.g. filled by `getrandom::fill`. A fixed seed is only
+    /// safe in tests: instances with the same seed derive the same keys and thus reuse nonces.
     ///
     /// `unix` is the time since the Unix epoch at `now`, from which the timestamps of handshake
     /// initiations are derived.
-    pub fn new(rng: &mut impl CryptoRng, now: Instant, unix: Duration) -> Self {
-        let mut rng = ForwardSecureRng::new(rng);
+    pub fn new(seed: Zeroizing<[u8; 32]>, now: Instant, unix: Duration) -> Self {
+        let mut rng = ForwardSecureRng::from_seed(seed);
         let mut static_private = Zeroizing::new([0; 32]);
         rng.fill(&mut static_private[..]);
         let static_private = StaticSecret::from(static_private);
@@ -341,8 +340,6 @@ pub enum Received<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::SeedableRng;
-    use rand::rngs::StdRng;
 
     #[test]
     fn cookies_differ_across_address_families() {
@@ -402,8 +399,8 @@ mod tests {
     #[test]
     fn initiations_from_unknown_peers_leave_no_state() {
         let now = Instant::now();
-        let mut initiator = Interface::new(&mut StdRng::from_seed([1; 32]), now, Duration::ZERO);
-        let mut responder = Interface::new(&mut StdRng::from_seed([2; 32]), now, Duration::ZERO);
+        let mut initiator = Interface::new(Zeroizing::new([1; 32]), now, Duration::ZERO);
+        let mut responder = Interface::new(Zeroizing::new([2; 32]), now, Duration::ZERO);
         let mut tunnel = initiator
             .new_tunnel(responder.static_public(), TunnelConfig::default(), now)
             .unwrap();
@@ -419,7 +416,7 @@ mod tests {
     }
 
     fn under_load(now: Instant) -> Interface {
-        Interface::new(&mut StdRng::from_seed([2; 32]), now, Duration::ZERO).with_handshake_limit(0)
+        Interface::new(Zeroizing::new([2; 32]), now, Duration::ZERO).with_handshake_limit(0)
     }
 
     /// A handshake initiation with a valid mac1 and its mac2 keyed with `cookie`.

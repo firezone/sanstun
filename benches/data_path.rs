@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use criterion::{BatchSize, Criterion};
 use sanstun::{Event, Interface, Received, Tunnel, TunnelConfig};
+use zeroize::Zeroizing;
 
 const PACKET_SIZES: [usize; 2] = [64, 1280];
 
@@ -133,8 +134,8 @@ fn decapsulate(
 /// with its [`Interface`].
 fn established_tunnels(addr: SocketAddr, now: Instant) -> (Tunnel, Interface, Tunnel) {
     let unix = Duration::from_secs(1_700_000_000);
-    let mut interface_a = Interface::new(&mut rand::rng(), now, unix);
-    let mut interface_b = Interface::new(&mut rand::rng(), now, unix);
+    let mut interface_a = Interface::new(Zeroizing::new(rand::random()), now, unix);
+    let mut interface_b = Interface::new(Zeroizing::new(rand::random()), now, unix);
     let mut a = interface_a
         .new_tunnel(interface_b.static_public(), TunnelConfig::default(), now)
         .unwrap();
