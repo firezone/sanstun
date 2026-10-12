@@ -38,7 +38,7 @@ It is your responsibility to pick the correct `Tunnel` based on the destination 
 
 ### Handshake routing
 
-A handshake initiation is routed by the initiator's static public key, via `HandshakeInit::peer_static_public`.
+A handshake initiation is routed by the initiator's static public key, via `HandshakeInitiation::peer_static_public`.
 `Interface::receive` authenticates it and, for keys you created a `Tunnel` for, rejects replayed initiations.
 Anyone can generate a key pair though, so do not create a `Tunnel` for an unknown key based on it.
 

@@ -7,8 +7,8 @@ use crate::crypto::{
 use crate::errors::Error;
 use crate::keys::{PresharedKey, PublicKey, StaticSecret};
 use crate::message::{
-    HANDSHAKE_INIT, HANDSHAKE_INIT_SZ, HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeInit,
-    HandshakeResponse, PacketCookieReply,
+    CookieReply, HANDSHAKE_INIT, HANDSHAKE_INIT_SZ, HANDSHAKE_RESP, HANDSHAKE_RESP_SZ,
+    HandshakeInitiation, HandshakeResponse,
 };
 use crate::session::{Role, Session};
 use crate::tai64n::{Tai64N, TimeStamper};
@@ -120,7 +120,7 @@ pub(crate) fn parse_handshake_init(
     static_private: &StaticSecret,
     static_public: &PublicKey,
     datagram: &[u8; HANDSHAKE_INIT_SZ],
-) -> Result<HandshakeInit, Error> {
+) -> Result<HandshakeInitiation, Error> {
     let sender_idx = u32::from_le_bytes(datagram[4..8].try_into().unwrap());
     let unencrypted_ephemeral: [u8; KEY_LEN] = datagram[8..40].try_into().unwrap();
     let encrypted_static = &datagram[40..88];
@@ -169,7 +169,7 @@ pub(crate) fn parse_handshake_init(
     // initiator.hash = HASH(initiator.hash || msg.encrypted_timestamp)
     hash = b2s_hash(&hash, encrypted_timestamp);
 
-    Ok(HandshakeInit {
+    Ok(HandshakeInitiation {
         sender_idx,
         peer_static_public,
         peer_ephemeral_public,
@@ -299,12 +299,12 @@ impl Handshake {
     /// `local_index`.
     pub(super) fn receive_handshake_initialization(
         &mut self,
-        packet: HandshakeInit,
+        packet: HandshakeInitiation,
         local_index: Index,
         rng: &mut impl CryptoRng,
         now: Instant,
     ) -> Result<([u8; HANDSHAKE_RESP_SZ], Session), Error> {
-        let HandshakeInit {
+        let HandshakeInitiation {
             // msg.sender_index = little_endian(initiator.sender_index)
             sender_idx: peer_index,
             peer_static_public,
@@ -360,7 +360,7 @@ impl Handshake {
         let peer_index = packet.sender_idx;
         let local_index = state.local_index;
 
-        let unencrypted_ephemeral = PublicKey::from(*packet.unencrypted_ephemeral);
+        let unencrypted_ephemeral = PublicKey::from(packet.unencrypted_ephemeral);
         // msg.unencrypted_ephemeral = DH_PUBKEY(responder.ephemeral_private)
         // responder.hash = HASH(responder.hash || msg.unencrypted_ephemeral)
         let mut hash = b2s_hash(&state.hash, unencrypted_ephemeral.as_bytes());
@@ -389,7 +389,7 @@ impl Handshake {
         // responder.hash = HASH(responder.hash || temp2)
         hash = b2s_hash(&hash, &*temp2);
         // msg.encrypted_nothing = AEAD(key, 0, [empty], responder.hash)
-        aead_chacha20_open(&mut [], &key, 0, packet.encrypted_nothing, &hash)?;
+        aead_chacha20_open(&mut [], &key, 0, &packet.encrypted_nothing, &hash)?;
 
         // responder.hash = HASH(responder.hash || msg.encrypted_nothing)
         // hash = b2s_hash(hash, buf[ENC_NOTHING_OFF..ENC_NOTHING_OFF + ENC_NOTHING_SZ]);
@@ -413,7 +413,7 @@ impl Handshake {
 
     pub(super) fn receive_cookie_reply(
         &mut self,
-        packet: PacketCookieReply,
+        packet: CookieReply,
         now: Instant,
     ) -> Result<(), Error> {
         let mac1 = match self.cookies.last_mac1 {
@@ -434,8 +434,8 @@ impl Handshake {
         xaead_open(
             &mut cookie,
             &key,
-            packet.nonce,
-            packet.encrypted_cookie,
+            &packet.nonce,
+            &packet.encrypted_cookie,
             &mac1[0..16],
         )?;
 

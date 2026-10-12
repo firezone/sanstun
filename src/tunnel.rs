@@ -3,8 +3,8 @@ use crate::handshake::Handshake;
 use crate::index::{Index, TunnelId};
 use crate::keys::{PresharedKey, PublicKey, StaticSecret};
 use crate::message::{
-    DATA_OVERHEAD_SZ, HandshakeInit, HandshakeInitiationMessage, HandshakeResponse,
-    HandshakeResponseMessage, KeepaliveMessage, Packet, PacketCookieReply, PacketData,
+    CookieReply, DATA_OVERHEAD_SZ, HandshakeInitiation, HandshakeInitiationMessage,
+    HandshakeResponse, HandshakeResponseMessage, KeepaliveMessage, Packet, TransportData,
 };
 use crate::ring_buffer::RingBuffer;
 use crate::session::{self, Decrypted, PendingDecapsulate, PendingEncapsulate, Role, Sessions};
@@ -237,16 +237,16 @@ impl Tunnel {
     /// decapsulation.
     pub fn decapsulate(
         &mut self,
-        packet: Packet<'_>,
+        packet: Packet,
         now: Instant,
     ) -> Result<Option<PendingDecapsulate>, Error> {
         self.ensure_not_expired()?;
 
         match packet {
-            Packet::HandshakeInit(p) => self.handle_handshake_init(p, now)?,
+            Packet::HandshakeInitiation(p) => self.handle_handshake_init(p, now)?,
             Packet::HandshakeResponse(p) => self.handle_handshake_response(p, now)?,
-            Packet::PacketCookieReply(p) => self.handle_cookie_reply(p, now)?,
-            Packet::PacketData(p) => return self.handle_data(p, now).map(Some),
+            Packet::CookieReply(p) => self.handle_cookie_reply(p, now)?,
+            Packet::TransportData(p) => return self.handle_data(p, now).map(Some),
         }
 
         Ok(None)
@@ -293,7 +293,7 @@ impl Tunnel {
         Ok(Committed::Data { buffer, len })
     }
 
-    fn handle_handshake_init(&mut self, p: HandshakeInit, now: Instant) -> Result<(), Error> {
+    fn handle_handshake_init(&mut self, p: HandshakeInitiation, now: Instant) -> Result<(), Error> {
         let remote_idx = Index::from_peer(p.sender_idx);
 
         tracing::debug!(%remote_idx, "Received handshake_initiation",);
@@ -344,7 +344,7 @@ impl Tunnel {
         Ok(())
     }
 
-    fn handle_cookie_reply(&mut self, p: PacketCookieReply, now: Instant) -> Result<(), Error> {
+    fn handle_cookie_reply(&mut self, p: CookieReply, now: Instant) -> Result<(), Error> {
         let local_idx = Index::from_peer(p.receiver_idx);
 
         tracing::debug!(%local_idx, "Received cookie_reply");
@@ -356,7 +356,11 @@ impl Tunnel {
         Ok(())
     }
 
-    fn handle_data(&self, packet: PacketData, now: Instant) -> Result<PendingDecapsulate, Error> {
+    fn handle_data(
+        &self,
+        packet: TransportData,
+        now: Instant,
+    ) -> Result<PendingDecapsulate, Error> {
         let remote_idx = Index::from_peer(packet.receiver_idx);
 
         let session = self.sessions.in_slot_of(remote_idx).ok_or_else(|| {

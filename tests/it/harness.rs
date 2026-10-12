@@ -533,25 +533,25 @@ impl Sim {
     }
 
     /// Run a datagram through the [`Interface`] of `to`, as if sent by its peer.
-    pub fn try_receive<'a>(&mut self, to: Peer, datagram: &'a [u8]) -> Result<Received<'a>, Error> {
+    pub fn try_receive(&mut self, to: Peer, datagram: &[u8]) -> Result<Received, Error> {
         let src = self.node(to.other()).addr;
         self.try_receive_from(to, datagram, src)
     }
 
     /// Run a datagram through the [`Interface`] of `to`, as if sent from `src`.
-    pub fn try_receive_from<'a>(
+    pub fn try_receive_from(
         &mut self,
         to: Peer,
-        datagram: &'a [u8],
+        datagram: &[u8],
         src: SocketAddr,
-    ) -> Result<Received<'a>, Error> {
+    ) -> Result<Received, Error> {
         let now = self.now;
         self.node_mut(to).interface.receive(src, datagram, now)
     }
 
     /// Like [`Sim::try_receive`], panicking unless the datagram passes.
     #[track_caller]
-    pub fn receive<'a>(&mut self, to: Peer, datagram: &'a [u8]) -> Packet<'a> {
+    pub fn receive(&mut self, to: Peer, datagram: &[u8]) -> Packet {
         match self.try_receive(to, datagram) {
             Ok(Received::Packet(packet)) => packet,
             other => panic!("expected a packet, got {other:?}"),
@@ -565,7 +565,7 @@ impl Sim {
 
         let packet = match node.interface.receive(src, datagram, now) {
             Ok(Received::Packet(packet)) => packet,
-            Ok(Received::CookieReply(reply)) => return vec![Out::Net(reply.to_vec())],
+            Ok(Received::SendCookieReply(reply)) => return vec![Out::Net(reply.to_vec())],
             Err(e) => return vec![Out::Err(e)],
         };
 
