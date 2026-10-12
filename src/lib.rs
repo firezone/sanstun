@@ -6,9 +6,9 @@
 //!
 //! - **Cryptokey routing:** a decrypted packet only proves which peer sent it. Drop it unless its
 //!   source address is one that peer is allowed to use.
-//! - **Handshake routing:** [`HandshakeInit::peer_static_public`] is authenticated, but anyone
-//!   can generate a key pair and replays are only rejected for keys we created a tunnel for. Do
-//!   not create a tunnel for an unknown key based on it.
+//! - **Handshake routing:** [`HandshakeInitiation::peer_static_public`] is authenticated, but
+//!   anyone can generate a key pair and replays are only rejected for keys we created a tunnel
+//!   for. Do not create a tunnel for an unknown key based on it.
 //! - **Endpoint updates:** anyone can send a datagram from any address. Only move a peer's endpoint
 //!   to the source address of a message once [`Tunnel::decapsulate`] accepted its handshake or
 //!   [`Tunnel::commit_decrypted`] accepted its data.
@@ -45,8 +45,8 @@ pub use index::TunnelId;
 pub use interface::{Interface, Received};
 pub use keys::{PresharedKey, PublicKey, StaticSecret};
 pub use message::{
-    CookieReplyMessage, DataMessage, HandshakeInit, HandshakeInitiationMessage, HandshakeResponse,
-    HandshakeResponseMessage, KeepaliveMessage, Packet, PacketCookieReply, PacketData,
+    CookieReply, CookieReplyMessage, DataMessage, HandshakeInitiation, HandshakeInitiationMessage,
+    HandshakeResponse, HandshakeResponseMessage, KeepaliveMessage, Packet, TransportData,
 };
 pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
 pub use tunnel::{Committed, Event, Keepalive, Tunnel, TunnelConfig};

@@ -2,9 +2,9 @@ use crate::crypto::{b2s_hash, b2s_keyed_mac_16, b2s_keyed_mac_16_2, xaead_seal};
 use crate::handshake::{LABEL_COOKIE, LABEL_MAC1, parse_handshake_init};
 use crate::index::TunnelIndices;
 use crate::message::{
-    COOKIE_REPLY, COOKIE_REPLY_SZ, DATA, DATA_OVERHEAD_SZ, HANDSHAKE_INIT, HANDSHAKE_INIT_SZ,
-    HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeResponse, Macs, Packet, PacketCookieReply,
-    PacketData,
+    COOKIE_REPLY, COOKIE_REPLY_SZ, CookieReply, DATA, DATA_OVERHEAD_SZ, HANDSHAKE_INIT,
+    HANDSHAKE_INIT_SZ, HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeResponse, Macs, Packet,
+    TransportData,
 };
 use crate::ratelimiter::RateLimiter;
 use crate::tai64n::{Tai64N, TimeStamper};
@@ -151,12 +151,12 @@ impl Interface {
     /// [`Error::WrongTai64nTimestamp`] unless it is newer than the last one accepted from it.
     ///
     /// `src_addr` is the address and port the datagram came from, which cookies are bound to.
-    pub fn receive<'a>(
+    pub fn receive(
         &mut self,
         src_addr: SocketAddr,
-        datagram: &'a [u8],
+        datagram: &[u8],
         now: Instant,
-    ) -> Result<Received<'a>, Error> {
+    ) -> Result<Received, Error> {
         if datagram.len() < 4 {
             return Err(Error::InvalidPacket);
         }
@@ -168,7 +168,7 @@ impl Interface {
             (HANDSHAKE_INIT, HANDSHAKE_INIT_SZ) => {
                 let sender_idx = u32::from_le_bytes(datagram[4..8].try_into().unwrap());
                 if let Some(reply) = self.verify_macs(src_addr, sender_idx, datagram, now)? {
-                    return Ok(Received::CookieReply(reply));
+                    return Ok(Received::SendCookieReply(reply));
                 }
 
                 let init = parse_handshake_init(
@@ -187,12 +187,12 @@ impl Interface {
                     *last = init.timestamp;
                 }
 
-                Packet::HandshakeInit(init)
+                Packet::HandshakeInitiation(init)
             }
             (HANDSHAKE_RESP, HANDSHAKE_RESP_SZ) => {
                 let sender_idx = u32::from_le_bytes(datagram[4..8].try_into().unwrap());
                 if let Some(reply) = self.verify_macs(src_addr, sender_idx, datagram, now)? {
-                    return Ok(Received::CookieReply(reply));
+                    return Ok(Received::SendCookieReply(reply));
                 }
 
                 Packet::HandshakeResponse(HandshakeResponse {
@@ -201,15 +201,17 @@ impl Interface {
                     unencrypted_ephemeral: datagram[12..44]
                         .try_into()
                         .expect("length already checked above"),
-                    encrypted_nothing: &datagram[44..60],
+                    encrypted_nothing: datagram[44..60]
+                        .try_into()
+                        .expect("length already checked above"),
                 })
             }
-            (COOKIE_REPLY, COOKIE_REPLY_SZ) => Packet::PacketCookieReply(PacketCookieReply {
+            (COOKIE_REPLY, COOKIE_REPLY_SZ) => Packet::CookieReply(CookieReply {
                 receiver_idx: u32::from_le_bytes(datagram[4..8].try_into().unwrap()),
                 nonce: datagram[8..32].try_into().unwrap(),
-                encrypted_cookie: &datagram[32..64],
+                encrypted_cookie: datagram[32..64].try_into().unwrap(),
             }),
-            (DATA, DATA_OVERHEAD_SZ..=usize::MAX) => Packet::PacketData(PacketData {
+            (DATA, DATA_OVERHEAD_SZ..=usize::MAX) => Packet::TransportData(TransportData {
                 receiver_idx: u32::from_le_bytes(datagram[4..8].try_into().unwrap()),
                 counter: u64::from_le_bytes(datagram[8..16].try_into().unwrap()),
             }),
@@ -329,12 +331,12 @@ impl Interface {
 
 /// The result of [`Interface::receive`].
 #[derive(Debug)]
-pub enum Received<'a> {
+pub enum Received {
     /// Route the packet to its [`Tunnel`](crate::Tunnel) and hand it to [`Tunnel::decapsulate`].
-    Packet(Packet<'a>),
-    /// Send this cookie reply to the peer: we are under load and its handshake message needs
-    /// a valid cookie.
-    CookieReply(CookieReplyMessage),
+    Packet(Packet),
+    /// Send this cookie reply we generated back to the peer instead of processing its handshake
+    /// message: we are under load and the message lacks a valid cookie.
+    SendCookieReply(CookieReplyMessage),
 }
 
 #[cfg(test)]
@@ -410,7 +412,7 @@ mod tests {
 
         assert!(matches!(
             received,
-            Ok(Received::Packet(Packet::HandshakeInit(_)))
+            Ok(Received::Packet(Packet::HandshakeInitiation(_)))
         ));
         assert!(responder.last_handshake_timestamps.is_empty());
     }
