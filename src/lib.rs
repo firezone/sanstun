@@ -45,8 +45,8 @@ pub use index::TunnelId;
 pub use interface::{Interface, Received};
 pub use keys::{PresharedKey, PublicKey, StaticSecret};
 pub use message::{
-    CookieReply, CookieReplyMessage, DataMessage, HandshakeInitiation, HandshakeInitiationMessage,
-    HandshakeResponse, HandshakeResponseMessage, KeepaliveMessage, Packet, TransportData,
+    CookieReply, DataMessage, Datagram, HandshakeInitiation, HandshakeResponse, ReceivedMessage,
+    TransportData,
 };
 pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
 pub use tunnel::{Committed, Event, Keepalive, Tunnel, TunnelConfig};

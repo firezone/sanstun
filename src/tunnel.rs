@@ -3,8 +3,8 @@ use crate::handshake::Handshake;
 use crate::index::{Index, TunnelId};
 use crate::keys::{PresharedKey, PublicKey, StaticSecret};
 use crate::message::{
-    CookieReply, DATA_OVERHEAD_SZ, HandshakeInitiation, HandshakeInitiationMessage,
-    HandshakeResponse, HandshakeResponseMessage, KeepaliveMessage, Packet, TransportData,
+    CookieReply, DATA_OVERHEAD_SZ, Datagram, HandshakeInitiation, HandshakeResponse,
+    ReceivedMessage, TransportData,
 };
 use crate::ring_buffer::RingBuffer;
 use crate::session::{self, Decrypted, PendingDecapsulate, PendingEncapsulate, Role, Sessions};
@@ -22,9 +22,9 @@ use std::time::{Duration, Instant};
 #[derive(Debug)]
 pub enum Event {
     /// Send this handshake initiation to the peer.
-    HandshakeInitiation(HandshakeInitiationMessage),
+    SendHandshakeInitiation(Datagram),
     /// Send this handshake response to the peer, which sent a valid handshake initiation.
-    HandshakeResponse(HandshakeResponseMessage),
+    SendHandshakeResponse(Datagram),
     /// A keepalive is due: send it with [`Tunnel::encapsulate_keepalive`].
     KeepaliveDue(Keepalive),
     /// The connection expired and all session state was dropped.
@@ -147,7 +147,7 @@ impl Tunnel {
 
     /// Identifies this tunnel among those of its [`Interface`](crate::Interface).
     ///
-    /// Route a received [`Packet`] here if its [`Packet::tunnel_id`] matches.
+    /// Route a [`ReceivedMessage`] here if its [`ReceivedMessage::tunnel_id`] matches.
     pub fn id(&self) -> TunnelId {
         self.sessions.tunnel_id()
     }
@@ -200,7 +200,7 @@ impl Tunnel {
         &mut self,
         _keepalive: Keepalive,
         now: Instant,
-    ) -> Result<KeepaliveMessage, Error> {
+    ) -> Result<Datagram, Error> {
         self.ensure_not_expired()?;
 
         let mut message = [0u8; DATA_OVERHEAD_SZ];
@@ -210,7 +210,7 @@ impl Tunnel {
             .encrypt_payload(&[], &mut message)?;
         self.timers.tick(TimerName::TimeLastPacketSent, now);
 
-        Ok(KeepaliveMessage(message))
+        Ok(Datagram::new(message))
     }
 
     /// The session that data messages are sent on, if one is usable.
@@ -237,16 +237,16 @@ impl Tunnel {
     /// decapsulation.
     pub fn decapsulate(
         &mut self,
-        packet: Packet,
+        message: ReceivedMessage,
         now: Instant,
     ) -> Result<Option<PendingDecapsulate>, Error> {
         self.ensure_not_expired()?;
 
-        match packet {
-            Packet::HandshakeInitiation(p) => self.handle_handshake_init(p, now)?,
-            Packet::HandshakeResponse(p) => self.handle_handshake_response(p, now)?,
-            Packet::CookieReply(p) => self.handle_cookie_reply(p, now)?,
-            Packet::TransportData(p) => return self.handle_data(p, now).map(Some),
+        match message {
+            ReceivedMessage::HandshakeInitiation(p) => self.handle_handshake_init(p, now)?,
+            ReceivedMessage::HandshakeResponse(p) => self.handle_handshake_response(p, now)?,
+            ReceivedMessage::CookieReply(p) => self.handle_cookie_reply(p, now)?,
+            ReceivedMessage::TransportData(p) => return self.handle_data(p, now).map(Some),
         }
 
         Ok(None)
@@ -312,7 +312,7 @@ impl Tunnel {
         tracing::debug!(%local_idx, %remote_idx, "Sending handshake_response");
 
         self.events
-            .push_back(Event::HandshakeResponse(HandshakeResponseMessage(packet)));
+            .push_back(Event::SendHandshakeResponse(Datagram::new(packet)));
 
         Ok(())
     }
@@ -379,7 +379,7 @@ impl Tunnel {
     ///
     /// Returns `None` if a handshake is already in progress or the tunnel
     /// [expired](Tunnel::is_expired).
-    pub fn initiate_handshake(&mut self, now: Instant) -> Option<HandshakeInitiationMessage> {
+    pub fn initiate_handshake(&mut self, now: Instant) -> Option<Datagram> {
         if self.handshake.is_in_progress() {
             return None;
         }
@@ -390,7 +390,7 @@ impl Tunnel {
     /// Starts a new handshake with the peer, replacing one that is in progress.
     ///
     /// Returns `None` once the tunnel [expired](Tunnel::is_expired).
-    pub fn restart_handshake(&mut self, now: Instant) -> Option<HandshakeInitiationMessage> {
+    pub fn restart_handshake(&mut self, now: Instant) -> Option<Datagram> {
         if self.is_expired() {
             return None;
         }
@@ -409,7 +409,7 @@ impl Tunnel {
         }
         self.timers.tick(TimerName::TimeLastPacketSent, now);
 
-        Some(HandshakeInitiationMessage(packet))
+        Some(Datagram::new(packet))
     }
 
     /// Drops all sessions and resets the timers to `now`.
@@ -440,7 +440,7 @@ impl Tunnel {
         if self.timers.take_due_handshake(now).is_some() {
             if let Some(initiation) = self.restart_handshake(now) {
                 self.events
-                    .push_back(Event::HandshakeInitiation(initiation));
+                    .push_back(Event::SendHandshakeInitiation(initiation));
             }
             return;
         }

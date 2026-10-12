@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use sanstun::Error;
-use sanstun::{Committed, Decrypted, Packet, PendingDecapsulate, Tunnel, TunnelConfig};
+use sanstun::{Committed, Decrypted, PendingDecapsulate, ReceivedMessage, Tunnel, TunnelConfig};
 use sanstun::{Interface, Received};
 use sanstun::{PresharedKey, PublicKey, StaticSecret};
 use zeroize::Zeroizing;
@@ -551,10 +551,10 @@ impl Sim {
 
     /// Like [`Sim::try_receive`], panicking unless the datagram passes.
     #[track_caller]
-    pub fn receive(&mut self, to: Peer, datagram: &[u8]) -> Packet {
+    pub fn receive(&mut self, to: Peer, datagram: &[u8]) -> ReceivedMessage {
         match self.try_receive(to, datagram) {
-            Ok(Received::Packet(packet)) => packet,
-            other => panic!("expected a packet, got {other:?}"),
+            Ok(Received::Message(message)) => message,
+            other => panic!("expected a message, got {other:?}"),
         }
     }
 
@@ -563,13 +563,13 @@ impl Sim {
         let node = self.node_mut(to);
         let mut outs = Vec::new();
 
-        let packet = match node.interface.receive(src, datagram, now) {
-            Ok(Received::Packet(packet)) => packet,
+        let message = match node.interface.receive(src, datagram, now) {
+            Ok(Received::Message(message)) => message,
             Ok(Received::SendCookieReply(reply)) => return vec![Out::Net(reply.to_vec())],
             Err(e) => return vec![Out::Err(e)],
         };
 
-        match node.tunn.decapsulate(packet, now) {
+        match node.tunn.decapsulate(message, now) {
             Ok(None) => {}
             Err(e) => outs.push(Out::Err(e)),
             Ok(Some(pending)) => {
@@ -594,8 +594,10 @@ impl Sim {
 
         while let Some(event) = node.tunn.poll_event() {
             match event {
-                sanstun::Event::HandshakeInitiation(packet) => outgoing.push(packet.to_vec()),
-                sanstun::Event::HandshakeResponse(packet) => outgoing.push(packet.to_vec()),
+                sanstun::Event::SendHandshakeInitiation(datagram)
+                | sanstun::Event::SendHandshakeResponse(datagram) => {
+                    outgoing.push(datagram.to_vec())
+                }
                 sanstun::Event::KeepaliveDue(keepalive) => outgoing.push(
                     node.tunn
                         .encapsulate_keepalive(keepalive, now)

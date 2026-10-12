@@ -3,12 +3,12 @@ use crate::handshake::{LABEL_COOKIE, LABEL_MAC1, parse_handshake_init};
 use crate::index::TunnelIndices;
 use crate::message::{
     COOKIE_REPLY, COOKIE_REPLY_SZ, CookieReply, DATA, DATA_OVERHEAD_SZ, HANDSHAKE_INIT,
-    HANDSHAKE_INIT_SZ, HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeResponse, Macs, Packet,
+    HANDSHAKE_INIT_SZ, HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeResponse, Macs, ReceivedMessage,
     TransportData,
 };
 use crate::ratelimiter::RateLimiter;
 use crate::tai64n::{Tai64N, TimeStamper};
-use crate::{CookieReplyMessage, Error, PublicKey, StaticSecret, Tunnel, TunnelConfig};
+use crate::{Datagram, Error, PublicKey, StaticSecret, Tunnel, TunnelConfig};
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -164,7 +164,7 @@ impl Interface {
         // Checks the type, as well as the reserved zero fields
         let packet_type = u32::from_le_bytes(datagram[0..4].try_into().unwrap());
 
-        let packet = match (packet_type, datagram.len()) {
+        let message = match (packet_type, datagram.len()) {
             (HANDSHAKE_INIT, HANDSHAKE_INIT_SZ) => {
                 let sender_idx = u32::from_le_bytes(datagram[4..8].try_into().unwrap());
                 if let Some(reply) = self.verify_macs(src_addr, sender_idx, datagram, now)? {
@@ -187,7 +187,7 @@ impl Interface {
                     *last = init.timestamp;
                 }
 
-                Packet::HandshakeInitiation(init)
+                ReceivedMessage::HandshakeInitiation(init)
             }
             (HANDSHAKE_RESP, HANDSHAKE_RESP_SZ) => {
                 let sender_idx = u32::from_le_bytes(datagram[4..8].try_into().unwrap());
@@ -195,7 +195,7 @@ impl Interface {
                     return Ok(Received::SendCookieReply(reply));
                 }
 
-                Packet::HandshakeResponse(HandshakeResponse {
+                ReceivedMessage::HandshakeResponse(HandshakeResponse {
                     sender_idx,
                     receiver_idx: u32::from_le_bytes(datagram[8..12].try_into().unwrap()),
                     unencrypted_ephemeral: datagram[12..44]
@@ -206,19 +206,21 @@ impl Interface {
                         .expect("length already checked above"),
                 })
             }
-            (COOKIE_REPLY, COOKIE_REPLY_SZ) => Packet::CookieReply(CookieReply {
+            (COOKIE_REPLY, COOKIE_REPLY_SZ) => ReceivedMessage::CookieReply(CookieReply {
                 receiver_idx: u32::from_le_bytes(datagram[4..8].try_into().unwrap()),
                 nonce: datagram[8..32].try_into().unwrap(),
                 encrypted_cookie: datagram[32..64].try_into().unwrap(),
             }),
-            (DATA, DATA_OVERHEAD_SZ..=usize::MAX) => Packet::TransportData(TransportData {
-                receiver_idx: u32::from_le_bytes(datagram[4..8].try_into().unwrap()),
-                counter: u64::from_le_bytes(datagram[8..16].try_into().unwrap()),
-            }),
+            (DATA, DATA_OVERHEAD_SZ..=usize::MAX) => {
+                ReceivedMessage::TransportData(TransportData {
+                    receiver_idx: u32::from_le_bytes(datagram[4..8].try_into().unwrap()),
+                    counter: u64::from_le_bytes(datagram[8..16].try_into().unwrap()),
+                })
+            }
             _ => return Err(Error::InvalidPacket),
         };
 
-        Ok(Received::Packet(packet))
+        Ok(Received::Message(message))
     }
 
     /// Verifies the MACs of a handshake message and applies rate limiting.
@@ -231,7 +233,7 @@ impl Interface {
         sender_idx: u32,
         message: &[u8],
         now: Instant,
-    ) -> Result<Option<CookieReplyMessage>, Error> {
+    ) -> Result<Option<Datagram>, Error> {
         let Macs { msg, mac1, mac2 } = Macs::new(message);
 
         let computed_mac1 = b2s_keyed_mac_16(&self.mac1_key, msg);
@@ -247,7 +249,7 @@ impl Interface {
         let computed_mac2 = b2s_keyed_mac_16_2(&cookie, msg, mac1);
 
         if !bool::from(computed_mac2[..16].ct_eq(mac2)) {
-            return Ok(Some(CookieReplyMessage(
+            return Ok(Some(Datagram::new(
                 self.format_cookie_reply(sender_idx, cookie, mac1),
             )));
         }
@@ -332,11 +334,11 @@ impl Interface {
 /// The result of [`Interface::receive`].
 #[derive(Debug)]
 pub enum Received {
-    /// Route the packet to its [`Tunnel`](crate::Tunnel) and hand it to [`Tunnel::decapsulate`].
-    Packet(Packet),
+    /// Route the message to its [`Tunnel`](crate::Tunnel) and hand it to [`Tunnel::decapsulate`].
+    Message(ReceivedMessage),
     /// Send this cookie reply we generated back to the peer instead of processing its handshake
     /// message: we are under load and the message lacks a valid cookie.
-    SendCookieReply(CookieReplyMessage),
+    SendCookieReply(Datagram),
 }
 
 #[cfg(test)]
@@ -412,7 +414,7 @@ mod tests {
 
         assert!(matches!(
             received,
-            Ok(Received::Packet(Packet::HandshakeInitiation(_)))
+            Ok(Received::Message(ReceivedMessage::HandshakeInitiation(_)))
         ));
         assert!(responder.last_handshake_timestamps.is_empty());
     }
