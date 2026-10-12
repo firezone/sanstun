@@ -4,7 +4,7 @@ use super::{
 };
 use crate::crypto::nonce;
 use crate::errors::Error;
-use crate::message::{AEAD_TAG_SZ, DATA, DATA_HEADER_SZ, DataMessage, PacketData};
+use crate::message::{AEAD_TAG_SZ, DATA, DATA_HEADER_SZ, DataMessage, TransportData};
 use crate::replay::ReceivingKeyCounterValidator;
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
 use std::sync::Arc;
@@ -152,7 +152,7 @@ impl Session {
     /// Checks the counter of a data message, deferring its decryption.
     pub(super) fn prepare_receive_packet_data(
         &self,
-        packet: PacketData,
+        packet: TransportData,
     ) -> Result<PendingDecapsulate, Error> {
         if Index::from_peer(packet.receiver_idx) != self.receiving_index {
             return Err(Error::WrongIndex);
@@ -583,7 +583,7 @@ mod tests {
         message[8] = 1;
 
         let pending = session
-            .prepare_receive_packet_data(PacketData {
+            .prepare_receive_packet_data(TransportData {
                 receiver_idx: 0,
                 counter: 0,
             })

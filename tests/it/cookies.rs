@@ -34,7 +34,7 @@ fn interface_replies_with_a_cookie_before_any_tunnel_is_involved() {
     let init = sim.initiate_handshake(A);
     let result = sim.try_receive(B, &init);
 
-    let Ok(Received::CookieReply(reply)) = result else {
+    let Ok(Received::SendCookieReply(reply)) = result else {
         panic!("expected a cookie reply, got {result:?}");
     };
     assert_eq!(classify(&reply), Kind::CookieReply);
@@ -269,7 +269,7 @@ fn addr(s: &str) -> SocketAddr {
 fn fetch_cookie(sim: &mut Sim, src: SocketAddr) {
     let init = sim.force_handshake_initiation(A);
     let result = sim.try_receive_from(B, &init, src);
-    let Ok(Received::CookieReply(reply)) = result else {
+    let Ok(Received::SendCookieReply(reply)) = result else {
         panic!("expected a cookie reply, got {result:?}");
     };
 
@@ -281,7 +281,7 @@ fn fetch_cookie(sim: &mut Sim, src: SocketAddr) {
 #[track_caller]
 fn solicit_cookie_reply(sim: &mut Sim, init: &[u8], src: SocketAddr) -> Vec<u8> {
     for _ in 0..100 {
-        if let Ok(Received::CookieReply(reply)) = sim.try_receive_from(B, init, src) {
+        if let Ok(Received::SendCookieReply(reply)) = sim.try_receive_from(B, init, src) {
             return reply.to_vec();
         }
     }

@@ -39,7 +39,7 @@ impl<'a> Macs<'a> {
 }
 
 /// An authenticated handshake initiation, ready to be answered by its [`Tunnel`](crate::Tunnel).
-pub struct HandshakeInit {
+pub struct HandshakeInitiation {
     pub(crate) sender_idx: u32,
     pub(crate) peer_static_public: PublicKey,
     pub(crate) peer_ephemeral_public: PublicKey,
@@ -49,16 +49,16 @@ pub struct HandshakeInit {
     pub(crate) timestamp: Tai64N,
 }
 
-impl std::fmt::Debug for HandshakeInit {
+impl std::fmt::Debug for HandshakeInitiation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HandshakeInit")
+        f.debug_struct("HandshakeInitiation")
             .field("sender_idx", &self.sender_idx)
             .field("peer_static_public", &self.peer_static_public())
             .finish_non_exhaustive()
     }
 }
 
-impl HandshakeInit {
+impl HandshakeInitiation {
     /// The initiator's static public key, to look up the [`Tunnel`](crate::Tunnel) it belongs to.
     ///
     /// [`Interface::receive`](crate::Interface::receive) has authenticated it: the initiator
@@ -74,22 +74,22 @@ impl HandshakeInit {
 }
 
 #[derive(Debug)]
-pub struct HandshakeResponse<'a> {
+pub struct HandshakeResponse {
     pub(crate) sender_idx: u32,
     pub(crate) receiver_idx: u32,
-    pub(crate) unencrypted_ephemeral: &'a [u8; 32],
-    pub(crate) encrypted_nothing: &'a [u8],
+    pub(crate) unencrypted_ephemeral: [u8; 32],
+    pub(crate) encrypted_nothing: [u8; 16],
 }
 
 #[derive(Debug)]
-pub struct PacketCookieReply<'a> {
+pub struct CookieReply {
     pub(crate) receiver_idx: u32,
-    pub(crate) nonce: &'a [u8; 24],
-    pub(crate) encrypted_cookie: &'a [u8],
+    pub(crate) nonce: [u8; 24],
+    pub(crate) encrypted_cookie: [u8; 32],
 }
 
 #[derive(Debug)]
-pub struct PacketData {
+pub struct TransportData {
     pub(crate) receiver_idx: u32,
     pub(crate) counter: u64,
 }
@@ -97,24 +97,66 @@ pub struct PacketData {
 /// A message received from the network.
 ///
 /// It can only be obtained from [`Interface::receive`](crate::Interface::receive), which verifies it.
+/// Neither it nor the messages it carries can be constructed or duplicated otherwise:
+///
+/// ```compile_fail
+/// let _ = sanstun::HandshakeInitiation {
+///     sender_idx: 0,
+///     peer_static_public: todo!(),
+///     peer_ephemeral_public: todo!(),
+///     chaining_key: todo!(),
+///     hash: [0; 32],
+///     timestamp: todo!(),
+/// };
+/// ```
+///
+/// ```compile_fail
+/// let _ = sanstun::HandshakeResponse {
+///     sender_idx: 0,
+///     receiver_idx: 0,
+///     unencrypted_ephemeral: [0; 32],
+///     encrypted_nothing: [0; 16],
+/// };
+/// ```
+///
+/// ```compile_fail
+/// let _ = sanstun::CookieReply {
+///     receiver_idx: 0,
+///     nonce: [0; 24],
+///     encrypted_cookie: [0; 32],
+/// };
+/// ```
+///
+/// ```compile_fail
+/// let _ = sanstun::TransportData {
+///     receiver_idx: 0,
+///     counter: 0,
+/// };
+/// ```
+///
+/// ```compile_fail
+/// fn duplicate(packet: sanstun::Packet) -> (sanstun::Packet, sanstun::Packet) {
+///     (packet.clone(), packet)
+/// }
+/// ```
 #[derive(Debug)]
-pub enum Packet<'a> {
-    HandshakeInit(HandshakeInit),
-    HandshakeResponse(HandshakeResponse<'a>),
-    PacketCookieReply(PacketCookieReply<'a>),
-    PacketData(PacketData),
+pub enum Packet {
+    HandshakeInitiation(HandshakeInitiation),
+    HandshakeResponse(HandshakeResponse),
+    CookieReply(CookieReply),
+    TransportData(TransportData),
 }
 
-impl Packet<'_> {
+impl Packet {
     /// The [`Tunnel::id`](crate::Tunnel::id) of the tunnel this message is addressed to.
     ///
-    /// `None` for a handshake initiation, which is routed by [`HandshakeInit::peer_static_public`] instead.
+    /// `None` for a handshake initiation, which is routed by [`HandshakeInitiation::peer_static_public`] instead.
     pub fn tunnel_id(&self) -> Option<TunnelId> {
         let receiver_idx = match self {
-            Packet::HandshakeInit(_) => return None,
+            Packet::HandshakeInitiation(_) => return None,
             Packet::HandshakeResponse(p) => p.receiver_idx,
-            Packet::PacketCookieReply(p) => p.receiver_idx,
-            Packet::PacketData(p) => p.receiver_idx,
+            Packet::CookieReply(p) => p.receiver_idx,
+            Packet::TransportData(p) => p.receiver_idx,
         };
 
         Some(Index::from_peer(receiver_idx).tunnel_id())
