@@ -67,11 +67,7 @@ fn expired_tunnel_stays_expired() {
     sim.heal_link();
     let now = sim.now;
     assert!(sim.tunn(A).poll_timeout().is_none());
-    assert!(
-        sim.tunn_mut(A)
-            .format_handshake_initiation(true, now)
-            .is_none()
-    );
+    assert!(sim.tunn_mut(A).restart_handshake(now).is_none());
     assert!(matches!(
         sim.try_encapsulate(A, &ipv4_packet(b"data")),
         Err(Error::ConnectionExpired)
