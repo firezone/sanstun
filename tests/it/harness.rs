@@ -646,23 +646,23 @@ impl Sim {
     /// Create (but do not deliver) a handshake initiation from `peer`.
     #[track_caller]
     pub fn initiate_handshake(&mut self, peer: Peer) -> Vec<u8> {
-        self.handshake_initiation(peer, false)
+        let now = self.now;
+        self.node_mut(peer)
+            .tunn
+            .initiate_handshake(now)
             .expect("a handshake initiation to be emitted")
+            .to_vec()
     }
 
     /// Like [`Sim::initiate_handshake`], but also when one is already in flight.
     #[track_caller]
     pub fn force_handshake_initiation(&mut self, peer: Peer) -> Vec<u8> {
-        self.handshake_initiation(peer, true)
-            .expect("a handshake initiation to be emitted")
-    }
-
-    fn handshake_initiation(&mut self, peer: Peer, force: bool) -> Option<Vec<u8>> {
         let now = self.now;
         self.node_mut(peer)
             .tunn
-            .format_handshake_initiation(force, now)
-            .map(|p| p.to_vec())
+            .restart_handshake(now)
+            .expect("a handshake initiation to be emitted")
+            .to_vec()
     }
 
     /// Complete a full handshake initiated by `A`.

@@ -406,7 +406,7 @@ mod tests {
         let mut tunnel = initiator
             .new_tunnel(responder.static_public(), TunnelConfig::default(), now)
             .unwrap();
-        let init = tunnel.format_handshake_initiation(false, now).unwrap();
+        let init = tunnel.initiate_handshake(now).unwrap();
 
         let received = responder.receive("1.2.3.4:51820".parse().unwrap(), &init, now);
 

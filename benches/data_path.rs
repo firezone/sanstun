@@ -143,7 +143,7 @@ fn established_tunnels(addr: SocketAddr, now: Instant) -> (Tunnel, Interface, Tu
         .new_tunnel(interface_a.static_public(), TunnelConfig::default(), now)
         .unwrap();
 
-    let initiation = a.format_handshake_initiation(false, now).unwrap();
+    let initiation = a.initiate_handshake(now).unwrap();
     let Received::Packet(packet) = interface_b.receive(addr, &initiation, now).unwrap() else {
         unreachable!()
     };

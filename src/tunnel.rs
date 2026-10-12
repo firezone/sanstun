@@ -375,16 +375,23 @@ impl Tunnel {
         session.prepare_receive_packet_data(packet)
     }
 
-    /// Formats a new handshake initiation message.
+    /// Starts a handshake with the peer.
     ///
-    /// If `force_resend` is true will send a new handshake, even if a handshake is already in progress.
+    /// Returns `None` if a handshake is already in progress or the tunnel
+    /// [expired](Tunnel::is_expired).
+    pub fn initiate_handshake(&mut self, now: Instant) -> Option<HandshakeInitiationMessage> {
+        if self.handshake.is_in_progress() {
+            return None;
+        }
+
+        self.restart_handshake(now)
+    }
+
+    /// Starts a new handshake with the peer, replacing one that is in progress.
+    ///
     /// Returns `None` once the tunnel [expired](Tunnel::is_expired).
-    pub fn format_handshake_initiation(
-        &mut self,
-        force_resend: bool,
-        now: Instant,
-    ) -> Option<HandshakeInitiationMessage> {
-        if self.is_expired() || (self.handshake.is_in_progress() && !force_resend) {
+    pub fn restart_handshake(&mut self, now: Instant) -> Option<HandshakeInitiationMessage> {
+        if self.is_expired() {
             return None;
         }
 
@@ -431,7 +438,7 @@ impl Tunnel {
         self.timers.tick(TimerName::TimeLastUpdate, now);
 
         if self.timers.take_due_handshake(now).is_some() {
-            if let Some(initiation) = self.format_handshake_initiation(true, now) {
+            if let Some(initiation) = self.restart_handshake(now) {
                 self.events
                     .push_back(Event::HandshakeInitiation(initiation));
             }
