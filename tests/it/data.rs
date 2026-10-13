@@ -34,14 +34,14 @@ fn data_messages_are_zero_padded_to_a_multiple_of_16_bytes() {
         let datagram = sim.encapsulate(A, &plaintext);
         let now = sim.now;
         let message = sim.receive(B, &datagram);
-        let Ok(Some(pending)) = sim.tunn_mut(B).decapsulate(message, now) else {
+        let Ok(Some(pending)) = sim.tunn_mut(B).begin_decapsulate(message, now) else {
             panic!("expected a data message");
         };
         let decrypted = pending.decrypt(&datagram, vec![0u8; 4096]);
         let Ok(Committed::Data {
             buffer,
             len: decrypted_len,
-        }) = sim.tunn_mut(B).commit_decrypted(decrypted, now)
+        }) = sim.tunn_mut(B).commit_decapsulate(decrypted, now)
         else {
             panic!("expected a data payload");
         };
@@ -90,7 +90,7 @@ fn handshake_response_leaves_the_keepalive_to_the_caller() {
 
     let message = sim.receive(A, &response);
     let tunn = sim.tunn_mut(A);
-    assert!(tunn.decapsulate(message, now).unwrap().is_none());
+    assert!(tunn.begin_decapsulate(message, now).unwrap().is_none());
     let event = tunn.poll_event();
     let Some(Event::KeepaliveDue(keepalive)) = event else {
         panic!("expected a due keepalive, got {event:?}");

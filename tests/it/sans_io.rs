@@ -155,7 +155,7 @@ fn different_seeds_produce_different_jitter() {
     assert_ne!(first_jitter(1), first_jitter(2));
 }
 
-/// `encapsulate_data` is advertised as side-effect free when no session
+/// `begin_encapsulate` is advertised as side-effect free when no session
 /// exists: no packet is queued and no handshake is started.
 #[test]
 fn encapsulate_data_has_no_side_effects_without_a_session() {

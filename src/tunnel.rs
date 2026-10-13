@@ -182,7 +182,7 @@ impl Tunnel {
     }
 
     /// Prepares a data message, deferring writing and encrypting it to the returned [`PendingEncapsulate`].
-    pub fn encapsulate_data(&mut self, now: Instant) -> Result<PendingEncapsulate, Error> {
+    pub fn begin_encapsulate(&mut self, now: Instant) -> Result<PendingEncapsulate, Error> {
         self.ensure_not_expired()?;
 
         let pending = self
@@ -233,9 +233,9 @@ impl Tunnel {
     ///
     /// Handshake messages and cookie replies are processed right away and return `None`. The
     /// decryption of a data message is deferred to the returned [`PendingDecapsulate`]. Hand
-    /// the [`Decrypted`] message back to [`Tunnel::commit_decrypted`] to complete the
+    /// the [`Decrypted`] message back to [`Tunnel::commit_decapsulate`] to complete the
     /// decapsulation.
-    pub fn decapsulate(
+    pub fn begin_decapsulate(
         &mut self,
         message: ReceivedMessage,
         now: Instant,
@@ -253,7 +253,7 @@ impl Tunnel {
     }
 
     /// Completes the decapsulation of a decrypted data message to obtain the plaintext.
-    pub fn commit_decrypted<B: AsRef<[u8]>>(
+    pub fn commit_decapsulate<B: AsRef<[u8]>>(
         &mut self,
         decrypted: Decrypted<B>,
         now: Instant,
@@ -610,7 +610,7 @@ impl Tunnel {
         }
     }
 
-    /// Returns the next [`Event`] queued by [`Tunnel::handle_timeout`] or [`Tunnel::decapsulate`].
+    /// Returns the next [`Event`] queued by [`Tunnel::handle_timeout`] or [`Tunnel::begin_decapsulate`].
     pub fn poll_event(&mut self) -> Option<Event> {
         self.events.pop_front()
     }
