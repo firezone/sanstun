@@ -45,8 +45,7 @@
 //! let Received::Message(message) = bob.receive(alice_addr, &data, now)? else {
 //!     unreachable!()
 //! };
-//! let pending = bob_to_alice.decapsulate(message, now)?.unwrap();
-//! let decrypted = pending.decrypt(&data, [0; 64]);
+//! let decrypted = bob_to_alice.decapsulate(message, now)?.unwrap().decrypt(&data, [0; 64]);
 //! let Committed::Data { buffer, len } = bob_to_alice.commit_decrypted(decrypted, now)? else {
 //!     unreachable!()
 //! };
