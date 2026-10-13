@@ -28,7 +28,11 @@ const COOKIE_NONCE_SIZE: usize = 24;
 
 type Cookie = [u8; COOKIE_SIZE];
 
-/// The entry point for every datagram received from the network for one static key.
+/// The entry point to sanstun: like a WireGuard interface, it holds the static key that all of its
+/// tunnels share.
+///
+/// Create a [`Tunnel`] for each peer with [`Interface::new_tunnel`] and pass every datagram
+/// received from the network to [`Interface::receive`] before routing it to its [`Tunnel`].
 pub struct Interface {
     static_private: StaticSecret,
     static_public: PublicKey,
