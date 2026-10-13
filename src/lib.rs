@@ -24,15 +24,20 @@
 //!
 //! // Alice initiates the handshake and Bob responds.
 //! let initiation = alice_to_bob.initiate_handshake(now).unwrap();
-//! let Received::Message(message) = bob.receive(alice_addr, &initiation, now)? else {
-//!     unreachable!()
+//! let message = match bob.receive(alice_addr, &initiation, now)? {
+//!     Received::Message(message) => message,
+//!     // Under load, send the cookie reply back instead of processing the message.
+//!     Received::SendCookieReply(_) => unreachable!("not under load"),
 //! };
 //! bob_to_alice.decapsulate(message, now)?;
-//! let Some(Event::SendHandshakeResponse(response)) = bob_to_alice.poll_event() else {
-//!     unreachable!()
+//! let response = match bob_to_alice.poll_event() {
+//!     Some(Event::SendHandshakeResponse(response)) => response,
+//!     // An event loop sends every datagram an event carries and sends due keepalives.
+//!     event => unreachable!("only the response is queued, got {event:?}"),
 //! };
-//! let Received::Message(message) = alice.receive(bob_addr, &response, now)? else {
-//!     unreachable!()
+//! let message = match alice.receive(bob_addr, &response, now)? {
+//!     Received::Message(message) => message,
+//!     Received::SendCookieReply(_) => unreachable!("not under load"),
 //! };
 //! alice_to_bob.decapsulate(message, now)?;
 //!
@@ -42,16 +47,17 @@
 //! let data = alice_to_bob.encapsulate_data(now)?.encrypt(packet, &mut buf)?;
 //!
 //! // ... and Bob decrypts it.
-//! let Received::Message(message) = bob.receive(alice_addr, &data, now)? else {
-//!     unreachable!()
+//! let message = match bob.receive(alice_addr, &data, now)? {
+//!     Received::Message(message) => message,
+//!     Received::SendCookieReply(_) => unreachable!("not under load"),
 //! };
 //! let decrypted = bob_to_alice.decapsulate(message, now)?.unwrap().decrypt(&data, [0; 64]);
-//! let Committed::Data { buffer, len } = bob_to_alice.commit_decrypted(decrypted, now)? else {
-//!     unreachable!()
-//! };
-//!
-//! // The plaintext is zero-padded to a multiple of 16 bytes.
-//! assert_eq!(&buffer[..len], b"an IP packet\0\0\0\0");
+//! match bob_to_alice.commit_decrypted(decrypted, now)? {
+//!     // The plaintext is zero-padded to a multiple of 16 bytes.
+//!     Committed::Data { buffer, len } => assert_eq!(&buffer[..len], b"an IP packet\0\0\0\0"),
+//!     // A keepalive carries no packet to forward.
+//!     Committed::Keepalive => unreachable!("Alice sent a packet"),
+//! }
 //! # Ok::<(), sanstun::Error>(())
 //! ```
 //!
