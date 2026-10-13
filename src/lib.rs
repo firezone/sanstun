@@ -29,7 +29,7 @@
 //!     // Under load, send the cookie reply back instead of processing the message.
 //!     Received::SendCookieReply(_) => unreachable!("not under load"),
 //! };
-//! bob_to_alice.decapsulate(message, now)?;
+//! bob_to_alice.begin_decapsulate(message, now)?;
 //! let response = match bob_to_alice.poll_event() {
 //!     Some(Event::SendHandshakeResponse(response)) => response,
 //!     // An event loop sends every datagram an event carries and sends due keepalives.
@@ -39,20 +39,20 @@
 //!     Received::Message(message) => message,
 //!     Received::SendCookieReply(_) => unreachable!("not under load"),
 //! };
-//! alice_to_bob.decapsulate(message, now)?;
+//! alice_to_bob.begin_decapsulate(message, now)?;
 //!
 //! // Alice encrypts a packet ...
 //! let packet = b"an IP packet";
 //! let mut buf = [0; 64];
-//! let data = alice_to_bob.encapsulate_data(now)?.encrypt(packet, &mut buf)?;
+//! let data = alice_to_bob.begin_encapsulate(now)?.encrypt(packet, &mut buf)?;
 //!
 //! // ... and Bob decrypts it.
 //! let message = match bob.receive(alice_addr, &data, now)? {
 //!     Received::Message(message) => message,
 //!     Received::SendCookieReply(_) => unreachable!("not under load"),
 //! };
-//! let decrypted = bob_to_alice.decapsulate(message, now)?.unwrap().decrypt(&data, [0; 64]);
-//! match bob_to_alice.commit_decrypted(decrypted, now)? {
+//! let decrypted = bob_to_alice.begin_decapsulate(message, now)?.unwrap().decrypt(&data, [0; 64]);
+//! match bob_to_alice.commit_decapsulate(decrypted, now)? {
 //!     // The plaintext is zero-padded to a multiple of 16 bytes.
 //!     Committed::Data { buffer, len } => assert_eq!(&buffer[..len], b"an IP packet\0\0\0\0"),
 //!     // A keepalive carries no packet to forward.
@@ -71,8 +71,8 @@
 //!   anyone can generate a key pair and replays are only rejected for keys we created a tunnel
 //!   for. Do not create a tunnel for an unknown key based on it.
 //! - **Endpoint updates:** anyone can send a datagram from any address. Only move a peer's endpoint
-//!   to the source address of a message once [`Tunnel::decapsulate`] accepted its handshake or
-//!   [`Tunnel::commit_decrypted`] accepted its data.
+//!   to the source address of a message once [`Tunnel::begin_decapsulate`] accepted its handshake or
+//!   [`Tunnel::commit_decapsulate`] accepted its data.
 //! - **Bounded queues:** a [`PendingDecapsulate`] is cheap to create but costly to decrypt. When
 //!   deferring encryption or decryption to other threads, bound the queues in between so a flood of
 //!   messages cannot exhaust memory.

@@ -1,8 +1,8 @@
 //! Measures each step of sending and receiving a data message on its own.
 //!
-//! `encapsulate`, `decapsulate` and `commit` need `&mut Tunnel` and thus run on the thread that
-//! owns it, while `encrypt` and `decrypt` can be deferred to other threads. Their ratio bounds how
-//! much handing the crypto to other threads can gain.
+//! `begin_encapsulate`, `begin_decapsulate` and `commit_decapsulate` need `&mut Tunnel` and thus run
+//! on the thread that owns it, while `encrypt` and `decrypt` can be deferred to other threads. Their
+//! ratio bounds how much handing the crypto to other threads can gain.
 
 use std::cell::RefCell;
 use std::hint::black_box;
@@ -27,13 +27,13 @@ fn bench_data_path(c: &mut Criterion) {
         let payload = vec![0xab; size];
         let mut buf = vec![0; size + 64];
 
-        group.bench_function("encapsulate", |b| {
-            b.iter(|| black_box(sender.encapsulate_data(now).unwrap()))
+        group.bench_function("begin_encapsulate", |b| {
+            b.iter(|| black_box(sender.begin_encapsulate(now).unwrap()))
         });
 
         group.bench_function("encrypt", |b| {
             b.iter_batched(
-                || sender.encapsulate_data(now).unwrap(),
+                || sender.begin_encapsulate(now).unwrap(),
                 |pending| black_box(pending.encrypt(&payload, &mut buf).unwrap().len()),
                 BatchSize::SmallInput,
             )
@@ -42,9 +42,9 @@ fn bench_data_path(c: &mut Criterion) {
         // A message that is not committed can be decapsulated and decrypted again and again.
         let message = data_message(&mut sender, &payload, now);
 
-        group.bench_function("decapsulate", |b| {
+        group.bench_function("begin_decapsulate", |b| {
             b.iter(|| {
-                black_box(decapsulate(
+                black_box(begin_decapsulate(
                     &mut receiving_interface,
                     &mut receiver.borrow_mut(),
                     addr,
@@ -57,7 +57,7 @@ fn bench_data_path(c: &mut Criterion) {
         group.bench_function("decrypt", |b| {
             b.iter_batched(
                 || {
-                    decapsulate(
+                    begin_decapsulate(
                         &mut receiving_interface,
                         &mut receiver.borrow_mut(),
                         addr,
@@ -73,12 +73,12 @@ fn bench_data_path(c: &mut Criterion) {
         });
 
         // Committing marks the counter as received, so every iteration needs a fresh message.
-        group.bench_function("commit", |b| {
+        group.bench_function("commit_decapsulate", |b| {
             b.iter_batched(
                 || {
                     let message = data_message(&mut sender, &payload, now);
 
-                    decapsulate(
+                    begin_decapsulate(
                         &mut receiving_interface,
                         &mut receiver.borrow_mut(),
                         addr,
@@ -91,7 +91,7 @@ fn bench_data_path(c: &mut Criterion) {
                     black_box(
                         receiver
                             .borrow_mut()
-                            .commit_decrypted(decrypted, now)
+                            .commit_decapsulate(decrypted, now)
                             .unwrap(),
                     )
                 },
@@ -106,7 +106,7 @@ fn bench_data_path(c: &mut Criterion) {
 fn data_message(tunnel: &mut Tunnel, payload: &[u8], now: Instant) -> Vec<u8> {
     let mut message = vec![0; payload.len() + 64];
     let len = tunnel
-        .encapsulate_data(now)
+        .begin_encapsulate(now)
         .unwrap()
         .encrypt(payload, &mut message)
         .unwrap()
@@ -116,7 +116,7 @@ fn data_message(tunnel: &mut Tunnel, payload: &[u8], now: Instant) -> Vec<u8> {
     message
 }
 
-fn decapsulate(
+fn begin_decapsulate(
     interface: &mut Interface,
     tunnel: &mut Tunnel,
     addr: SocketAddr,
@@ -127,7 +127,7 @@ fn decapsulate(
         unreachable!()
     };
 
-    tunnel.decapsulate(message, now).unwrap().unwrap()
+    tunnel.begin_decapsulate(message, now).unwrap().unwrap()
 }
 
 /// Completes a handshake between two tunnels, returning the initiator and the responder together
@@ -147,7 +147,7 @@ fn established_tunnels(addr: SocketAddr, now: Instant) -> (Tunnel, Interface, Tu
     let Received::Message(message) = interface_b.receive(addr, &initiation, now).unwrap() else {
         unreachable!()
     };
-    b.decapsulate(message, now).unwrap();
+    b.begin_decapsulate(message, now).unwrap();
 
     let Some(Event::SendHandshakeResponse(response)) = b.poll_event() else {
         unreachable!()
@@ -155,7 +155,7 @@ fn established_tunnels(addr: SocketAddr, now: Instant) -> (Tunnel, Interface, Tu
     let Received::Message(message) = interface_a.receive(addr, &response, now).unwrap() else {
         unreachable!()
     };
-    a.decapsulate(message, now).unwrap();
+    a.begin_decapsulate(message, now).unwrap();
 
     (a, interface_b, b)
 }

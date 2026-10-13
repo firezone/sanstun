@@ -569,7 +569,7 @@ impl Sim {
             Err(e) => return vec![Out::Err(e)],
         };
 
-        match node.tunn.decapsulate(message, now) {
+        match node.tunn.begin_decapsulate(message, now) {
             Ok(None) => {}
             Err(e) => outs.push(Out::Err(e)),
             Ok(Some(pending)) => {
@@ -620,7 +620,7 @@ impl Sim {
     ) -> Result<PendingDecapsulate, Error> {
         let now = self.now;
         let packet = self.receive(to, datagram);
-        let pending = self.tunn_mut(to).decapsulate(packet, now)?;
+        let pending = self.tunn_mut(to).begin_decapsulate(packet, now)?;
 
         Ok(pending.expect("a data message"))
     }
@@ -633,7 +633,7 @@ impl Sim {
         decrypted: Decrypted<B>,
     ) -> Result<Option<Vec<u8>>, Error> {
         let now = self.now;
-        match self.tunn_mut(to).commit_decrypted(decrypted, now)? {
+        match self.tunn_mut(to).commit_decapsulate(decrypted, now)? {
             Committed::Data { buffer, len } => {
                 let payload = &buffer.as_ref()[..len];
 
@@ -698,7 +698,7 @@ impl Sim {
         let packet = self
             .node_mut(from)
             .tunn
-            .encapsulate_data(now)?
+            .begin_encapsulate(now)?
             .encrypt(ip_packet, &mut buf)?;
         Ok(packet.to_vec())
     }

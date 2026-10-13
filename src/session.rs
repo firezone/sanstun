@@ -448,7 +448,7 @@ impl PendingDecapsulate {
     ///
     /// `message` is the data message this [`PendingDecapsulate`] was prepared from; anything else fails
     /// to authenticate. The returned [`Decrypted`] message owns `dst`; hand it to
-    /// [`Tunnel::commit_decrypted`](crate::Tunnel::commit_decrypted) to obtain the plaintext bytes.
+    /// [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate) to obtain the plaintext bytes.
     pub fn decrypt<B: AsMut<[u8]>>(self, message: &[u8], mut dst: B) -> Decrypted<B> {
         let plaintext_len = self.decrypt_in_place(message, dst.as_mut());
 
@@ -503,7 +503,7 @@ fn data_header(receiver_index: [u8; 4], counter: u64) -> [u8; DATA_HEADER_SZ] {
 }
 
 /// A data message decrypted by [`PendingDecapsulate::decrypt`], to be committed to the
-/// [`Tunnel`](crate::Tunnel) with [`Tunnel::commit_decrypted`](crate::Tunnel::commit_decrypted).
+/// [`Tunnel`](crate::Tunnel) with [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate).
 #[must_use = "the data message is not accepted until it is committed to the `Tunnel`"]
 pub struct Decrypted<B> {
     pub(crate) receiving_index: Index,
