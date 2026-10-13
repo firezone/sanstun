@@ -1,5 +1,66 @@
 //! A sans-IO implementation of the WireGuard protocol, acting as both initiator and responder.
 //!
+//! # Example
+//!
+//! Alice and Bob complete a handshake and Alice sends Bob a packet. In a real application, an
+//! event loop carries each message over UDP and drives the timers with [`Tunnel::poll_timeout`]
+//! and [`Tunnel::handle_timeout`].
+//!
+//! ```
+//! use std::time::{Instant, SystemTime, UNIX_EPOCH};
+//!
+//! use sanstun::{Committed, Event, Interface, Received, TunnelConfig};
+//! use zeroize::Zeroizing;
+//!
+//! let now = Instant::now();
+//! let unix = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+//! let alice_addr = "192.0.2.1:51820".parse().unwrap();
+//! let bob_addr = "192.0.2.2:51820".parse().unwrap();
+//!
+//! let mut alice = Interface::new(Zeroizing::new(rand::random()), now, unix);
+//! let mut bob = Interface::new(Zeroizing::new(rand::random()), now, unix);
+//! let mut alice_to_bob = alice.new_tunnel(bob.static_public(), TunnelConfig::default(), now)?;
+//! let mut bob_to_alice = bob.new_tunnel(alice.static_public(), TunnelConfig::default(), now)?;
+//!
+//! // Alice initiates the handshake and Bob responds.
+//! let initiation = alice_to_bob.initiate_handshake(now).unwrap();
+//! let message = match bob.receive(alice_addr, &initiation, now)? {
+//!     Received::Message(message) => message,
+//!     // Under load, send the cookie reply back instead of processing the message.
+//!     Received::SendCookieReply(_) => unreachable!("not under load"),
+//! };
+//! bob_to_alice.decapsulate(message, now)?;
+//! let response = match bob_to_alice.poll_event() {
+//!     Some(Event::SendHandshakeResponse(response)) => response,
+//!     // An event loop sends every datagram an event carries and sends due keepalives.
+//!     event => unreachable!("only the response is queued, got {event:?}"),
+//! };
+//! let message = match alice.receive(bob_addr, &response, now)? {
+//!     Received::Message(message) => message,
+//!     Received::SendCookieReply(_) => unreachable!("not under load"),
+//! };
+//! alice_to_bob.decapsulate(message, now)?;
+//!
+//! // Alice encrypts a packet ...
+//! let packet = b"an IP packet";
+//! let mut buf = [0; 64];
+//! let data = alice_to_bob.encapsulate_data(now)?.encrypt(packet, &mut buf)?;
+//!
+//! // ... and Bob decrypts it.
+//! let message = match bob.receive(alice_addr, &data, now)? {
+//!     Received::Message(message) => message,
+//!     Received::SendCookieReply(_) => unreachable!("not under load"),
+//! };
+//! let decrypted = bob_to_alice.decapsulate(message, now)?.unwrap().decrypt(&data, [0; 64]);
+//! match bob_to_alice.commit_decrypted(decrypted, now)? {
+//!     // The plaintext is zero-padded to a multiple of 16 bytes.
+//!     Committed::Data { buffer, len } => assert_eq!(&buffer[..len], b"an IP packet\0\0\0\0"),
+//!     // A keepalive carries no packet to forward.
+//!     Committed::Keepalive => unreachable!("Alice sent a packet"),
+//! }
+//! # Ok::<(), sanstun::Error>(())
+//! ```
+//!
 //! # Caller responsibilities
 //!
 //! sanstun authenticates and decrypts messages but leaves the following to the caller:
