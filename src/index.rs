@@ -6,6 +6,11 @@ use rand::rngs::StdRng;
 use rand::{CryptoRng, RngExt, SeedableRng};
 
 /// Identifies a [`Tunnel`](crate::Tunnel) among those of its [`Interface`](crate::Interface).
+///
+/// The [`Interface`](crate::Interface) draws it at random from its seed, so peers cannot choose
+/// the ids of our tunnels. A map from ids to tunnels can thus use a fast hasher with a random
+/// seed, such as `foldhash::fast::RandomState`, instead of the default SipHash, as long as ids
+/// from received messages are only looked up and never inserted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TunnelId(u32);
 
