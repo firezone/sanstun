@@ -39,7 +39,10 @@ impl<'a> Macs<'a> {
 }
 
 /// An authenticated handshake initiation, ready to be answered by its [`Tunnel`](crate::Tunnel).
-pub struct HandshakeInitiation {
+pub struct HandshakeInitiation(pub(crate) Box<InnerHandshakeInitiation>);
+
+/// Boxed in [`HandshakeInitiation`], so that a [`ReceivedMessage`] stays cheap to move.
+pub(crate) struct InnerHandshakeInitiation {
     pub(crate) sender_idx: u32,
     pub(crate) peer_static_public: PublicKey,
     pub(crate) peer_ephemeral_public: PublicKey,
@@ -52,7 +55,7 @@ pub struct HandshakeInitiation {
 impl std::fmt::Debug for HandshakeInitiation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HandshakeInitiation")
-            .field("sender_idx", &self.sender_idx)
+            .field("sender_idx", &self.sender_idx())
             .field("peer_static_public", &self.peer_static_public())
             .finish_non_exhaustive()
     }
@@ -69,7 +72,15 @@ impl HandshakeInitiation {
     /// for. Do not authorize anything or allocate state such as a new [`Tunnel`](crate::Tunnel)
     /// for a key you do not already know.
     pub fn peer_static_public(&self) -> PublicKey {
-        self.peer_static_public
+        self.0.peer_static_public
+    }
+
+    pub(crate) fn sender_idx(&self) -> u32 {
+        self.0.sender_idx
+    }
+
+    pub(crate) fn timestamp(&self) -> Tai64N {
+        self.0.timestamp
     }
 }
 
@@ -170,28 +181,22 @@ impl ReceivedMessage {
 /// Only sanstun produces it:
 ///
 /// ```compile_fail
-/// let _ = sanstun::Datagram {
-///     buf: [0; 148],
-///     len: 0,
-/// };
+/// let _ = sanstun::Datagram(Box::new([0; 148]));
 /// ```
 ///
 /// ```compile_fail
 /// let _ = sanstun::Datagram::new([0; 148]);
 /// ```
-pub struct Datagram {
-    buf: [u8; HANDSHAKE_INIT_SZ],
-    len: usize,
-}
+///
+/// Its bytes are on the heap, so that the [`Received`](crate::Received) and
+/// [`Event`](crate::Event) carrying it stay cheap to move.
+pub struct Datagram(Box<[u8]>);
 
 impl Datagram {
     pub(crate) fn new<const N: usize>(bytes: [u8; N]) -> Self {
         const { assert!(N <= HANDSHAKE_INIT_SZ) };
 
-        let mut buf = [0; HANDSHAKE_INIT_SZ];
-        buf[..N].copy_from_slice(&bytes);
-
-        Self { buf, len: N }
+        Self(Box::new(bytes))
     }
 }
 
@@ -199,7 +204,7 @@ impl Deref for Datagram {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
-        &self.buf[..self.len]
+        &self.0
     }
 }
 

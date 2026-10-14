@@ -183,12 +183,12 @@ impl Interface {
 
                 if let Some(last) = self
                     .last_handshake_timestamps
-                    .get_mut(&init.peer_static_public)
+                    .get_mut(&init.peer_static_public())
                 {
-                    if !init.timestamp.after(last) {
+                    if !init.timestamp().after(last) {
                         return Err(Error::WrongTai64nTimestamp);
                     }
-                    *last = init.timestamp;
+                    *last = init.timestamp();
                 }
 
                 ReceivedMessage::HandshakeInitiation(init)
