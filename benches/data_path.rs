@@ -39,8 +39,13 @@ fn bench_data_path(c: &mut Criterion) {
             )
         });
 
-        // A message that is not committed can be decapsulated and decrypted again and again.
+        // A message that is not committed can be received, decapsulated and decrypted again and
+        // again.
         let message = data_message(&mut sender, &payload, now);
+
+        group.bench_function("receive", |b| {
+            b.iter(|| black_box(receiving_interface.receive(addr, &message, now).unwrap()))
+        });
 
         group.bench_function("begin_decapsulate", |b| {
             b.iter(|| {
@@ -97,6 +102,10 @@ fn bench_data_path(c: &mut Criterion) {
                 },
                 BatchSize::SmallInput,
             )
+        });
+
+        group.bench_function("poll_event", |b| {
+            b.iter(|| black_box(receiver.borrow_mut().poll_event()))
         });
 
         group.finish();
