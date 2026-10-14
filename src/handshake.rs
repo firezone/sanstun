@@ -299,17 +299,17 @@ impl Handshake {
     /// `local_index`.
     pub(super) fn receive_handshake_initialization(
         &mut self,
-        packet: HandshakeInitiation,
+        packet: &HandshakeInitiation,
         local_index: Index,
         rng: &mut impl CryptoRng,
         now: Instant,
     ) -> Result<([u8; HANDSHAKE_RESP_SZ], Session), Error> {
-        let HandshakeInitiation {
+        let &HandshakeInitiation {
             // msg.sender_index = little_endian(initiator.sender_index)
             sender_idx: peer_index,
             peer_static_public,
             peer_ephemeral_public,
-            chaining_key,
+            ref chaining_key,
             hash,
             timestamp: _,
         } = packet;
@@ -325,7 +325,7 @@ impl Handshake {
 
         let (mut response, session) = self.format_handshake_response(
             hash,
-            chaining_key,
+            chaining_key.clone(),
             peer_ephemeral_public,
             local_index,
             peer_index,

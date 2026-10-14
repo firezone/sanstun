@@ -141,11 +141,14 @@ pub struct TransportData {
 ///     (message.clone(), message)
 /// }
 /// ```
+///
+/// The rare handshake messages and cookie replies are boxed, so that it stays as cheap to move as
+/// the data message it usually carries.
 #[derive(Debug)]
 pub enum ReceivedMessage {
-    HandshakeInitiation(HandshakeInitiation),
-    HandshakeResponse(HandshakeResponse),
-    CookieReply(CookieReply),
+    HandshakeInitiation(Box<HandshakeInitiation>),
+    HandshakeResponse(Box<HandshakeResponse>),
+    CookieReply(Box<CookieReply>),
     TransportData(TransportData),
 }
 
@@ -170,28 +173,22 @@ impl ReceivedMessage {
 /// Only sanstun produces it:
 ///
 /// ```compile_fail
-/// let _ = sanstun::Datagram {
-///     buf: [0; 148],
-///     len: 0,
-/// };
+/// let _ = sanstun::Datagram(Box::new([0; 148]));
 /// ```
 ///
 /// ```compile_fail
 /// let _ = sanstun::Datagram::new([0; 148]);
 /// ```
-pub struct Datagram {
-    buf: [u8; HANDSHAKE_INIT_SZ],
-    len: usize,
-}
+///
+/// Its bytes are on the heap, so that the [`Received`](crate::Received) and
+/// [`Event`](crate::Event) carrying it stay cheap to move.
+pub struct Datagram(Box<[u8]>);
 
 impl Datagram {
     pub(crate) fn new<const N: usize>(bytes: [u8; N]) -> Self {
         const { assert!(N <= HANDSHAKE_INIT_SZ) };
 
-        let mut buf = [0; HANDSHAKE_INIT_SZ];
-        buf[..N].copy_from_slice(&bytes);
-
-        Self { buf, len: N }
+        Self(Box::new(bytes))
     }
 }
 
@@ -199,7 +196,7 @@ impl Deref for Datagram {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
-        &self.buf[..self.len]
+        &self.0
     }
 }
 

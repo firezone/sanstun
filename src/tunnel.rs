@@ -243,9 +243,9 @@ impl Tunnel {
         self.ensure_not_expired()?;
 
         match message {
-            ReceivedMessage::HandshakeInitiation(p) => self.handle_handshake_init(p, now)?,
-            ReceivedMessage::HandshakeResponse(p) => self.handle_handshake_response(p, now)?,
-            ReceivedMessage::CookieReply(p) => self.handle_cookie_reply(p, now)?,
+            ReceivedMessage::HandshakeInitiation(p) => self.handle_handshake_init(&p, now)?,
+            ReceivedMessage::HandshakeResponse(p) => self.handle_handshake_response(*p, now)?,
+            ReceivedMessage::CookieReply(p) => self.handle_cookie_reply(*p, now)?,
             ReceivedMessage::TransportData(p) => return self.handle_data(p, now).map(Some),
         }
 
@@ -293,7 +293,11 @@ impl Tunnel {
         Ok(Committed::Data { buffer, len })
     }
 
-    fn handle_handshake_init(&mut self, p: HandshakeInitiation, now: Instant) -> Result<(), Error> {
+    fn handle_handshake_init(
+        &mut self,
+        p: &HandshakeInitiation,
+        now: Instant,
+    ) -> Result<(), Error> {
         let remote_idx = Index::from_peer(p.sender_idx);
 
         tracing::debug!(%remote_idx, "Received handshake_initiation",);
