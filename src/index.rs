@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Weak};
 
+use foldhash::fast::FixedState;
 use rand::rngs::StdRng;
 use rand::{CryptoRng, RngExt, SeedableRng};
 
@@ -59,14 +60,18 @@ impl Index {
 /// Hands out random indices for new tunnels, skipping those of tunnels that are still alive.
 pub(crate) struct TunnelIndices {
     rng: StdRng,
-    in_use: HashMap<u32, Weak<()>>,
+    /// Its keys are our own random indices, so a fast hasher cannot be flooded with collisions.
+    in_use: HashMap<u32, Weak<()>, FixedState>,
 }
 
 impl TunnelIndices {
     pub(crate) fn new(rng: &mut impl CryptoRng) -> Self {
+        let mut rng = StdRng::from_rng(rng);
+        let hasher = FixedState::with_seed(rng.random());
+
         TunnelIndices {
-            rng: StdRng::from_rng(rng),
-            in_use: HashMap::new(),
+            rng,
+            in_use: HashMap::with_hasher(hasher),
         }
     }
 
