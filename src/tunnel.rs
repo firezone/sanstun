@@ -611,6 +611,10 @@ impl Tunnel {
     }
 
     /// Returns the next [`Event`] queued by [`Tunnel::handle_timeout`] or [`Tunnel::begin_decapsulate`].
+    ///
+    /// Data messages never queue events, so there is no need to poll after
+    /// [`Tunnel::begin_decapsulate`] returned a [`PendingDecapsulate`] or after
+    /// [`Tunnel::commit_decapsulate`].
     pub fn poll_event(&mut self) -> Option<Event> {
         self.events.pop_front()
     }

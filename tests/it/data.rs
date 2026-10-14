@@ -106,6 +106,30 @@ fn handshake_response_leaves_the_keepalive_to_the_caller() {
 }
 
 #[test]
+fn data_messages_queue_no_events() {
+    let mut sim = Sim::connected();
+    let now = sim.now;
+    let mut buf = [0; 64];
+    let data = sim
+        .tunn_mut(A)
+        .begin_encapsulate(now)
+        .unwrap()
+        .encrypt(b"hello", &mut buf)
+        .unwrap()
+        .to_vec();
+
+    let message = sim.receive(B, &data);
+    let tunn = sim.tunn_mut(B);
+    assert!(tunn.poll_event().is_none());
+    let pending = tunn.begin_decapsulate(message, now).unwrap().unwrap();
+    assert!(tunn.poll_event().is_none());
+    let decrypted = pending.decrypt(&data, [0; 64]);
+    tunn.commit_decapsulate(decrypted, now).unwrap();
+
+    assert!(tunn.poll_event().is_none());
+}
+
+#[test]
 fn tampered_data_packet_is_rejected() {
     let mut sim = Sim::connected();
 
