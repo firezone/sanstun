@@ -39,10 +39,10 @@ impl<'a> Macs<'a> {
 }
 
 /// An authenticated handshake initiation, ready to be answered by its [`Tunnel`](crate::Tunnel).
-pub struct HandshakeInitiation(pub(crate) Box<Initiation>);
+pub struct HandshakeInitiation(pub(crate) Box<InnerHandshakeInitiation>);
 
 /// Boxed in [`HandshakeInitiation`], so that a [`ReceivedMessage`] stays cheap to move.
-pub(crate) struct Initiation {
+pub(crate) struct InnerHandshakeInitiation {
     pub(crate) sender_idx: u32,
     pub(crate) peer_static_public: PublicKey,
     pub(crate) peer_ephemeral_public: PublicKey,
@@ -55,7 +55,7 @@ pub(crate) struct Initiation {
 impl std::fmt::Debug for HandshakeInitiation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HandshakeInitiation")
-            .field("sender_idx", &self.0.sender_idx)
+            .field("sender_idx", &self.sender_idx())
             .field("peer_static_public", &self.peer_static_public())
             .finish_non_exhaustive()
     }
@@ -73,6 +73,14 @@ impl HandshakeInitiation {
     /// for a key you do not already know.
     pub fn peer_static_public(&self) -> PublicKey {
         self.0.peer_static_public
+    }
+
+    pub(crate) fn sender_idx(&self) -> u32 {
+        self.0.sender_idx
+    }
+
+    pub(crate) fn timestamp(&self) -> Tai64N {
+        self.0.timestamp
     }
 }
 

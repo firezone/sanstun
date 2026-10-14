@@ -294,7 +294,7 @@ impl Tunnel {
     }
 
     fn handle_handshake_init(&mut self, p: HandshakeInitiation, now: Instant) -> Result<(), Error> {
-        let remote_idx = Index::from_peer(p.0.sender_idx);
+        let remote_idx = Index::from_peer(p.sender_idx());
 
         tracing::debug!(%remote_idx, "Received handshake_initiation",);
 

@@ -8,7 +8,7 @@ use crate::errors::Error;
 use crate::keys::{PresharedKey, PublicKey, StaticSecret};
 use crate::message::{
     CookieReply, HANDSHAKE_INIT, HANDSHAKE_INIT_SZ, HANDSHAKE_RESP, HANDSHAKE_RESP_SZ,
-    HandshakeInitiation, HandshakeResponse, Initiation,
+    HandshakeInitiation, HandshakeResponse, InnerHandshakeInitiation,
 };
 use crate::session::{Role, Session};
 use crate::tai64n::{Tai64N, TimeStamper};
@@ -169,7 +169,7 @@ pub(crate) fn parse_handshake_init(
     // initiator.hash = HASH(initiator.hash || msg.encrypted_timestamp)
     hash = b2s_hash(&hash, encrypted_timestamp);
 
-    Ok(HandshakeInitiation(Box::new(Initiation {
+    Ok(HandshakeInitiation(Box::new(InnerHandshakeInitiation {
         sender_idx,
         peer_static_public,
         peer_ephemeral_public,
@@ -304,7 +304,7 @@ impl Handshake {
         rng: &mut impl CryptoRng,
         now: Instant,
     ) -> Result<([u8; HANDSHAKE_RESP_SZ], Session), Error> {
-        let Initiation {
+        let InnerHandshakeInitiation {
             // msg.sender_index = little_endian(initiator.sender_index)
             sender_idx: peer_index,
             peer_static_public,
