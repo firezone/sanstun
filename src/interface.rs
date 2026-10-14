@@ -183,15 +183,15 @@ impl Interface {
 
                 if let Some(last) = self
                     .last_handshake_timestamps
-                    .get_mut(&init.peer_static_public)
+                    .get_mut(&init.0.peer_static_public)
                 {
-                    if !init.timestamp.after(last) {
+                    if !init.0.timestamp.after(last) {
                         return Err(Error::WrongTai64nTimestamp);
                     }
-                    *last = init.timestamp;
+                    *last = init.0.timestamp;
                 }
 
-                ReceivedMessage::HandshakeInitiation(Box::new(init))
+                ReceivedMessage::HandshakeInitiation(init)
             }
             (HANDSHAKE_RESP, HANDSHAKE_RESP_SZ) => {
                 let sender_idx = u32::from_le_bytes(datagram[4..8].try_into().unwrap());
@@ -199,7 +199,7 @@ impl Interface {
                     return Ok(Received::SendCookieReply(reply));
                 }
 
-                ReceivedMessage::HandshakeResponse(Box::new(HandshakeResponse {
+                ReceivedMessage::HandshakeResponse(HandshakeResponse {
                     sender_idx,
                     receiver_idx: u32::from_le_bytes(datagram[8..12].try_into().unwrap()),
                     unencrypted_ephemeral: datagram[12..44]
@@ -208,15 +208,13 @@ impl Interface {
                     encrypted_nothing: datagram[44..60]
                         .try_into()
                         .expect("length already checked above"),
-                }))
+                })
             }
-            (COOKIE_REPLY, COOKIE_REPLY_SZ) => {
-                ReceivedMessage::CookieReply(Box::new(CookieReply {
-                    receiver_idx: u32::from_le_bytes(datagram[4..8].try_into().unwrap()),
-                    nonce: datagram[8..32].try_into().unwrap(),
-                    encrypted_cookie: datagram[32..64].try_into().unwrap(),
-                }))
-            }
+            (COOKIE_REPLY, COOKIE_REPLY_SZ) => ReceivedMessage::CookieReply(CookieReply {
+                receiver_idx: u32::from_le_bytes(datagram[4..8].try_into().unwrap()),
+                nonce: datagram[8..32].try_into().unwrap(),
+                encrypted_cookie: datagram[32..64].try_into().unwrap(),
+            }),
             (DATA, DATA_OVERHEAD_SZ..=usize::MAX) => {
                 ReceivedMessage::TransportData(TransportData {
                     receiver_idx: u32::from_le_bytes(datagram[4..8].try_into().unwrap()),

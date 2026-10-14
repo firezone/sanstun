@@ -39,7 +39,10 @@ impl<'a> Macs<'a> {
 }
 
 /// An authenticated handshake initiation, ready to be answered by its [`Tunnel`](crate::Tunnel).
-pub struct HandshakeInitiation {
+pub struct HandshakeInitiation(pub(crate) Box<Initiation>);
+
+/// Boxed in [`HandshakeInitiation`], so that a [`ReceivedMessage`] stays cheap to move.
+pub(crate) struct Initiation {
     pub(crate) sender_idx: u32,
     pub(crate) peer_static_public: PublicKey,
     pub(crate) peer_ephemeral_public: PublicKey,
@@ -52,7 +55,7 @@ pub struct HandshakeInitiation {
 impl std::fmt::Debug for HandshakeInitiation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HandshakeInitiation")
-            .field("sender_idx", &self.sender_idx)
+            .field("sender_idx", &self.0.sender_idx)
             .field("peer_static_public", &self.peer_static_public())
             .finish_non_exhaustive()
     }
@@ -69,7 +72,7 @@ impl HandshakeInitiation {
     /// for. Do not authorize anything or allocate state such as a new [`Tunnel`](crate::Tunnel)
     /// for a key you do not already know.
     pub fn peer_static_public(&self) -> PublicKey {
-        self.peer_static_public
+        self.0.peer_static_public
     }
 }
 
@@ -141,14 +144,11 @@ pub struct TransportData {
 ///     (message.clone(), message)
 /// }
 /// ```
-///
-/// The rare handshake messages and cookie replies are boxed, so that it stays as cheap to move as
-/// the data message it usually carries.
 #[derive(Debug)]
 pub enum ReceivedMessage {
-    HandshakeInitiation(Box<HandshakeInitiation>),
-    HandshakeResponse(Box<HandshakeResponse>),
-    CookieReply(Box<CookieReply>),
+    HandshakeInitiation(HandshakeInitiation),
+    HandshakeResponse(HandshakeResponse),
+    CookieReply(CookieReply),
     TransportData(TransportData),
 }
 
