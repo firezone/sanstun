@@ -27,6 +27,7 @@ rand = "0.10"
 x25519-dalek = { version = "3.0.0", features = ["getrandom"] }
 etherparse = "0.21"
 criterion = { version = "0.8.2", features = ["html_reports"] }
+foldhash = "0.2"
 
 [[bench]]
 name = "blake2s"
