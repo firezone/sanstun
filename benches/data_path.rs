@@ -3,17 +3,14 @@
 //! `begin_encapsulate`, `begin_decapsulate` and `commit_decapsulate` need `&mut Tunnel` and thus run
 //! on the thread that owns it, while `encrypt` and `decrypt` can be deferred to other threads. Their
 //! ratio bounds how much handing the crypto to other threads can gain.
-//!
-//! `tunnel_lookup` measures routing a message to its tunnel by [`TunnelId`] among many tunnels.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
 use std::hint::black_box;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use criterion::{BatchSize, Criterion};
-use sanstun::{Event, Interface, Received, Tunnel, TunnelConfig, TunnelId};
+use sanstun::{Event, Interface, Received, Tunnel, TunnelConfig};
 use zeroize::Zeroizing;
 
 const PACKET_SIZES: [usize; 2] = [64, 1280];
@@ -115,44 +112,6 @@ fn bench_data_path(c: &mut Criterion) {
     }
 }
 
-fn bench_tunnel_lookup(c: &mut Criterion) {
-    let now = Instant::now();
-    let unix = Duration::from_secs(1_700_000_000);
-    let mut interface = Interface::new(Zeroizing::new(rand::random()), now, unix);
-    let peer = Interface::new(Zeroizing::new(rand::random()), now, unix).static_public();
-    // Dropping a tunnel frees its id for reuse, so skip duplicates.
-    let mut seen = HashSet::new();
-    let mut ids = Vec::new();
-
-    for n in [1, 10, 1_000, 10_000] {
-        let mut group = c.benchmark_group(format!("tunnel_lookup/{n}"));
-
-        while ids.len() < n {
-            let tunnel = interface
-                .new_tunnel(peer, TunnelConfig::default(), now)
-                .unwrap();
-            if seen.insert(tunnel.id()) {
-                ids.push(tunnel.id());
-            }
-        }
-        let id = ids[n / 2];
-
-        let siphash = HashMap::<TunnelId, usize>::from_iter(ids.iter().copied().zip(0..));
-        group.bench_function("siphash", |b| {
-            b.iter(|| siphash.get(&black_box(id)).copied())
-        });
-
-        let foldhash = HashMap::<TunnelId, usize, foldhash::fast::RandomState>::from_iter(
-            ids.iter().copied().zip(0..),
-        );
-        group.bench_function("foldhash", |b| {
-            b.iter(|| foldhash.get(&black_box(id)).copied())
-        });
-
-        group.finish();
-    }
-}
-
 fn data_message(tunnel: &mut Tunnel, payload: &[u8], now: Instant) -> Vec<u8> {
     let mut message = vec![0; payload.len() + 64];
     let len = tunnel
@@ -215,6 +174,6 @@ criterion::criterion_group! {
     config = Criterion::default()
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(3));
-    targets = bench_data_path, bench_tunnel_lookup
+    targets = bench_data_path
 }
 criterion::criterion_main!(benches);
