@@ -335,9 +335,10 @@ impl Tunnel {
     /// Prepares a data message for decryption.
     ///
     /// Decrypt the returned [`PendingDecapsulate`] and pass the result to
-    /// [`Tunnel::commit_decapsulate`] to accept the plaintext.
+    /// [`Tunnel::commit_decapsulate`] to accept the plaintext. The tunnel only
+    /// changes once the message is authenticated, in `commit_decapsulate`.
     pub fn begin_decapsulate(
-        &mut self,
+        &self,
         packet: TransportData,
         now: Instant,
     ) -> Result<PendingDecapsulate, Error> {
