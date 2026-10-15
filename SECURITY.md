@@ -2,13 +2,15 @@
 
 ## Reporting a vulnerability
 
-[Report vulnerabilities privately on GitHub](https://github.com/firezone/sanstun/security/advisories/new) rather than opening a public issue.
-Your report is private to you and the maintainers.
+Do not open public GitHub issues for security concerns.
+Instead, [report a vulnerability on GitHub](https://github.com/firezone/sanstun/security/advisories/new).
+This will be visible to the maintainers but not the general public.
 
 ## How disclosure is handled
 
-We work with you privately to confirm and fix the vulnerability before disclosing it.
-Once a fix is available for the supported version, we publish a security advisory in this repository.
+We use coordinated disclosure.
+We work privately with you to validate and fix the issue before public disclosure.
+Once a fix is available for supported versions, we publish a security advisory on this repository.
 
 ## Out of scope
 
@@ -20,5 +22,6 @@ Once a fix is available for the supported version, we publish a security advisor
 
 ## Supported versions
 
-We support the latest release of `sanstun` and publish security fixes in new releases.
-We do not backport fixes to older versions.
+We support the latest released version of `sanstun`.
+Security fixes are delivered in a new release.
+We do not backport patches to older versions.

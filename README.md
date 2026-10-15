@@ -1,65 +1,76 @@
 # sanstun
 
-`sanstun` is a fast, sans-IO implementation of the WireGuard protocol that runs in user space.
-
-## Design
-
-`sanstun` draws on our experience running WireGuard in production.
-Its API is designed for high throughput and safe integration into your own event loop.
-
-- You supply time and randomness, so execution is deterministic.
-- You own the packet buffers.
-- The protocol state uses no locks or atomic packet counters.
-- Packet processing separates bookkeeping from encryption and decryption, so you can run the cryptography on other threads or process batches in parallel.
-
-## Caller responsibilities
-
-Your application handles TUN and UDP I/O and drives the library's timers through an event loop.
-It also needs to handle the following checks and inputs.
-
-### Cryptokey routing
-
-A decrypted packet proves which peer sent it, but you must check that its source IP is allowed for that peer.
-
-For outgoing packets, choose the correct [`Tunnel`](src/tunnel.rs) based on the destination IP.
-
-### Handshake routing
-
-Route handshake initiations by the initiator's static public key, available through [`HandshakeInitiation::peer_static_public`](src/message.rs).
-[`Interface::receive`](src/interface.rs) authenticates this key and rejects replays from peers you have created a tunnel for.
-Anyone can generate a key pair, so an authenticated handshake is not a reason to trust an unknown peer.
-Create tunnels only for peers you already trust.
-
-### Packet validation
-
-Parse the decrypted buffer, check that it contains a valid IP packet, and remove any padding before forwarding it.
-
-### Randomness
-
-Supply a fresh seed from the operating system for each [`Interface`](src/interface.rs).
-Reusing a seed repeats keys, nonces, and cookies, which is unsafe in production.
-Fixed seeds are useful for reproducible tests.
-
-### Time
-
-Use a monotonic clock for `now`.
-The Unix time supplied when creating an interface must not go backwards across restarts, or peers may reject handshake initiations as replays.
-
-## Security
-
-`sanstun` uses its type system to enforce parts of the protocol's security requirements.
-You create tunnels through [`Interface`](src/interface.rs), which derives their key material from its seed.
-All inbound datagrams pass through this interface, which checks handshake MACs and applies cookie challenges and rate limits before expensive cryptography.
-
-`sanstun` has not received a formal security audit.
-Use it at your own risk.
-See the [security policy](SECURITY.md) to report a vulnerability.
+This is a sans-IO, performance-oriented user-space implementation of the WireGuard protocol.
 
 ## History
 
-`sanstun` grew out of [Firezone's fork](https://github.com/firezone/boringtun) of [BoringTun](https://github.com/cloudflare/boringtun).
-The fork kept its API compatible with upstream to make it easier to share patches and use it in other projects.
-It is now deprecated in favor of `sanstun`.
+Its roots are a fork of [BoringTun](https://github.com/cloudflare/boringtun) in [firezone/boringtun](https://github.com/firezone/boringtun).
+For a long time, the fork retained 100% API-compatibility with upstream to make cherry-picking and usage by other projects easier.
+
+The fork at [firezone/boringtun](https://github.com/firezone/boringtun) is now deprecated in favor of `sanstun`.
+
+## Scope
+
+The `sanstun` project combines our experience of operating WireGuard in production in a sans-IO setting.
+It features a re-designed API and internals that are tuned for maximizing throughput whilst making it easy and safe to use.
+
+- Fully sans-IO, including time and RNG seeds
+- No internal buffering
+- No locks or atomic counters in the protocol state
+- Multi-core friendly API: Encapsulating and decapsulating packets performs only the minimal book-keeping necessary.
+  The actual crypto operations can be deferred to other threads and thus parallelized when processing packets in batches.
+
+## Out-of-scope
+
+Being a sans-IO library, `sanstun` does not perform any kind of IO for you, neither towards the user via a TUN device nor on the network to other peers via UDP.
+It needs an event loop to do something useful.
+
+The API design of `sanstun` makes it easy for you to use it correctly.
+Nevertheless, there are some things it cannot do for you by virtue of being sans-IO.
+
+### Cryptokey routing
+
+A decrypted packet only proves which peer sent it.
+It is your responsibility to verify that the packet came from an allowed IP.
+
+Similarly, `Tunnel` allows you to encrypt packets towards any peer.
+It is your responsibility to pick the correct `Tunnel` based on the destination IP.
+
+### Handshake routing
+
+A handshake initiation is routed by the initiator's static public key, via `HandshakeInitiation::peer_static_public`.
+`Interface::receive` authenticates it and, for keys you created a `Tunnel` for, rejects replayed initiations.
+Anyone can generate a key pair though, so do not create a `Tunnel` for an unknown key based on it.
+
+### Inner IP packet validation
+
+You must parse the decrypted buffer and verify that it contains a valid IP packet.
+The buffer may still be padded.
+
+### Randomness
+
+It is your responsibility to supply a seed with enough entropy.
+Being sans-IO means the library is fully deterministic including all cryptography operations.
+Supplying identical seeds will produce **the same keys, nonces, cookies etc**.
+This is great for testing but needs to be taken seriously for production usecases.
+
+With great power comes great responsibility.
+
+### Time
+
+The time passed in needs to be monotonically increasing, otherwise other peers might reject handshakes as replays.
+
+## Security
+
+For a WireGuard implementation to be secure, it is not enough to just use sound & audited cryptography primitives.
+The API of `sanstun` is designed to guide you towards using it in a safe manner by enforcing many aspects through the type-system.
+For example, it is not possible to directly create a `Tunnel`.
+Instead, `Interface` serves as a factory for new tunnels and derives all key material from a seed.
+It is also not possible to handle inbound traffic in `sanstun` without going through a rate limiter.
+This ensures expensive crypto operations like DH cannot be triggered arbitrarily by remote peers.
+
+While we have taken great care to design and implement `sanstun` as secure as possible, it has not received a formal security audit.
+Use it at your own risk.
 
 ## License
 
