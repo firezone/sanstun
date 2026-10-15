@@ -40,7 +40,7 @@ pub(crate) enum Role {
     Responder,
 }
 
-/// The plaintext of a data message is zero-padded to a multiple of this.
+/// The block size used for zero-padding data messages.
 const PADDING_MULTIPLE: usize = 16;
 
 impl Session {
@@ -78,13 +78,12 @@ impl Session {
         self.role
     }
 
-    /// Whether we sent a data message, not just keepalives, on this session.
+    /// Returns whether this session has carried outgoing data, excluding keepalives.
     pub(crate) fn sent_data(&self) -> bool {
         self.sent_data
     }
 
-    /// As its initiator, we start a new handshake `REKEY_AFTER_TIME` after establishing this
-    /// session, if we sent data on it.
+    /// Returns the rekey deadline for an initiator session that has sent data.
     pub(crate) fn rekey_after_time_on_send(&self) -> Option<Instant> {
         if self.role != Role::Initiator || !self.sent_data {
             return None;
@@ -93,8 +92,7 @@ impl Session {
         Some(self.established_at + REKEY_AFTER_TIME)
     }
 
-    /// As its initiator, we start a new handshake once this session gets close to its expiry,
-    /// if we received data on it.
+    /// Returns the rekey deadline before expiry for an initiator session that has received data.
     pub(crate) fn reject_after_time_on_receive(
         &self,
         keepalive_timeout: Duration,
@@ -115,30 +113,29 @@ impl Session {
         time >= self.expires_at()
     }
 
-    /// Whether new packets may still be sent on this session.
+    /// Returns whether the session has enough time left to send a packet.
     ///
-    /// A packet sent close to [`REJECT_AFTER_TIME`] may reach the peer after it expired the
-    /// session, so we stop `keepalive_timeout` before that.
+    /// Sending stops `keepalive_timeout` before expiry to allow packets to reach the peer in time.
     pub(crate) fn should_use_at(&self, time: Instant, keepalive_timeout: Duration) -> bool {
         time + keepalive_timeout <= self.established_at + REJECT_AFTER_TIME
     }
 
-    /// Whether `key` is this session's receiving key.
+    /// Returns whether `key` is this session's receiving key.
     pub(crate) fn receives_with(&self, key: &Arc<Key>) -> bool {
         Arc::ptr_eq(&self.receiver, key)
     }
 
-    /// Whether the sending counter reached [`REKEY_AFTER_MESSAGES`].
+    /// Returns whether the sending counter has reached [`REKEY_AFTER_MESSAGES`].
     pub(crate) fn rekey_after_messages_reached(&self) -> bool {
         self.sending_key_counter >= REKEY_AFTER_MESSAGES
     }
 
-    /// Whether the sending counter reached [`REJECT_AFTER_MESSAGES`].
+    /// Returns whether the sending counter has reached [`REJECT_AFTER_MESSAGES`].
     pub(crate) fn sending_counter_exhausted(&self) -> bool {
         self.sending_key_counter >= REJECT_AFTER_MESSAGES
     }
 
-    /// Assigns the next counter to a data message, deferring writing and encrypting it.
+    /// Reserves a counter for a data message to be encrypted later.
     pub(super) fn prepare_packet_data(&mut self) -> PendingEncapsulate {
         self.sent_data = true;
         self.prepare_message()
@@ -149,7 +146,7 @@ impl Session {
         self.prepare_message()
     }
 
-    /// Checks the counter of a data message, deferring its decryption.
+    /// Checks a data message's index and counter before decryption.
     pub(super) fn prepare_receive_packet_data(
         &self,
         packet: TransportData,
@@ -157,7 +154,7 @@ impl Session {
         if Index::from_peer(packet.receiver_idx) != self.receiving_index {
             return Err(Error::WrongIndex);
         }
-        // Don't reuse counters, in case this is a replay attack we want to quickly check the counter without running expensive decryption
+        // Reject known replays before paying for decryption.
         self.receiving_key_counter.will_accept(packet.counter)?;
 
         Ok(PendingDecapsulate {
@@ -167,7 +164,7 @@ impl Session {
         })
     }
 
-    /// Accepts the counter of a decrypted data message, returning the length of its plaintext.
+    /// Commits an authenticated message's counter and returns its plaintext length.
     pub(super) fn finish_receive_packet_data(
         &mut self,
         counter: u64,
@@ -175,8 +172,7 @@ impl Session {
     ) -> Result<usize, Error> {
         let plaintext_len = plaintext_len?;
 
-        // Only an authenticated message may advance the replay window. The check is repeated
-        // because a duplicate may have passed the quick check before this one was accepted.
+        // Recheck after authentication: another copy may have been accepted during decryption.
         self.receiving_key_counter.mark_did_receive(counter)?;
         self.received_data |= plaintext_len > 0;
 
@@ -199,20 +195,19 @@ impl Session {
     }
 }
 
-/// Number of sessions in the ring.
 const N_SESSIONS: u8 = 8;
 
-/// The [`N_SESSIONS`] most recent sessions, stored at their index modulo [`N_SESSIONS`].
+/// A ring of recent sessions, indexed by their local session index.
 pub(crate) struct Sessions {
     slots: [Option<Session>; N_SESSIONS as usize],
-    /// Index of most recently used session.
+    /// The current sending session's index.
     current: Option<Index>,
     /// The most recently allocated local index.
     last_index: Index,
 }
 
 impl Sessions {
-    /// Creates an empty ring whose sessions take their local indices from `index`.
+    /// Creates an empty session ring for the tunnel identified by `index`.
     pub(crate) fn new(index: Index) -> Self {
         Self {
             slots: Default::default(),
@@ -221,15 +216,14 @@ impl Sessions {
         }
     }
 
-    /// The part of every local index that identifies the tunnel.
+    /// Returns the tunnel ID shared by all local session indices.
     pub(crate) fn tunnel_id(&self) -> TunnelId {
         self.last_index.tunnel_id()
     }
 
-    /// Allocates the local index of a new session.
+    /// Allocates a local index for a new session.
     ///
-    /// The index never maps to the slot of the current session, so storing the new session
-    /// cannot replace it.
+    /// Skips the current session's slot so it cannot be overwritten.
     pub(crate) fn next_index(&mut self) -> Index {
         loop {
             let index = self.last_index.wrapping_increment();
@@ -249,7 +243,7 @@ impl Sessions {
         *self.slot_mut(index) = Some(session);
     }
 
-    /// The most recently used session, if it still exists.
+    /// Returns the current sending session, if one exists.
     pub(crate) fn current(&self) -> Option<&Session> {
         self.get(self.current?)
     }
@@ -258,39 +252,37 @@ impl Sessions {
         self.get_mut(self.current?)
     }
 
-    /// The session in the slot of `index`, which may have a different index.
+    /// Returns the session in `index`'s slot, which may belong to a different index.
     pub(crate) fn in_slot_of(&self, index: Index) -> Option<&Session> {
         self.slot(index).as_ref()
     }
 
-    /// The session with exactly `index`, if it still exists.
+    /// Returns the session with exactly `index`, if it still exists.
     pub(crate) fn get_mut(&mut self, index: Index) -> Option<&mut Session> {
         self.slot_mut(index)
             .as_mut()
             .filter(|s| s.receiving_index == index)
     }
 
-    /// Update the index of the currently used session, if needed
+    /// Selects `new_idx` as the current session unless the current one is newer.
     pub(crate) fn set_current(&mut self, new_idx: Index) {
         if self.current == Some(new_idx) {
-            // There is nothing to do, already using this session, this is the common case
             return;
         }
 
         let Some(new) = self.get(new_idx) else {
-            debug_assert!(false, "new session should always exist");
+            debug_assert!(false, "the selected session must exist");
             return;
         };
         if self
             .current()
             .is_some_and(|current| current.established_at() > new.established_at())
         {
-            // The current session is "newer" than the new one, don't update.
             return;
         }
 
         self.current = Some(new_idx);
-        tracing::debug!(idx = %new_idx, "New session");
+        tracing::debug!(idx = %new_idx, "Selected sending session");
     }
 
     pub(crate) fn clear(&mut self) {
@@ -316,7 +308,7 @@ impl Sessions {
             tracing::debug!(
                 session = %session.receiving_index,
                 %is_current,
-                "SESSION_EXPIRED(REJECT_AFTER_TIME)"
+                "Session expired (REJECT_AFTER_TIME)"
             );
 
             if is_current {
@@ -328,7 +320,7 @@ impl Sessions {
         expired_current
     }
 
-    /// The earliest [`Instant`] at which one of our sessions expires.
+    /// Returns the earliest session expiry deadline.
     pub(crate) fn next_expiry(&self) -> Option<Instant> {
         self.slots.iter().flatten().map(Session::expires_at).min()
     }
@@ -352,14 +344,12 @@ fn slot_of(index: Index) -> usize {
     index.session() % N_SESSIONS as usize
 }
 
-/// The encryption of a data message whose counter is already assigned.
+/// A data message ready for encryption, with its counter already reserved.
 ///
-/// The nonce is fixed when the [`PendingEncapsulate`] is created, so encryptions may run in any
-/// order and on any thread: the receiver's sliding replay window accepts data messages that arrive
-/// out of order.
+/// The reserved counter fixes the nonce, so encryption can run on any thread and in any order.
+/// The receiver's replay window allows some reordering of messages.
 ///
-/// It holds its own handle to the session key and is not invalidated when the session expires,
-/// so encrypt it soon after creating it.
+/// This holds the session key even after the session expires. Encrypt and send it promptly.
 #[derive(Debug)]
 #[must_use = "the data message is not sent until it is encrypted"]
 pub struct PendingEncapsulate {
@@ -369,13 +359,13 @@ pub struct PendingEncapsulate {
 }
 
 impl PendingEncapsulate {
-    /// Writes the data message encrypting `plaintext` to the start of `dst`.
+    /// Encrypts `plaintext` into a data message at the start of `dst`.
     ///
-    /// `plaintext` is zero-padded to the next multiple of 16 bytes, so the data message, and the
-    /// minimum length of `dst`, is `plaintext.len().next_multiple_of(16) + 32` bytes.
+    /// Zero-padding rounds the payload up to a multiple of 16 bytes. Including the header and tag,
+    /// `dst` must hold at least `plaintext.len().next_multiple_of(16) + 32` bytes.
     ///
-    /// Fails with `Err(Error::EmptyPlaintext)` if `plaintext` is empty. An empty data message is a keepalive,
-    /// which is sent with [`Tunnel::encapsulate_keepalive`](crate::Tunnel::encapsulate_keepalive).
+    /// Empty plaintext fails with [`Error::EmptyPlaintext`]. Send keepalives with
+    /// [`Tunnel::encapsulate_keepalive`](crate::Tunnel::encapsulate_keepalive).
     pub fn encrypt<'a>(
         self,
         plaintext: &[u8],
@@ -430,11 +420,10 @@ impl PendingEncapsulate {
     }
 }
 
-/// The decryption of a data message whose counter has been checked.
+/// A data message ready for decryption after an initial replay check.
 ///
-/// Its counter has passed the replay check but is not yet marked as received: that only happens
-/// once the [`Decrypted`] message is handed back to the [`Tunnel`](crate::Tunnel), so a message that
-/// fails to authenticate never advances the replay window.
+/// Its counter is only marked as received when the [`Decrypted`] result is committed to the
+/// [`Tunnel`](crate::Tunnel). Failed authentication never advances the replay window.
 #[derive(Debug)]
 #[must_use = "the data message is not decrypted until `decrypt` is called"]
 pub struct PendingDecapsulate {
@@ -446,9 +435,8 @@ pub struct PendingDecapsulate {
 impl PendingDecapsulate {
     /// Copies the ciphertext of `message` to the start of `dst` and decrypts it in place.
     ///
-    /// `message` is the data message this [`PendingDecapsulate`] was prepared from; anything else fails
-    /// to authenticate. The returned [`Decrypted`] message owns `dst`; hand it to
-    /// [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate) to obtain the plaintext bytes.
+    /// Pass the original data message as `message`. The result owns `dst`; commit it with
+    /// [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate) to obtain the plaintext.
     pub fn decrypt<B: AsMut<[u8]>>(self, message: &[u8], mut dst: B) -> Decrypted<B> {
         let plaintext_len = self.decrypt_in_place(message, dst.as_mut());
 
@@ -502,20 +490,16 @@ fn data_header(receiver_index: [u8; 4], counter: u64) -> [u8; DATA_HEADER_SZ] {
     header
 }
 
-/// A data message decrypted by [`PendingDecapsulate::decrypt`], to be committed to the
-/// [`Tunnel`](crate::Tunnel) with [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate).
+/// A decryption result awaiting [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate).
 #[must_use = "the data message is not accepted until it is committed to the `Tunnel`"]
 pub struct Decrypted<B> {
     pub(crate) receiving_index: Index,
     pub(crate) counter: u64,
     pub(crate) plaintext_len: Result<usize, Error>,
     pub(crate) buffer: B,
-    /// Identifies the session the message may be committed to: its index alone is reused once
-    /// the session part wraps around.
+    /// Identifies the original session even after its index has been reused.
     ///
-    /// Released when the [`Tunnel`](crate::Tunnel) handles the message, so that decrypting a
-    /// message leaves the reference count of the key to the thread that owns the
-    /// [`Tunnel`](crate::Tunnel).
+    /// Released on the tunnel's thread to keep reference-count updates off decryption workers.
     pub(crate) key: Arc<Key>,
 }
 
@@ -529,9 +513,9 @@ impl<B> std::fmt::Debug for Decrypted<B> {
     }
 }
 
-/// A session key on a cache line of its own, apart from the reference count of its [`Arc`].
+/// A session key aligned separately from its [`Arc`]'s reference count.
 ///
-/// Threads that only read the key then never contend with the thread updating the count.
+/// This avoids cache-line contention between key readers and reference-count updates.
 #[derive(Debug)]
 #[repr(align(128))]
 pub(crate) struct Key(LessSafeKey);

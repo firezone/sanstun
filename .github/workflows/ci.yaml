@@ -8,7 +8,6 @@ on:
   merge_group:
     types: [checks_requested]
 
-# Never tolerate warnings.
 env:
   RUSTFLAGS: "-Dwarnings"
   RUSTDOCFLAGS: "-D warnings"

@@ -23,8 +23,7 @@ fn ipv6_packets_round_trip() {
     assert_eq!(sim.take_inbox(B), [ip_packet]);
 }
 
-// §5.4.6: the plaintext is zero-padded to a multiple of 16 bytes. The padding
-// is returned with the payload; the caller strips it when parsing the IP packet.
+// §5.4.6: decrypted payloads include zero padding; callers remove it when parsing the IP packet.
 #[test]
 fn data_messages_are_zero_padded_to_a_multiple_of_16_bytes() {
     let mut sim = Sim::connected();
@@ -54,8 +53,7 @@ fn data_messages_are_zero_padded_to_a_multiple_of_16_bytes() {
     }
 }
 
-// §6.1: a keepalive is a data message with a zero-length payload; it proves
-// liveness but is not forwarded to the tunnel interface.
+// §6.1: keepalives prove liveness but carry no IP packet to forward.
 #[test]
 fn keepalives_are_consumed_silently() {
     let mut sim = Sim::connected();
@@ -122,14 +120,14 @@ fn tampered_data_packet_is_rejected() {
 fn data_with_wrong_receiver_index_is_rejected() {
     let mut sim = Sim::connected();
 
-    // Same session slot, different index: decryption is never attempted.
+    // The index points to an occupied slot but does not match its session.
     let mut datagram = sim.encapsulate(A, &ipv4_packet(b"payload"));
     let index = u32::from_le_bytes(datagram[4..8].try_into().unwrap());
     datagram[4..8].copy_from_slice(&(index + 8).to_le_bytes());
     let error = sim.deliver(B, &datagram).expect_err();
     assert!(matches!(error, Error::WrongIndex));
 
-    // Index pointing at an empty session slot.
+    // The index points to an empty session slot.
     let mut datagram = sim.encapsulate(A, &ipv4_packet(b"payload"));
     datagram[4..8].copy_from_slice(&(index + 6).to_le_bytes());
     let error = sim.deliver(B, &datagram).expect_err();

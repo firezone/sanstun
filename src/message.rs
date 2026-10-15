@@ -17,11 +17,11 @@ pub(crate) const HANDSHAKE_RESP_SZ: usize = 92;
 pub(crate) const COOKIE_REPLY_SZ: usize = 64;
 /// The header of a data message: its type, receiver index and counter.
 pub(crate) const DATA_HEADER_SZ: usize = 16;
-/// The authentication tag of the AEAD sealing a data message.
+/// The authentication tag appended to a data message.
 pub(crate) const AEAD_TAG_SZ: usize = 16;
 pub(crate) const DATA_OVERHEAD_SZ: usize = DATA_HEADER_SZ + AEAD_TAG_SZ;
 
-/// The bytes of a handshake message that its MACs cover, and the MACs themselves.
+/// A handshake message split into its body and two MACs.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Macs<'a> {
     pub(crate) msg: &'a [u8],
@@ -41,12 +41,12 @@ impl<'a> Macs<'a> {
 /// An authenticated handshake initiation, ready to be answered by its [`Tunnel`](crate::Tunnel).
 pub struct HandshakeInitiation(pub(crate) Box<InnerHandshakeInitiation>);
 
-/// Boxed in [`HandshakeInitiation`], so that a [`ReceivedMessage`] stays cheap to move.
+/// Boxed to keep [`ReceivedMessage`] cheap to move.
 pub(crate) struct InnerHandshakeInitiation {
     pub(crate) sender_idx: u32,
     pub(crate) peer_static_public: PublicKey,
     pub(crate) peer_ephemeral_public: PublicKey,
-    /// The responder's Noise state after the initiation, from which it builds its response.
+    /// The Noise chaining key used to build the response.
     pub(crate) chaining_key: Zeroizing<[u8; 32]>,
     pub(crate) hash: [u8; 32],
     pub(crate) timestamp: Tai64N,
@@ -62,15 +62,13 @@ impl std::fmt::Debug for HandshakeInitiation {
 }
 
 impl HandshakeInitiation {
-    /// The initiator's static public key, to look up the [`Tunnel`](crate::Tunnel) it belongs to.
+    /// Returns the initiator's static public key for routing to its [`Tunnel`](crate::Tunnel).
     ///
-    /// [`Interface::receive`](crate::Interface::receive) has authenticated it: the initiator
-    /// holds the matching private key. For a key we created a tunnel for, the initiation is also
-    /// newer than any accepted before, so it is not a replay.
+    /// [`Interface::receive`](crate::Interface::receive) verifies that the initiator holds the
+    /// matching private key. For peers you have created a tunnel for, it also rejects replays.
     ///
-    /// Anyone can generate a key pair, and replays are not detected for keys we have no tunnel
-    /// for. Do not authorize anything or allocate state such as a new [`Tunnel`](crate::Tunnel)
-    /// for a key you do not already know.
+    /// Anyone can generate a key pair, and unknown peers are not checked for replays.
+    /// Do not authorize an unknown peer or create a tunnel for it based on this key.
     pub fn peer_static_public(&self) -> PublicKey {
         self.0.peer_static_public
     }
@@ -105,10 +103,9 @@ pub struct TransportData {
     pub(crate) counter: u64,
 }
 
-/// A message received from the network.
+/// A network message parsed by [`Interface::receive`](crate::Interface::receive).
 ///
-/// It can only be obtained from [`Interface::receive`](crate::Interface::receive), which verifies it.
-/// Neither it nor the messages it carries can be constructed or duplicated otherwise:
+/// Messages can only be obtained through that method and cannot be cloned or constructed directly:
 ///
 /// ```compile_fail
 /// let _ = sanstun::HandshakeInitiation {
@@ -161,9 +158,10 @@ pub enum ReceivedMessage {
 }
 
 impl ReceivedMessage {
-    /// The [`Tunnel::id`](crate::Tunnel::id) of the tunnel this message is addressed to.
+    /// Returns the destination tunnel's [`Tunnel::id`](crate::Tunnel::id).
     ///
-    /// `None` for a handshake initiation, which is routed by [`HandshakeInitiation::peer_static_public`] instead.
+    /// Returns `None` for handshake initiations, which are routed by
+    /// [`HandshakeInitiation::peer_static_public`].
     pub fn tunnel_id(&self) -> Option<TunnelId> {
         let receiver_idx = match self {
             ReceivedMessage::HandshakeInitiation(_) => return None,
@@ -178,7 +176,7 @@ impl ReceivedMessage {
 
 /// Bytes to send to the peer as one UDP datagram.
 ///
-/// Only sanstun produces it:
+/// Datagrams can only be created by sanstun:
 ///
 /// ```compile_fail
 /// let _ = sanstun::Datagram(Box::new([0; 148]));
@@ -188,8 +186,8 @@ impl ReceivedMessage {
 /// let _ = sanstun::Datagram::new([0; 148]);
 /// ```
 ///
-/// Its bytes are on the heap, so that the [`Received`](crate::Received) and
-/// [`Event`](crate::Event) carrying it stay cheap to move.
+/// The bytes are heap-allocated to keep [`Received`](crate::Received) and
+/// [`Event`](crate::Event) cheap to move.
 pub struct Datagram(Box<[u8]>);
 
 impl Datagram {
@@ -214,7 +212,7 @@ impl std::fmt::Debug for Datagram {
     }
 }
 
-/// An encrypted data message to send to the network, in the buffer it was written into.
+/// An encrypted data message, borrowing its output buffer.
 #[derive(Debug)]
 pub struct DataMessage<'a>(pub(crate) &'a mut [u8]);
 

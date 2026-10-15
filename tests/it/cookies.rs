@@ -1,7 +1,5 @@
 //! Cookie-based DoS mitigation (whitepaper §5.3): a responder under load
-//! answers handshakes with a cookie reply instead of doing expensive
-//! computation, and only proceeds once the initiator proves IP ownership by
-//! echoing the cookie in mac2.
+//! requires a valid cookie in `mac2` before doing expensive handshake work.
 
 use crate::harness::{
     COOKIE_EXPIRATION_TIME, COOKIE_REPLY_SIZE, HANDSHAKE_INIT_SIZE, KEEPALIVE_TIMEOUT, Kind,
@@ -24,9 +22,7 @@ fn responder_under_load_replies_with_a_cookie_instead_of_a_handshake() {
     assert!(!sim.is_established(B), "no session state was created");
 }
 
-/// The [`Interface`](sanstun::Interface) answers an initiation without a valid
-/// mac2 on its own, so the initiation never reaches the expensive handshake
-/// processing.
+/// Cookie replies are handled by the [`Interface`](sanstun::Interface), before tunnel processing.
 #[test]
 fn interface_replies_with_a_cookie_before_any_tunnel_is_involved() {
     let mut sim = Sim::builder().responder_under_load().build();
@@ -40,9 +36,7 @@ fn interface_replies_with_a_cookie_before_any_tunnel_is_involved() {
     assert_eq!(classify(&reply), Kind::CookieReply);
 }
 
-/// §5.4.4: a datagram shaped like a handshake initiation but without a valid
-/// mac1 is rejected before its static key is decrypted, whether or not we are
-/// under load.
+/// §5.4.4: an invalid `mac1` is rejected before any key exchange, even without load.
 #[test]
 fn interface_rejects_an_initiation_without_a_valid_mac1() {
     let mut garbage = [0xa5; HANDSHAKE_INIT_SIZE];
@@ -58,8 +52,7 @@ fn interface_rejects_an_initiation_without_a_valid_mac1() {
     }
 }
 
-/// The initiator stores the received cookie and its next (retransmitted)
-/// initiation carries a valid mac2, which the loaded responder accepts.
+/// The handshake retry carries the cookie in `mac2`, allowing it through under load.
 #[test]
 fn handshake_completes_under_load_via_cookie_retry() {
     let mut sim = Sim::builder().responder_under_load().build();
@@ -71,7 +64,7 @@ fn handshake_completes_under_load_via_cookie_retry() {
         "first attempt only yielded a cookie"
     );
 
-    // The regular REKEY_TIMEOUT retransmission carries mac2.
+    // Wait for the retry carrying `mac2`.
     sim.advance(secs(6));
 
     assert_eq!(sim.count(B, Kind::CookieReply), 1);
@@ -81,8 +74,7 @@ fn handshake_completes_under_load_via_cookie_retry() {
     sim.assert_connectivity();
 }
 
-/// A cookie stays valid for two minutes; within that window new handshakes
-/// keep using it and are accepted straight away.
+/// A cookie can be reused for two minutes.
 #[test]
 fn fresh_cookie_is_reused_for_subsequent_handshakes() {
     let mut sim = Sim::builder().responder_under_load().build();
@@ -97,8 +89,7 @@ fn fresh_cookie_is_reused_for_subsequent_handshakes() {
     assert_eq!(classify(&response), Kind::Response);
 }
 
-/// §5.3 / §6.1: cookies are discarded after `COOKIE_EXPIRATION_TIME`; a later
-/// handshake is back to square one and gets a fresh cookie reply.
+/// §5.3 / §6.1: a handshake with an expired cookie receives a fresh cookie reply.
 #[test]
 fn expired_cookie_forces_a_new_cookie_round_trip() {
     let mut sim = Sim::builder().responder_under_load().build();
@@ -114,28 +105,23 @@ fn expired_cookie_forces_a_new_cookie_round_trip() {
     assert_eq!(classify(&reply), Kind::CookieReply);
 }
 
-/// An `Interface` with a limit of 10 considers itself under load beyond 10
-/// handshake messages per second and recovers once the flood stops.
 #[test]
 fn rate_limited_tunnel_recovers_once_load_subsides() {
     let mut sim = flooded();
 
-    sim.advance(secs(2)); // The rate limit resets its counter every second.
+    sim.advance(secs(2));
 
     let init = sim.force_handshake_initiation(A);
     let response = sim.deliver(B, &init).expect_one_net();
     assert_eq!(classify(&response), Kind::Response);
 }
 
-/// The rate limit resets its window lazily when a handshake is received, so
-/// it recovers even if no timers are driven in the meantime. This is what lets
-/// an idle tunnel avoid waking up once a second just to reset the counter.
+/// Resetting the rate limit on receive lets idle tunnels avoid periodic wakeups.
 #[test]
 fn rate_limit_resets_without_driving_timers() {
     let mut sim = flooded();
 
-    // Advance time *without* calling `handle_timeout`, so the only thing that
-    // can clear the window is the lazy reset on the next received handshake.
+    // Bypass the timers so only the next handshake can reset the window.
     sim.now += secs(2);
 
     let init = sim.force_handshake_initiation(A);
@@ -151,8 +137,6 @@ fn rate_limit_resets_without_driving_timers() {
 fn cookie_reply_out_of_the_blue_is_rejected() {
     let mut sim = Sim::new();
 
-    // A valid-looking cookie reply (type 3, 64 bytes) without a preceding
-    // handshake from us must not be accepted.
     let mut cookie_reply = vec![0u8; COOKIE_REPLY_SIZE];
     cookie_reply[0] = 3;
 
@@ -161,8 +145,7 @@ fn cookie_reply_out_of_the_blue_is_rejected() {
     assert!(matches!(error, Error::UnexpectedPacket));
 }
 
-/// §5.4.7: a cookie reply only answers the one handshake message whose mac1 it
-/// is bound to. Once consumed, a replay of it is rejected.
+/// §5.4.7: a cookie reply is bound to one handshake's `mac1` and can only be used once.
 #[test]
 fn cookie_reply_is_only_accepted_once() {
     let mut sim = Sim::builder().responder_under_load().build();
@@ -175,10 +158,8 @@ fn cookie_reply_is_only_accepted_once() {
     assert!(matches!(error, Error::UnexpectedPacket));
 }
 
-/// A cookie reply is not proof that the peer is alive: anyone who saw our
-/// handshake initiation can get one by replaying it to the peer from their own
-/// address. It must not stop us from noticing that our data goes unanswered
-/// (§6.3, `KEEPALIVE_TIMEOUT + REKEY_TIMEOUT`).
+/// An attacker can solicit a cookie reply by replaying our initiation from another address.
+/// That reply must not reset the unanswered-data timer (§6.3).
 #[test]
 fn cookie_reply_does_not_count_as_a_reply_to_unanswered_data() {
     let mut sim = Sim::new();
@@ -199,8 +180,7 @@ fn cookie_reply_does_not_count_as_a_reply_to_unanswered_data() {
     assert_fires_at(inits[0], secs(1) + KEEPALIVE_TIMEOUT + REKEY_TIMEOUT);
 }
 
-/// Under load, a source with a valid cookie gets a burst of 5 handshake
-/// messages before further ones are rejected, ahead of any Diffie-Hellman.
+/// Under load, even handshakes with valid cookies are rate-limited before key exchange.
 #[test]
 fn valid_cookies_are_rate_limited_per_source() {
     let mut sim = Sim::builder().responder_under_load().build();
@@ -213,8 +193,7 @@ fn valid_cookies_are_rate_limited_per_source() {
     assert!(!passes(&mut sim, src));
 }
 
-/// A rate-limited source regains one handshake message every 50ms, up to the
-/// burst of 5.
+/// The rate limit recovers one handshake every 50ms, up to a burst of five.
 #[test]
 fn rate_limited_source_regains_a_handshake_every_50ms() {
     let mut sim = Sim::builder().responder_under_load().build();
@@ -264,7 +243,7 @@ fn addr(s: &str) -> SocketAddr {
     s.parse().unwrap()
 }
 
-/// Has `A` store the cookie that the loaded responder `B` hands out to `src`.
+/// Stores a cookie from `B` for `src` on `A`.
 #[track_caller]
 fn fetch_cookie(sim: &mut Sim, src: SocketAddr) {
     let init = sim.force_handshake_initiation(A);
@@ -276,8 +255,7 @@ fn fetch_cookie(sim: &mut Sim, src: SocketAddr) {
     sim.deliver(A, &reply).expect_consumed();
 }
 
-/// Replays `init` to `B` from `src` until `B` is under load and answers with a
-/// cookie reply, as an on-path attacker who saw `init` could.
+/// Replays `init` from `src` until `B` responds with a cookie.
 #[track_caller]
 fn solicit_cookie_reply(sim: &mut Sim, init: &[u8], src: SocketAddr) -> Vec<u8> {
     for _ in 0..100 {
@@ -299,11 +277,10 @@ fn exhaust(sim: &mut Sim, src: SocketAddr) {
     assert!(!passes(sim, src));
 }
 
-/// Whether a handshake initiation from `A`, sent from `src`, passes the
-/// [`Interface`](sanstun::Interface) of `B` rather than being rate-limited.
+/// Returns whether `B` accepts a handshake from `src` without rate limiting.
 #[track_caller]
 fn passes(sim: &mut Sim, src: SocketAddr) -> bool {
-    // `B` rejects an initiation with the same timestamp as the previous one as a replay.
+    // Give each initiation a distinct timestamp to avoid replay rejection.
     sim.now += Duration::from_micros(1);
     let init = sim.force_handshake_initiation(A);
 
@@ -314,8 +291,7 @@ fn passes(sim: &mut Sim, src: SocketAddr) -> bool {
     }
 }
 
-/// A pair whose responder has just answered the 11th handshake initiation
-/// within a second with a cookie reply.
+/// Exceeds `B`'s handshake limit and returns the pair after a cookie reply.
 #[track_caller]
 fn flooded() -> Sim {
     let mut sim = Sim::new();

@@ -2,7 +2,7 @@ use std::convert::TryInto;
 use std::fmt::{self, Debug};
 use std::time::{Duration, Instant};
 
-/// This struct represents a 12 byte [Tai64N](https://cr.yp.to/libtai/tai64.html) timestamp.
+/// A 12-byte [TAI64N](https://cr.yp.to/libtai/tai64.html) timestamp.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Tai64N {
     secs: u64,
@@ -23,7 +23,7 @@ impl TimeStamper {
         }
     }
 
-    /// Generate a 12 byte timestamp for the given instant.
+    /// Generates a timestamp for `now`.
     pub(crate) fn stamp(&self, now: Instant) -> [u8; 12] {
         let mut ext_stamp = [0u8; 12];
         let stamp = now.duration_since(self.created_at) + self.unix;
@@ -36,7 +36,7 @@ impl TimeStamper {
 impl Tai64N {
     const BASE: u64 = (1u64 << 62) + 37;
 
-    /// A zeroed out timestamp
+    /// Returns a timestamp with all bytes set to zero.
     pub(crate) fn zero() -> Tai64N {
         Tai64N { secs: 0, nano: 0 }
     }
@@ -46,12 +46,11 @@ impl Tai64N {
         let secs = u64::from_be_bytes(sec_bytes.try_into().unwrap());
         let nano = u32::from_be_bytes(nano_bytes.try_into().unwrap());
 
-        // WireGuard does not actually expect tai64n timestamp, just monotonically increasing one
+        // WireGuard only requires timestamps to increase, so no calendar validation is needed.
         Tai64N { secs, nano }
     }
 
-    /// Check if this timestamp represents a time that is chronologically after the time represented
-    /// by the other timestamp.
+    /// Returns whether this timestamp is later than `other`.
     pub(crate) fn after(&self, other: &Tai64N) -> bool {
         (self.secs > other.secs) || ((self.secs == other.secs) && (self.nano > other.nano))
     }

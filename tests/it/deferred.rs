@@ -1,6 +1,5 @@
-//! Deferred encryption and decryption of data messages: all state changes
-//! happen on the `Tunnel`, in order, while the AEAD work may run later, in any
-//! order and on any thread.
+//! Deferred encryption and decryption: tunnel state changes in order, while
+//! cryptographic work can run in any order on other threads.
 
 use crate::harness::{
     BUF, DATA_OVERHEAD, Outcome as _, Peer::A, Peer::B, REJECT_AFTER_TIME, REPLAY_WINDOW, Sim,

@@ -1,8 +1,8 @@
-//! Measures each step of sending and receiving a data message on its own.
+//! Measures the cost of each step in sending and receiving a data message.
 //!
-//! `begin_encapsulate`, `begin_decapsulate` and `commit_decapsulate` need `&mut Tunnel` and thus run
-//! on the thread that owns it, while `encrypt` and `decrypt` can be deferred to other threads. Their
-//! ratio bounds how much handing the crypto to other threads can gain.
+//! `begin_encapsulate`, `begin_decapsulate` and `commit_decapsulate` run on the thread that owns
+//! the tunnel. Comparing their cost with `encrypt` and `decrypt` shows how much work can move
+//! to other threads.
 
 use std::cell::RefCell;
 use std::hint::black_box;
@@ -16,7 +16,7 @@ use zeroize::Zeroizing;
 const PACKET_SIZES: [usize; 2] = [64, 1280];
 
 fn bench_data_path(c: &mut Criterion) {
-    // A fixed `now` keeps the sessions usable and no timer ever becomes due.
+    // Freeze time so the sessions stay usable throughout the benchmark.
     let now = Instant::now();
     let addr = "10.0.0.1:51820".parse().unwrap();
 
@@ -39,8 +39,7 @@ fn bench_data_path(c: &mut Criterion) {
             )
         });
 
-        // A message that is not committed can be received, decapsulated and decrypted again and
-        // again.
+        // The same message can be reused until its decryption is committed.
         let message = data_message(&mut sender, &payload, now);
 
         group.bench_function("receive", |b| {
@@ -139,8 +138,7 @@ fn begin_decapsulate(
     tunnel.begin_decapsulate(message, now).unwrap().unwrap()
 }
 
-/// Completes a handshake between two tunnels, returning the initiator and the responder together
-/// with its [`Interface`].
+/// Establishes two tunnels and returns the initiator, the responder's interface and the responder.
 fn established_tunnels(addr: SocketAddr, now: Instant) -> (Tunnel, Interface, Tunnel) {
     let unix = Duration::from_secs(1_700_000_000);
     let mut interface_a = Interface::new(Zeroizing::new(rand::random()), now, unix);

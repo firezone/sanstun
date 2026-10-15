@@ -1,16 +1,15 @@
 use crate::errors::Error;
 use crate::timers::REJECT_AFTER_MESSAGES;
 
-// Receiving buffer constants
 const WORD_SIZE: u64 = 64;
-const N_WORDS: u64 = 128; // Suffice to reorder 128*16 = 8192 packets; can be increased at will
+const N_WORDS: u64 = 128;
 const N_BITS: u64 = WORD_SIZE * N_WORDS;
 const _: () = assert!(REJECT_AFTER_MESSAGES <= u64::MAX - N_BITS);
 
+/// A sliding bitmap that rejects replays while allowing packets to arrive out of order.
 #[derive(Debug, Clone)]
 pub(crate) struct ReceivingKeyCounterValidator {
-    /// In order to avoid replays while allowing for some reordering of the packets, we keep a
-    /// bitmap of received packets, and the value of the highest counter
+    /// One past the highest accepted counter.
     next: u64,
     bitmap: [u64; N_WORDS as usize],
 }
@@ -41,7 +40,7 @@ impl ReceivingKeyCounterValidator {
         self.bitmap[word] &= !(1u64 << bit);
     }
 
-    /// Clear the word that contains idx
+    /// Clears the word containing `idx`.
     #[inline(always)]
     fn clear_word(&mut self, idx: u64) {
         let bit_idx = idx % N_BITS;
@@ -49,7 +48,6 @@ impl ReceivingKeyCounterValidator {
         self.bitmap[word] = 0;
     }
 
-    /// Returns true if bit is set, false otherwise
     #[inline(always)]
     fn check_bit(&self, idx: u64) -> bool {
         let bit_idx = idx % N_BITS;
@@ -58,18 +56,16 @@ impl ReceivingKeyCounterValidator {
         ((self.bitmap[word] >> bit) & 1) == 1
     }
 
-    /// Returns true if the counter was not yet received, and is not too far back
+    /// Checks whether `counter` is unseen and within the allowed range.
     #[inline(always)]
     pub(crate) fn will_accept(&self, counter: u64) -> Result<(), Error> {
         if counter >= REJECT_AFTER_MESSAGES {
             return Err(Error::InvalidCounter);
         }
         if counter >= self.next {
-            // As long as the counter is growing no replay took place for sure
             return Ok(());
         }
         if counter + N_BITS < self.next {
-            // Drop if too far back
             return Err(Error::InvalidCounter);
         }
         if !self.check_bit(counter) {
@@ -79,52 +75,43 @@ impl ReceivingKeyCounterValidator {
         }
     }
 
-    /// Marks the counter as received, and returns true if it is still good (in case during
-    /// decryption something changed)
+    /// Rechecks `counter` against the current replay window and marks it as received.
     #[inline(always)]
     pub(crate) fn mark_did_receive(&mut self, counter: u64) -> Result<(), Error> {
         if counter >= REJECT_AFTER_MESSAGES {
             return Err(Error::InvalidCounter);
         }
         if counter + N_BITS < self.next {
-            // Drop if too far back
             return Err(Error::InvalidCounter);
         }
         if counter == self.next {
-            // Usually the packets arrive in order, in that case we simply mark the bit and
-            // increment the counter
             self.set_bit(counter);
             self.next += 1;
             return Ok(());
         }
         if counter < self.next {
-            // A packet arrived out of order, check if it is valid, and mark
             if self.check_bit(counter) {
                 return Err(Error::DuplicateCounter);
             }
             self.set_bit(counter);
             return Ok(());
         }
-        // Packets where dropped, or maybe reordered, skip them and mark unused
+        // Clear skipped counters so reused bitmap positions do not appear to be replays.
         if counter - self.next >= N_BITS {
-            // Too far ahead, clear all the bits
             for c in self.bitmap.iter_mut() {
                 *c = 0;
             }
         } else {
             let mut i = self.next;
             while !i.is_multiple_of(WORD_SIZE) && i < counter {
-                // Clear until i aligned to word size
                 self.clear_bit(i);
                 i += 1;
             }
             while i + WORD_SIZE < counter {
-                // Clear whole word at a time
                 self.clear_word(i);
                 i = (i + WORD_SIZE) & 0u64.wrapping_sub(WORD_SIZE);
             }
             while i < counter {
-                // Clear any remaining bits
                 self.clear_bit(i);
                 i += 1;
             }

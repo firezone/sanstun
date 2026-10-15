@@ -1,18 +1,14 @@
-//! Behavioural integration tests for sanstun's sans-IO WireGuard
-//! implementation ([`sanstun::Tunnel`]).
+//! Integration tests for the public [`sanstun::Tunnel`] API.
 //!
-//! All tests drive two `Tunnel` instances against each other through the public
-//! API only, on a virtual clock (see [`harness`]). They are grounded in the
-//! WireGuard whitepaper (<https://www.wireguard.com/papers/wireguard.pdf>):
+//! Tests connect two tunnels using a virtual clock (see [`harness`]) and check
+//! their behaviour against the [WireGuard whitepaper](https://www.wireguard.com/papers/wireguard.pdf):
 //!
 //! - §5.3: cookies and DoS mitigation (`cookies`)
 //! - §5.4: protocol messages (`handshake`, `data`, `deferred`)
 //! - §5.4.6, §6.4: nonce-based replay protection (`replay`)
 //! - §6.1-§6.5: timers, keepalives and passive stealth (`timers`)
 //!
-//! Behaviour specific to the sans-IO design - explicit time injection,
-//! `poll_timeout` and jittered handshake scheduling - is covered in
-//! `sans_io`.
+//! [`sans_io`] covers time handling, `poll_timeout` and handshake scheduling.
 
 mod cookies;
 mod data;

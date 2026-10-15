@@ -9,21 +9,20 @@ const PACKETS_BURSTABLE: u32 = 5;
 const PACKET_COST: Duration = Duration::from_nanos(1_000_000_000 / PACKETS_PER_SECOND as u64);
 const TOKEN_MAX: Duration = PACKET_COST.saturating_mul(PACKETS_BURSTABLE);
 
-/// How long a source must be idle before its bucket is dropped.
+/// How long an idle source keeps its bucket.
 ///
-/// By then its bucket has refilled completely, so dropping it is indistinguishable from keeping it.
+/// The bucket must be full by then so removal does not change the source's budget.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(1);
 const _: () = assert!(IDLE_TIMEOUT.as_nanos() >= TOKEN_MAX.as_nanos());
 
 const MAX_SOURCES: usize = 65536;
 
-/// Limits the handshake messages we process.
+/// Limits handshake processing under load.
 ///
-/// Beyond a global number of messages per second we are under load, and then each source gets a
-/// token bucket: IPv4 per address, IPv6 per /64.
+/// Once the global threshold is reached, each IPv4 address or IPv6 /64 gets a token bucket.
 pub(crate) struct RateLimiter {
     limit: u64,
-    /// The messages counted since `window_start`
+    /// Messages counted since `window_start`.
     count: u64,
     window_start: Instant,
     buckets: HashMap<Source, Bucket>,
@@ -45,7 +44,7 @@ impl RateLimiter {
         self.limit = limit;
     }
 
-    /// Counts a handshake message and whether more than the limit arrived in the current second.
+    /// Counts a handshake message and returns whether it exceeds this second's limit.
     pub(crate) fn is_under_load(&mut self, now: Instant) -> bool {
         if now.duration_since(self.window_start) >= Duration::from_secs(1) {
             self.count = 0;
@@ -58,7 +57,7 @@ impl RateLimiter {
         count >= self.limit
     }
 
-    /// Whether a packet from `addr` is within its budget, taking it out of the budget if so.
+    /// Consumes one token for `addr`, returning whether the packet is allowed.
     ///
     /// Packets from new sources are refused while the table is full.
     pub(crate) fn allow(&mut self, addr: IpAddr, now: Instant) -> bool {
@@ -85,7 +84,7 @@ impl RateLimiter {
         true
     }
 
-    /// Drops the buckets of idle sources, at most once per `IDLE_TIMEOUT`.
+    /// Removes idle buckets, at most once per `IDLE_TIMEOUT`.
     fn gc(&mut self, now: Instant) {
         if now.duration_since(self.last_gc) < IDLE_TIMEOUT {
             return;
@@ -102,7 +101,7 @@ impl RateLimiter {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum Source {
     V4(Ipv4Addr),
-    /// The upper 64 bits of the address
+    /// The upper 64 bits of the address.
     V6(u64),
 }
 

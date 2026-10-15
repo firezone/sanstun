@@ -18,7 +18,7 @@ pub(crate) fn b2s_hash(data1: &[u8], data2: &[u8]) -> [u8; 32] {
 }
 
 #[inline]
-/// RFC 2401 HMAC+Blake2s, not to be confused with *keyed* Blake2s
+/// Computes HMAC-BLAKE2s, which differs from keyed BLAKE2s.
 pub(crate) fn b2s_hmac(key: &[u8; 32], data1: &[u8]) -> Zeroizing<[u8; 32]> {
     use blake2::digest::Update;
     let mut hmac = HmacBlake2s::new_from_slice(key).unwrap();
@@ -29,7 +29,7 @@ pub(crate) fn b2s_hmac(key: &[u8; 32], data1: &[u8]) -> Zeroizing<[u8; 32]> {
 }
 
 #[inline]
-/// Like b2s_hmac, but chain data1 and data2 together
+/// Computes HMAC-BLAKE2s over `data1` followed by `data2`.
 pub(crate) fn b2s_hmac2(key: &[u8; 32], data1: &[u8; 32], data2: &[u8]) -> Zeroizing<[u8; 32]> {
     use blake2::digest::Update;
     let mut hmac = HmacBlake2s::new_from_slice(key).unwrap();
@@ -56,7 +56,7 @@ pub(crate) fn b2s_keyed_mac_16_2(key: &[u8], data1: &[u8], data2: &[u8]) -> [u8;
 }
 
 #[inline]
-/// This wrapper involves an extra copy and MAY BE SLOWER
+/// Encrypts `data` into `ciphertext` and appends the authentication tag.
 pub(crate) fn aead_chacha20_seal(
     ciphertext: &mut [u8],
     key: &[u8; 32],
@@ -91,7 +91,7 @@ fn aead_chacha20_seal_inner(
 }
 
 #[inline]
-/// This wrapper involves an extra copy and MAY BE SLOWER
+/// Authenticates and decrypts `data` into `buffer`.
 pub(crate) fn aead_chacha20_open(
     buffer: &mut [u8],
     key: &[u8; 32],
@@ -127,8 +127,7 @@ fn aead_chacha20_open_inner(
     Ok(())
 }
 
-/// XChaCha20-Poly1305 (draft-irtf-cfrg-xchacha-03): writes `data` encrypted under `key` and
-/// `nonce` into `ciphertext`, followed by the 16-byte tag.
+/// Encrypts `data` with XChaCha20-Poly1305 and appends the 16-byte authentication tag.
 pub(crate) fn xaead_seal(
     ciphertext: &mut [u8],
     key: &[u8; 32],
@@ -141,8 +140,7 @@ pub(crate) fn xaead_seal(
     aead_chacha20_seal_inner(ciphertext, &subkey, nonce, data, aad)
 }
 
-/// XChaCha20-Poly1305 (draft-irtf-cfrg-xchacha-03): verifies the tag at the end of `data` and
-/// writes its decryption under `key` and `nonce` into `buffer`.
+/// Authenticates and decrypts XChaCha20-Poly1305 `data` into `buffer`.
 pub(crate) fn xaead_open(
     buffer: &mut [u8],
     key: &[u8; 32],
@@ -157,7 +155,7 @@ pub(crate) fn xaead_open(
     Ok(())
 }
 
-/// The ChaCha20-Poly1305 key and nonce that XChaCha20-Poly1305 with `key` and `nonce` reduces to.
+/// Derives the ChaCha20-Poly1305 key and nonce for XChaCha20-Poly1305.
 fn xchacha20_subkey_and_nonce(key: &[u8; 32], nonce: &[u8; 24]) -> (Zeroizing<[u8; 32]>, [u8; 12]) {
     let (hchacha20_nonce, tail) = nonce.split_first_chunk::<16>().unwrap();
 
@@ -169,16 +167,16 @@ fn xchacha20_subkey_and_nonce(key: &[u8; 32], nonce: &[u8; 24]) -> (Zeroizing<[u
     (Zeroizing::new(subkey.into()), chacha20_nonce)
 }
 
-/// The ChaCha20Poly1305 nonce for `counter`: 32 zero bits followed by the counter in little endian.
+/// Encodes `counter` as a ChaCha20-Poly1305 nonce: 32 zero bits followed by a little-endian counter.
 pub(crate) fn nonce(counter: u64) -> [u8; 12] {
     let mut nonce = [0u8; 12];
     nonce[4..].copy_from_slice(&counter.to_le_bytes());
     nonce
 }
 
-/// X25519 of `private` and `public`.
+/// Derives the X25519 shared secret for `private` and `public`.
 ///
-/// Rejects the all-zero result of a low-order `public` key, as WireGuard's `mix_dh` does.
+/// Rejects low-order public keys that produce an all-zero shared secret.
 pub(crate) fn dh(private: &impl x25519::Secret, public: &PublicKey) -> Result<SharedKey, Error> {
     let shared = private.diffie_hellman(&public.to_dalek());
 
@@ -189,7 +187,7 @@ pub(crate) fn dh(private: &impl x25519::Secret, public: &PublicKey) -> Result<Sh
     Ok(SharedKey(shared))
 }
 
-/// A contributory X25519 result, only constructed by [`dh`].
+/// An X25519 shared secret validated by [`dh`].
 pub(crate) struct SharedKey(SharedSecret);
 
 impl SharedKey {
@@ -207,14 +205,20 @@ mod x25519 {
     }
 
     impl Secret for StaticSecret {
-        #[expect(clippy::disallowed_methods, reason = "This is `dh`'s implementation.")]
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Called through the validating `dh` wrapper."
+        )]
         fn diffie_hellman(&self, public: &PublicKey) -> SharedSecret {
             self.as_dalek().diffie_hellman(public)
         }
     }
 
     impl Secret for ReusableSecret {
-        #[expect(clippy::disallowed_methods, reason = "This is `dh`'s implementation.")]
+        #[expect(
+            clippy::disallowed_methods,
+            reason = "Called through the validating `dh` wrapper."
+        )]
         fn diffie_hellman(&self, public: &PublicKey) -> SharedSecret {
             ReusableSecret::diffie_hellman(self, public)
         }
@@ -324,7 +328,7 @@ mod tests {
         eprintln!("encrypted_nothing: {encrypted_nothing:?}");
 
         aead_chacha20_open(&mut [], &key, counter, &encrypted_nothing, &aad)
-            .expect("Should open what we just sealed");
+            .expect("freshly encrypted data must decrypt");
     }
 
     /// <https://datatracker.ietf.org/doc/html/draft-irtf-cfrg-xchacha-03#appendix-A.1>
