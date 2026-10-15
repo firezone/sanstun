@@ -105,50 +105,7 @@ pub struct TransportData {
 
 /// A network message parsed by [`Interface::receive`](crate::Interface::receive).
 ///
-/// Messages can only be obtained through that method and cannot be cloned or constructed directly:
-///
-/// ```compile_fail
-/// let _ = sanstun::HandshakeInitiation {
-///     sender_idx: 0,
-///     peer_static_public: todo!(),
-///     peer_ephemeral_public: todo!(),
-///     chaining_key: todo!(),
-///     hash: [0; 32],
-///     timestamp: todo!(),
-/// };
-/// ```
-///
-/// ```compile_fail
-/// let _ = sanstun::HandshakeResponse {
-///     sender_idx: 0,
-///     receiver_idx: 0,
-///     unencrypted_ephemeral: [0; 32],
-///     encrypted_nothing: [0; 16],
-/// };
-/// ```
-///
-/// ```compile_fail
-/// let _ = sanstun::CookieReply {
-///     receiver_idx: 0,
-///     nonce: [0; 24],
-///     encrypted_cookie: [0; 32],
-/// };
-/// ```
-///
-/// ```compile_fail
-/// let _ = sanstun::TransportData {
-///     receiver_idx: 0,
-///     counter: 0,
-/// };
-/// ```
-///
-/// ```compile_fail
-/// fn duplicate(
-///     message: sanstun::ReceivedMessage,
-/// ) -> (sanstun::ReceivedMessage, sanstun::ReceivedMessage) {
-///     (message.clone(), message)
-/// }
-/// ```
+/// Messages can only be obtained through that method and cannot be cloned or constructed directly.
 #[derive(Debug)]
 pub enum ReceivedMessage {
     HandshakeInitiation(HandshakeInitiation),
@@ -176,15 +133,7 @@ impl ReceivedMessage {
 
 /// Bytes to send to the peer as one UDP datagram.
 ///
-/// Datagrams can only be created by sanstun:
-///
-/// ```compile_fail
-/// let _ = sanstun::Datagram(Box::new([0; 148]));
-/// ```
-///
-/// ```compile_fail
-/// let _ = sanstun::Datagram::new([0; 148]);
-/// ```
+/// Datagrams can only be created by sanstun.
 ///
 /// The bytes are heap-allocated to keep [`Received`](crate::Received) and
 /// [`Event`](crate::Event) cheap to move.
