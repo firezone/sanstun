@@ -15,8 +15,7 @@ fn handshake_completes_in_one_round_trip() {
 
     sim.establish();
 
-    // §6.5: the first message of the initiator on the new session confirms
-    // the key to the responder; with nothing to send, that is a keepalive.
+    // §6.5: the initiator confirms the session with a keepalive when it has no data to send.
     let flow = sim
         .log
         .iter()
@@ -50,8 +49,7 @@ fn handshake_with_matching_preshared_key_succeeds() {
     sim.assert_connectivity();
 }
 
-// §5.4.4: the PSK is mixed into the key derivation of the response, so a
-// mismatch surfaces as an unopenable response on the initiator.
+// §5.4.4: the PSK is part of the response's key derivation, so a mismatch prevents decryption.
 #[test]
 fn handshake_with_mismatched_preshared_key_fails() {
     let mut sim = Sim::builder().psk_a([0x42; 32]).build();
@@ -94,9 +92,7 @@ fn replayed_handshake_initiation_is_rejected() {
     assert!(matches!(error, Error::WrongTai64nTimestamp));
 }
 
-// The timestamp only protects against replay if the responder remembers the
-// newest one it accepted. Callers replace the tunnel to a peer, e.g. once it
-// expired, so the `Interface` must remember it, not the `Tunnel`.
+// Replay protection must survive tunnel replacement, so the `Interface` remembers timestamps.
 #[test]
 fn replayed_handshake_initiation_is_rejected_after_the_tunnel_is_replaced() {
     let mut sim = Sim::new();
@@ -109,8 +105,7 @@ fn replayed_handshake_initiation_is_rejected_after_the_tunnel_is_replaced() {
     assert!(matches!(error, Error::WrongTai64nTimestamp));
 }
 
-// sanstun keeps two outgoing handshakes in flight so that a delayed
-// response to an earlier initiation is not lost on flaky networks.
+// Keeping two outgoing handshakes allows a delayed response to complete either one.
 #[test]
 fn delayed_response_to_a_superseded_initiation_is_accepted() {
     let mut sim = Sim::new();
@@ -119,8 +114,6 @@ fn delayed_response_to_a_superseded_initiation_is_accepted() {
     sim.advance(crate::harness::secs(1));
     let _second_init = sim.force_handshake_initiation(A);
 
-    // The *first* initiation reaches the responder, whose response must still
-    // complete the handshake on the initiator.
     sim.route(A, first_init);
 
     assert!(sim.is_established(A));
@@ -142,8 +135,7 @@ fn simultaneous_handshake_initiations_converge() {
     sim.assert_connectivity();
 }
 
-// §6.1: the responder keeps sending on the previous session until the
-// initiator confirms the new one, however many initiations it answers.
+// §6.1: only the initiator's confirmation allows the responder to switch sessions.
 #[test]
 fn unconfirmed_sessions_never_replace_the_current_one() {
     let mut sim = Sim::connected();
@@ -160,10 +152,7 @@ fn unconfirmed_sessions_never_replace_the_current_one() {
     assert_eq!(sim.deliver(A, &datagram).expect_one_ip(), ip_packet);
 }
 
-// §6.1: a responder only sends on a session the initiator confirmed. That
-// holds after the old current session expired, too, even once the session
-// part of the local index wraps around and hands out that session's index
-// again.
+// §6.1: reusing an expired session's index must not bypass confirmation.
 #[test]
 fn responder_waits_for_confirmation_after_its_session_index_wraps() {
     let mut sim = Sim::connected();
@@ -174,8 +163,7 @@ fn responder_waits_for_confirmation_after_its_session_index_wraps() {
         Err(Error::NoCurrentSession)
     ));
 
-    // The session part of the index has 8 bits, so the 256th index B hands
-    // out is the one of its expired session.
+    // After 256 handshakes, the 8-bit session index wraps to the expired session's index.
     for _ in 0..256 {
         sim.suspend(Duration::from_millis(200));
         let init = sim.force_handshake_initiation(A);
@@ -195,7 +183,7 @@ fn tampered_handshake_initiation_is_rejected() {
     let mut sim = Sim::new();
 
     let mut init = sim.initiate_handshake(A);
-    init[100] ^= 1; // Any bit flip up to mac1 must invalidate mac1 (§5.4.4).
+    init[100] ^= 1; // Tamper with the bytes covered by `mac1` (§5.4.4).
 
     let error = sim.deliver(B, &init).expect_err();
 
@@ -208,7 +196,7 @@ fn malformed_datagrams_are_rejected() {
     let init = sim.initiate_handshake(A);
 
     for garbage in [
-        &[1u8, 2, 3] as &[u8],   // too short to even carry a message type
+        &[1u8, 2, 3] as &[u8],   // truncated message type
         &[0xff; 148],            // unknown message type
         &init[..init.len() - 1], // truncated handshake initiation
     ] {
@@ -218,11 +206,10 @@ fn malformed_datagrams_are_rejected() {
     }
 
     let kind = classify(&init);
-    assert_eq!(kind, Kind::Init, "the untampered packet parses fine");
+    assert_eq!(kind, Kind::Init, "the original packet should parse");
 }
 
-// A low-order peer static key makes DH(static, static) all zeros, which
-// WireGuard rejects so that a peer without a PSK cannot be impersonated.
+// A low-order static key gives an all-zero shared secret, allowing impersonation without a PSK.
 #[test]
 fn tunnel_rejects_low_order_peer_static_key() {
     let p_minus_1 = {

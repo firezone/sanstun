@@ -5,16 +5,16 @@ use std::sync::{Arc, Weak};
 use rand::rngs::StdRng;
 use rand::{CryptoRng, RngExt, SeedableRng};
 
-/// Identifies a [`Tunnel`](crate::Tunnel) among those of its [`Interface`](crate::Interface).
+/// Identifies a [`Tunnel`](crate::Tunnel) within its [`Interface`](crate::Interface).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TunnelId(u32);
 
 /// Identifies a session of a [`Tunnel`](super::Tunnel).
 ///
 /// The top 24 bits identify the tunnel.
-/// The lower 8 bits are used as a rotating session index with a given peer.
+/// The lower 8 bits rotate through session indices for that tunnel.
 ///
-/// This allows for ~16M unique peers and 256 sessions per peer.
+/// This allows roughly 16 million tunnels with 256 session indices each.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub(crate) struct Index(u32);
 
@@ -56,7 +56,7 @@ impl Index {
     }
 }
 
-/// Hands out random indices for new tunnels, skipping those of tunnels that are still alive.
+/// Allocates random tunnel indices without reusing those of live tunnels.
 pub(crate) struct TunnelIndices {
     rng: StdRng,
     in_use: HashMap<u32, Weak<()>>,
@@ -70,7 +70,7 @@ impl TunnelIndices {
         }
     }
 
-    /// The index of a new tunnel, which stays reserved until the returned lease is dropped.
+    /// Allocates a tunnel index, reserved until the returned lease is dropped.
     pub(crate) fn next(&mut self) -> (Index, Arc<()>) {
         if self.in_use.len() == self.in_use.capacity() {
             for _ in self
@@ -145,11 +145,9 @@ mod tests {
         );
     }
 
-    /// What an observer of three consecutive tunnel indices on the wire predicts the next one to
-    /// be, knowing only the public LFSR polynomial.
+    /// Predicts the next index from three observed indices if they follow a masked LFSR.
     ///
-    /// Each index is `(state - 1) ^ mask`, so every guess of the 24-bit mask determines the
-    /// LFSR states, and only the guesses consistent with the LFSR's steps survive.
+    /// Each index is `(state - 1) ^ mask`. Only mask guesses consistent with the LFSR survive.
     fn predict_next_global_index(observed: [u32; 3]) -> Vec<u32> {
         const POLY: u32 = 0xd80000;
         let step = |s: u32| (s >> 1) ^ (0u32.wrapping_sub(s & 1) & POLY);
@@ -192,7 +190,7 @@ mod tests {
             index.wrapping_increment();
         }
 
-        // Cycling through it again starts on 0
+        // The session index wraps back to zero.
         for i in 0..256 {
             assert_eq!(index.session(), i);
 

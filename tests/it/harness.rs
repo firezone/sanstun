@@ -1,10 +1,7 @@
-//! A deterministic test harness that drives two [`Tunnel`] instances against
-//! each other over an in-memory network with a virtual clock.
+//! Two [`Tunnel`] instances connected by an in-memory network and a virtual clock.
 //!
-//! Time only moves when a test says so ([`Sim::advance`]), packets only flow
-//! when routed ([`Sim::route`]) or hand-delivered ([`Sim::deliver`]), and all
-//! routed traffic is recorded in [`Sim::log`] so tests can assert *what* was
-//! sent *when*.
+//! Tests control time through [`Sim::advance`] and packet delivery through
+//! [`Sim::route`] or [`Sim::deliver`]. [`Sim::log`] records routed traffic.
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
@@ -16,9 +13,8 @@ use sanstun::{Interface, Received};
 use sanstun::{PresharedKey, PublicKey, StaticSecret};
 use zeroize::Zeroizing;
 
-// Protocol constants from the WireGuard whitepaper (§6.1, table on p. 14).
-// They are deliberately redefined here instead of imported: the tests assert
-// that the implementation conforms to the paper, not to itself.
+// Define constants independently from the implementation to check conformance
+// to the WireGuard whitepaper (§6.1, p. 14).
 pub const REKEY_AFTER_TIME: Duration = Duration::from_secs(120);
 pub const REJECT_AFTER_TIME: Duration = Duration::from_secs(180);
 pub const REKEY_ATTEMPT_TIME: Duration = Duration::from_secs(90);
@@ -28,9 +24,8 @@ pub const COOKIE_EXPIRATION_TIME: Duration = Duration::from_secs(120);
 /// Handshake initiations are delayed by a random jitter of up to 333ms (§6.1).
 pub const MAX_JITTER: Duration = Duration::from_millis(333);
 
-/// sanstun stops *initiating* on a session `KEEPALIVE_TIMEOUT` before
-/// `REJECT_AFTER_TIME`, so that packets sent just before the deadline can
-/// still be decrypted by the peer (implementation-specific safety margin).
+/// The initiator's sending cutoff leaves `KEEPALIVE_TIMEOUT` for packets to
+/// reach the peer before session expiry.
 pub const SHOULD_NOT_USE_AFTER_TIME: Duration = Duration::from_secs(180 - 10);
 
 /// A data message carries 16 bytes of header plus a 16-byte AEAD tag (§5.4.6).
@@ -41,16 +36,13 @@ pub const HANDSHAKE_INIT_SIZE: usize = 148;
 pub const HANDSHAKE_RESPONSE_SIZE: usize = 92;
 pub const COOKIE_REPLY_SIZE: usize = 64;
 
-/// sanstun's anti-replay window: 128 words of 64 bits each
-/// (implementation-specific; the paper's reference window is 2000 packets).
+/// sanstun uses an 8192-packet replay window; the paper uses 2000 packets.
 pub const REPLAY_WINDOW: u64 = 8192;
 
-/// Handshake messages per second a peer accepts before it considers itself under load.
+/// Handshakes per second before a peer considers itself under load.
 const HANDSHAKE_RATE_LIMIT: u64 = 10;
 
-/// Slack the timing assertions allow on either side of a deadline, covering the
-/// few polls a peer may take to act on one (scheduling a handshake at one
-/// instant, sending it at the next).
+/// Timing tolerance for events that take multiple polls to schedule and emit.
 pub const TICK: Duration = Duration::from_millis(100);
 
 pub const BUF: usize = 4096;
@@ -74,7 +66,7 @@ impl Peer {
     }
 }
 
-/// What a datagram on the simulated wire is.
+/// A datagram's protocol message type.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
     Init,
@@ -84,7 +76,7 @@ pub enum Kind {
     Keepalive,
 }
 
-/// The kind of a datagram by its message type and size (§5.4).
+/// Classifies a datagram by message type and size (§5.4).
 pub fn classify(datagram: &[u8]) -> Kind {
     let message_type = u32::from_le_bytes(datagram[..4].try_into().unwrap());
 
@@ -98,14 +90,14 @@ pub fn classify(datagram: &[u8]) -> Kind {
     }
 }
 
-/// The receiver index of a data message, identifying the session it uses.
+/// Returns the receiver index identifying a data message's session.
 pub fn receiver_index(datagram: &[u8]) -> u32 {
     assert!(matches!(classify(datagram), Kind::Data | Kind::Keepalive));
 
     u32::from_le_bytes(datagram[4..8].try_into().unwrap())
 }
 
-/// The counter of a data message, which doubles as its nonce (§5.4.6).
+/// Returns a data message's counter, also used as its nonce (§5.4.6).
 pub fn counter(datagram: &[u8]) -> u64 {
     assert!(matches!(classify(datagram), Kind::Data | Kind::Keepalive));
 
@@ -228,21 +220,19 @@ impl Builder {
         self
     }
 
-    /// Use fixed static private keys instead of random ones.
+    /// Sets fixed static private keys.
     pub fn static_keys(mut self, secret_a: [u8; 32], secret_b: [u8; 32]) -> Self {
         self.static_keys = Some((secret_a, secret_b));
         self
     }
 
-    /// Give the responder an [`Interface`] that considers it permanently under
-    /// load, forcing the cookie mechanism (§5.3) on every handshake.
+    /// Requires a cookie for every handshake with the responder (§5.3).
     pub fn responder_under_load(mut self) -> Self {
         self.responder_under_load = true;
         self
     }
 
-    /// Configure the responder to expect a different static public key than
-    /// the initiator's.
+    /// Gives the responder an incorrect public key for the initiator.
     pub fn responder_expects_different_key(mut self) -> Self {
         self.responder_expects_different_key = true;
         self
@@ -324,8 +314,7 @@ impl Builder {
     }
 }
 
-/// Two [`Tunnel`] instances (`A`, the conventional initiator, and `B`, the
-/// responder) connected by a simulated network.
+/// Two connected tunnels, with `A` usually initiating and `B` responding.
 pub struct Sim {
     start: Instant,
     pub now: Instant,
@@ -347,12 +336,12 @@ impl Sim {
         }
     }
 
-    /// A fresh pair without an established session.
+    /// Creates a pair without an established session.
     pub fn new() -> Sim {
         Sim::builder().build()
     }
 
-    /// A pair with a completed handshake and an empty packet log.
+    /// Creates a connected pair with an empty packet log.
     pub fn connected() -> Sim {
         let mut sim = Sim::new();
         sim.establish();
@@ -376,8 +365,7 @@ impl Sim {
         &mut self.node_mut(peer).tunn
     }
 
-    /// Replace the tunnel of `peer` with a fresh one to the same remote static key, created by
-    /// the same [`Interface`], as a caller does after dropping a tunnel.
+    /// Replaces `peer`'s tunnel, preserving its interface and remote public key.
     pub fn replace_tunnel(&mut self, peer: Peer) {
         let now = self.now;
         let node = self.node_mut(peer);
@@ -393,7 +381,7 @@ impl Sim {
         self.now - self.start
     }
 
-    /// Whether `peer` currently has a usable session.
+    /// Returns whether `peer` has an established session.
     pub fn is_established(&self, peer: Peer) -> bool {
         self.tunn(peer)
             .time_since_last_handshake(self.now)
@@ -404,7 +392,7 @@ impl Sim {
         &self.node(peer).errors
     }
 
-    /// How often `peer` emitted [`sanstun::Event::ConnectionExpired`].
+    /// Counts [`sanstun::Event::ConnectionExpired`] events from `peer`.
     pub fn expirations(&self, peer: Peer) -> usize {
         self.node(peer).expirations
     }
@@ -413,9 +401,7 @@ impl Sim {
         std::mem::take(&mut self.node_mut(peer).inbox)
     }
 
-    // --- Network fault injection ---
-
-    /// Drop all packets in both directions from now on.
+    /// Drops all subsequent packets in both directions.
     pub fn cut_link(&mut self) {
         self.nodes[0].drop_outgoing = true;
         self.nodes[1].drop_outgoing = true;
@@ -426,29 +412,15 @@ impl Sim {
         self.nodes[1].drop_outgoing = false;
     }
 
-    // --- Driving the tunnels ---
-
-    /// Advance time without polling either peer, as when the host suspends.
-    ///
-    /// Every deadline inside the window goes unserviced; the next poll meets
-    /// them all at once.
+    /// Advances time without polling either peer, simulating host suspension.
     pub fn suspend(&mut self, duration: Duration) {
         self.now += duration;
     }
 
-    /// Advance the virtual clock, driving both peers purely by the instants they
-    /// announce via `poll_timeout` and routing whatever they emit.
+    /// Advances time, polling at each announced deadline and routing emitted packets.
     ///
-    /// Rather than polling on a fixed interval, we jump straight to the earliest
-    /// instant either peer asked to be called back at. That asserts two things
-    /// about `poll_timeout` on every test that advances time.
-    ///
-    /// It is *complete*: a caller that only ever polls at the announced instants
-    /// observes exactly the same behaviour as one polling once a second.
-    ///
-    /// Every instant it announces is also *actionable*: polling at one clears
-    /// it. A deadline that survived being polled would be handed straight back
-    /// here and stall the loop, which the assertion below reports.
+    /// Relying on `poll_timeout` exposes missing deadlines. The loop also checks
+    /// that polling clears each deadline, so a stale timer cannot stall the caller.
     pub fn advance(&mut self, duration: Duration) {
         let end = self.now + duration;
         let mut polls_at_now = 0;
@@ -458,13 +430,11 @@ impl Sim {
                 .into_iter()
                 .filter_map(|peer| self.tunn(peer).poll_timeout())
                 .min()
-                // Never move backwards: a deadline may have elapsed already.
+                // A deadline may have passed during suspension.
                 .map(|at| at.max(self.now))
                 .unwrap_or(end);
 
-            // Landing on the current instant is legitimate as long as each poll
-            // drains a timer that is due; the peers hold a handful between them,
-            // so only a long run of them means one never fires at all.
+            // Several timers can be due at once. Repeated polls must eventually clear them.
             if next == self.now {
                 polls_at_now += 1;
             } else {
@@ -491,8 +461,7 @@ impl Sim {
         }
     }
 
-    /// Put a datagram on the wire and let the peers exchange packets until the
-    /// network is quiet. Every datagram is logged, dropped datagrams included.
+    /// Routes a datagram and its replies until the network is quiet, logging dropped packets too.
     pub fn route(&mut self, from: Peer, datagram: Vec<u8>) {
         let mut in_flight = VecDeque::from([(from, datagram)]);
         let mut hops = 0;
@@ -525,20 +494,19 @@ impl Sim {
         }
     }
 
-    /// Feed a single datagram into `to`, bypassing the network (and thus the
-    /// log and any link faults). Replies are returned, not routed.
+    /// Delivers a datagram directly, bypassing the log and link faults and returning any replies.
     pub fn deliver(&mut self, to: Peer, datagram: &[u8]) -> Vec<Out> {
         let src = self.node(to.other()).addr;
         self.deliver_from(to, datagram, src)
     }
 
-    /// Run a datagram through the [`Interface`] of `to`, as if sent by its peer.
+    /// Receives a datagram on `to`'s [`Interface`] from its peer's address.
     pub fn try_receive(&mut self, to: Peer, datagram: &[u8]) -> Result<Received, Error> {
         let src = self.node(to.other()).addr;
         self.try_receive_from(to, datagram, src)
     }
 
-    /// Run a datagram through the [`Interface`] of `to`, as if sent from `src`.
+    /// Receives a datagram on `to`'s [`Interface`] from `src`.
     pub fn try_receive_from(
         &mut self,
         to: Peer,
@@ -549,7 +517,7 @@ impl Sim {
         self.node_mut(to).interface.receive(src, datagram, now)
     }
 
-    /// Like [`Sim::try_receive`], panicking unless the datagram passes.
+    /// Receives a datagram, panicking unless the interface accepts it as a message.
     #[track_caller]
     pub fn receive(&mut self, to: Peer, datagram: &[u8]) -> ReceivedMessage {
         match self.try_receive(to, datagram) {
@@ -586,7 +554,7 @@ impl Sim {
         outs
     }
 
-    /// Drain the events of `peer`, returning the datagrams it needs to send.
+    /// Drains `peer`'s events and returns outgoing datagrams.
     fn drain_events(&mut self, peer: Peer) -> Vec<Vec<u8>> {
         let now = self.now;
         let node = self.node_mut(peer);
@@ -611,7 +579,7 @@ impl Sim {
         outgoing
     }
 
-    /// Feed a data message into `to`, stopping before its decryption.
+    /// Prepares a data message for decryption on `to`.
     #[track_caller]
     pub fn prepare_decrypt(
         &mut self,
@@ -625,8 +593,7 @@ impl Sim {
         Ok(pending.expect("a data message"))
     }
 
-    /// Complete a decryption on `to`, yielding the IP packet, or `None` for a
-    /// keepalive.
+    /// Commits a decryption on `to`, returning an IP packet or `None` for a keepalive.
     pub fn commit<B: AsRef<[u8]>>(
         &mut self,
         to: Peer,
@@ -643,9 +610,7 @@ impl Sim {
         }
     }
 
-    // --- Handshakes ---
-
-    /// Create (but do not deliver) a handshake initiation from `peer`.
+    /// Creates a handshake initiation from `peer` without delivering it.
     #[track_caller]
     pub fn initiate_handshake(&mut self, peer: Peer) -> Vec<u8> {
         let now = self.now;
@@ -656,7 +621,7 @@ impl Sim {
             .to_vec()
     }
 
-    /// Like [`Sim::initiate_handshake`], but also when one is already in flight.
+    /// Creates an initiation even if a handshake is already in progress.
     #[track_caller]
     pub fn force_handshake_initiation(&mut self, peer: Peer) -> Vec<u8> {
         let now = self.now;
@@ -667,7 +632,7 @@ impl Sim {
             .to_vec()
     }
 
-    /// Complete a full handshake initiated by `A`.
+    /// Completes a handshake initiated by `A`.
     #[track_caller]
     pub fn establish(&mut self) {
         let init = self.initiate_handshake(Peer::A);
@@ -683,9 +648,7 @@ impl Sim {
         );
     }
 
-    // --- Data transfer ---
-
-    /// Encrypt an IP packet on the current session, panicking if there is none.
+    /// Encrypts an IP packet, panicking if there is no usable session.
     #[track_caller]
     pub fn encapsulate(&mut self, from: Peer, ip_packet: &[u8]) -> Vec<u8> {
         self.try_encapsulate(from, ip_packet)
@@ -703,13 +666,13 @@ impl Sim {
         Ok(packet.to_vec())
     }
 
-    /// Encrypt an IP packet and route it through the network.
+    /// Encrypts an IP packet and routes it through the network.
     pub fn send_ip(&mut self, from: Peer, ip_packet: &[u8]) {
         let datagram = self.encapsulate(from, ip_packet);
         self.route(from, datagram);
     }
 
-    /// Send one IP packet in each direction and assert that both arrive.
+    /// Sends an IP packet in each direction and checks that both arrive.
     #[track_caller]
     pub fn assert_connectivity(&mut self) {
         for from in [Peer::A, Peer::B] {
@@ -725,13 +688,11 @@ impl Sim {
         }
     }
 
-    // --- Log queries ---
-
     pub fn clear_log(&mut self) {
         self.log.clear();
     }
 
-    /// Times (since simulation start) at which `from` sent packets of `kind`.
+    /// Returns send times for packets of `kind`, measured from the start of the simulation.
     pub fn sent_at(&self, from: Peer, kind: Kind) -> Vec<Duration> {
         self.log
             .iter()
@@ -745,10 +706,7 @@ impl Sim {
     }
 }
 
-// --- Assertion helpers ---
-
-/// Assert that a (possibly jittered) timer event fired at `expected`:
-/// no earlier, and no later than jitter plus polling granularity allow.
+/// Checks that an event fired at `expected`, allowing for jitter and polling delay.
 #[track_caller]
 pub fn assert_fires_at(actual: Duration, expected: Duration) {
     let latest = expected + MAX_JITTER + 2 * TICK;
@@ -758,8 +716,7 @@ pub fn assert_fires_at(actual: Duration, expected: Duration) {
     );
 }
 
-/// Assert that an unjittered timer event fired at `expected`, give or take
-/// polling granularity.
+/// Checks that an event fired within the polling tolerance of `expected`.
 #[track_caller]
 pub fn assert_close(actual: Duration, expected: Duration) {
     assert!(
@@ -769,9 +726,7 @@ pub fn assert_close(actual: Duration, expected: Duration) {
     );
 }
 
-// --- Test IP packets ---
-
-/// The length of the IP packet at the start of `buffer`, i.e. without the padding behind it.
+/// Returns the IP packet length, excluding trailing padding.
 pub fn ip_packet_len(buffer: &[u8]) -> usize {
     match buffer[0] >> 4 {
         4 => u16::from_be_bytes([buffer[2], buffer[3]]).into(),

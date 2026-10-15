@@ -4,8 +4,7 @@ use rand::rngs::StdRng;
 use rand::{CryptoRng, Rng, SeedableRng, TryCryptoRng, TryRng};
 use zeroize::Zeroizing;
 
-/// A [`StdRng`] that re-keys itself from its own output after every use (fast key erasure), so a
-/// copy of its state cannot reproduce anything it generated before.
+/// A [`StdRng`] that rekeys after each use to protect earlier output if its state is exposed.
 pub(crate) struct ForwardSecureRng(StdRng);
 
 impl ForwardSecureRng {
@@ -53,9 +52,8 @@ impl TryCryptoRng for ForwardSecureRng {}
 mod tests {
     use super::*;
 
-    /// [`StdRng`] compares by key, stream and position, so if the state left after a use equals
-    /// the starting generator at some position, the state still holds the starting key and
-    /// reproduces everything drawn before.
+    /// [`StdRng`] equality compares the key, stream and position. Matching an earlier generator
+    /// at any position would reveal that its key survived the rekey.
     #[test]
     fn state_after_use_does_not_reproduce_earlier_output() {
         let start = || StdRng::from_rng(&mut StdRng::from_seed([1; 32]));

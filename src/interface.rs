@@ -20,7 +20,7 @@ use rand::RngExt;
 use subtle::ConstantTimeEq as _;
 use zeroize::Zeroizing;
 
-/// How long a cookie secret is used before it is replaced
+/// How long a cookie secret is used before it is replaced.
 const COOKIE_SECRET_MAX_AGE: Duration = Duration::from_secs(120);
 const COOKIE_SIZE: usize = 16;
 
@@ -28,11 +28,10 @@ const COOKIE_NONCE_SIZE: usize = 24;
 
 type Cookie = [u8; COOKIE_SIZE];
 
-/// The entry point to sanstun: like a WireGuard interface, it holds the static key that all of its
-/// tunnels share.
+/// A WireGuard interface whose tunnels share one static key.
 ///
-/// Create a [`Tunnel`] for each peer with [`Interface::new_tunnel`] and pass every datagram
-/// received from the network to [`Interface::receive`] before routing it to its [`Tunnel`].
+/// Create a [`Tunnel`] for each peer with [`Interface::new_tunnel`]. Pass incoming datagrams to
+/// [`Interface::receive`], then route the parsed messages to their tunnels.
 pub struct Interface {
     static_private: StaticSecret,
     static_public: PublicKey,
@@ -46,20 +45,18 @@ pub struct Interface {
     stamper: TimeStamper,
     indices: TunnelIndices,
     rate_limiter: RateLimiter,
-    /// The newest handshake timestamp accepted from each peer we created a tunnel for.
+    /// The latest accepted handshake timestamp for each peer we have created a tunnel for.
     last_handshake_timestamps: HashMap<PublicKey, Tai64N>,
 }
 
 impl Interface {
-    /// Creates a new [`Interface`],
+    /// Creates an interface with a randomly generated static key.
     ///
-    /// `seed` seeds the generator that the static key, the cookie secrets, the tunnel indices and
-    /// the key material of every tunnel are derived from. It must be fresh entropy from the
-    /// operating system for every instance, e.g. filled by `getrandom::fill`. A fixed seed is only
-    /// safe in tests: instances with the same seed derive the same keys and thus reuse nonces.
+    /// All keys and random values derive from `seed`. Use fresh operating-system entropy for
+    /// each instance, for example from `getrandom::fill`. Reusing a seed repeats keys and nonces
+    /// and is only safe in tests.
     ///
-    /// `unix` is the time since the Unix epoch at `now`, from which the timestamps of handshake
-    /// initiations are derived.
+    /// `unix` is the time since the Unix epoch at `now`, used to timestamp handshake initiations.
     pub fn new(seed: Zeroizing<[u8; 32]>, now: Instant, unix: Duration) -> Self {
         let mut rng = ForwardSecureRng::from_seed(seed);
         let mut static_private = Zeroizing::new([0; 32]);
@@ -85,7 +82,7 @@ impl Interface {
         }
     }
 
-    /// Uses `static_private` as our static key instead of a random one.
+    /// Sets the interface's static private key.
     pub fn with_static_private(mut self, static_private: StaticSecret) -> Self {
         let static_public = PublicKey::from(&static_private);
 
@@ -97,8 +94,7 @@ impl Interface {
         self
     }
 
-    /// Sets how many handshake messages per second are processed before the cookie mechanism
-    /// kicks in.
+    /// Sets the number of handshake messages allowed per second before cookies are required.
     ///
     /// Defaults to 100.
     pub fn with_handshake_limit(mut self, limit: u64) -> Self {
@@ -107,7 +103,7 @@ impl Interface {
         self
     }
 
-    /// Our static public key.
+    /// Returns the interface's static public key.
     pub fn static_public(&self) -> PublicKey {
         self.static_public
     }
@@ -116,8 +112,8 @@ impl Interface {
     ///
     /// Fails with [`Error::LowOrderPoint`] if `peer_static_public` is a low-order point.
     ///
-    /// From then on, the [`Interface`] rejects replayed handshake initiations from
-    /// `peer_static_public`, including across tunnels that replace this one.
+    /// Enables handshake replay checks for `peer_static_public`. These remain in effect even
+    /// if the tunnel is dropped or replaced.
     pub fn new_tunnel(
         &mut self,
         peer_static_public: PublicKey,
@@ -144,17 +140,16 @@ impl Interface {
         Ok(tunnel)
     }
 
-    /// Parses and verifies a datagram received from the network.
+    /// Parses an incoming datagram and applies handshake cookie and rate-limit checks.
     ///
-    /// This is the only entry point for inbound datagrams and enforces WireGuard's cookie mechanism.
-    /// Under load, handshake messages with a valid cookie are additionally limited to 20 per
-    /// second with a burst of 5 per source, where a source is an IPv4 address or an IPv6 /64.
-    /// Messages over that budget are rejected with [`Error::RateLimited`] and should be dropped.
+    /// Under load, handshakes with valid cookies are limited to 20 per second with a burst of 5
+    /// per IPv4 address or IPv6 /64.
+    /// Messages beyond this budget fail with [`Error::RateLimited`].
     ///
-    /// A handshake initiation from a peer we created a tunnel for is rejected with
-    /// [`Error::WrongTai64nTimestamp`] unless it is newer than the last one accepted from it.
+    /// For peers you have created a tunnel for, handshake initiations must be newer than the last
+    /// accepted one or they fail with [`Error::WrongTai64nTimestamp`].
     ///
-    /// `src_addr` is the address and port the datagram came from, which cookies are bound to.
+    /// Cookies are bound to `src_addr`, the datagram's source address and port.
     pub fn receive(
         &mut self,
         src_addr: SocketAddr,
@@ -165,7 +160,7 @@ impl Interface {
             return Err(Error::InvalidPacket);
         }
 
-        // Checks the type, as well as the reserved zero fields
+        // Reading all four bytes also checks the reserved zero fields.
         let packet_type = u32::from_le_bytes(datagram[0..4].try_into().unwrap());
 
         let message = match (packet_type, datagram.len()) {
@@ -178,7 +173,7 @@ impl Interface {
                 let init = parse_handshake_init(
                     &self.static_private,
                     &self.static_public,
-                    datagram.try_into().expect("length already checked above"),
+                    datagram.try_into().expect("handshake length was checked"),
                 )?;
 
                 if let Some(last) = self
@@ -204,10 +199,10 @@ impl Interface {
                     receiver_idx: u32::from_le_bytes(datagram[8..12].try_into().unwrap()),
                     unencrypted_ephemeral: datagram[12..44]
                         .try_into()
-                        .expect("length already checked above"),
+                        .expect("handshake length was checked"),
                     encrypted_nothing: datagram[44..60]
                         .try_into()
-                        .expect("length already checked above"),
+                        .expect("handshake length was checked"),
                 })
             }
             (COOKIE_REPLY, COOKIE_REPLY_SZ) => ReceivedMessage::CookieReply(CookieReply {
@@ -229,8 +224,7 @@ impl Interface {
 
     /// Verifies the MACs of a handshake message and applies rate limiting.
     ///
-    /// Returns the cookie reply to send instead of processing the message when we are under load
-    /// and it lacks a valid mac2.
+    /// Returns a cookie reply if the message needs a valid `mac2` before it can be processed.
     fn verify_macs(
         &mut self,
         src_addr: SocketAddr,
@@ -265,10 +259,9 @@ impl Interface {
         Ok(None)
     }
 
-    /// The cookie for `addr`: MAC(responder.changing_secret_every_two_minutes, initiator.ip_address || initiator.port)
+    /// Derives the cookie for `addr` using the rotating cookie secret.
     ///
-    /// The address is tagged with its family so that an IPv4 and an IPv6 address never share an
-    /// encoding.
+    /// The address family is included so IPv4 and IPv6 encodings cannot collide.
     fn current_cookie(&mut self, addr: SocketAddr, now: Instant) -> Cookie {
         let mut addr_bytes = [0u8; 19];
         let len = match addr.ip() {
@@ -288,8 +281,7 @@ impl Interface {
         b2s_keyed_mac_16(self.cookie_secret(now), &addr_bytes[..len + 2])
     }
 
-    /// The current cookie secret, replaced in place by a fresh one once it is
-    /// `COOKIE_SECRET_MAX_AGE` old.
+    /// Returns the cookie secret, replacing it once it reaches `COOKIE_SECRET_MAX_AGE`.
     fn cookie_secret(&mut self, now: Instant) -> &[u8; 32] {
         if now.duration_since(self.cookie_secret_created_at) >= COOKIE_SECRET_MAX_AGE {
             self.rng.fill(&mut self.cookie_secret[..]);
@@ -340,8 +332,8 @@ impl Interface {
 pub enum Received {
     /// Route the message to its [`Tunnel`](crate::Tunnel) and hand it to [`Tunnel::begin_decapsulate`].
     Message(ReceivedMessage),
-    /// Send this cookie reply we generated back to the peer instead of processing its handshake
-    /// message: we are under load and the message lacks a valid cookie.
+    /// Send this cookie reply to the peer. The interface is under load and requires a valid
+    /// cookie before processing the handshake.
     SendCookieReply(Datagram),
 }
 
@@ -427,7 +419,7 @@ mod tests {
         Interface::new(Zeroizing::new([2; 32]), now, Duration::ZERO).with_handshake_limit(0)
     }
 
-    /// A handshake initiation with a valid mac1 and its mac2 keyed with `cookie`.
+    /// Builds a handshake initiation with valid `mac1` and `mac2` computed using `cookie`.
     fn handshake_initiation(interface: &Interface, cookie: &Cookie) -> [u8; HANDSHAKE_INIT_SZ] {
         let mac1_off = HANDSHAKE_INIT_SZ - 32;
         let mac2_off = HANDSHAKE_INIT_SZ - 16;

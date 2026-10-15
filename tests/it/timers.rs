@@ -30,8 +30,7 @@ fn unanswered_handshake_is_retransmitted_every_rekey_timeout() {
     }
 }
 
-/// §6.4: retries cease after `REKEY_ATTEMPT_TIME` and the tunnel reports
-/// itself as expired.
+/// §6.4: retries stop and the tunnel expires after `REKEY_ATTEMPT_TIME`.
 #[test]
 fn handshake_retries_cease_after_rekey_attempt_time() {
     let mut sim = Sim::new();
@@ -112,8 +111,7 @@ fn rekey_attempt_time_is_configurable() {
     assert!(sim.tunn(A).is_expired());
 }
 
-/// §6.2: if the initiator sent data on a session whose keys are older than
-/// `REKEY_AFTER_TIME`, it initiates a new handshake.
+/// §6.2: an initiator that has sent data rekeys at `REKEY_AFTER_TIME`.
 #[test]
 fn initiator_rekeys_when_session_is_older_than_rekey_after_time() {
     let mut sim = Sim::connected();
@@ -128,15 +126,14 @@ fn initiator_rekeys_when_session_is_older_than_rekey_after_time() {
     sim.assert_connectivity();
 }
 
-/// §6.2: the original responder never initiates a rekey based on the age of
-/// the session; it relies on the initiator to do so.
+/// §6.2: only the initiator rekeys based on session age.
 #[test]
 fn responder_does_not_rekey_based_on_session_age() {
     let mut sim = Sim::connected();
     sim.advance(secs(1));
     sim.send_ip(B, &ipv4_packet(b"from the responder"));
 
-    // Just short of the initiator's rekey-on-receive deadline (see below).
+    // Stop before the initiator's rekey-on-receive deadline.
     sim.advance(secs(160));
 
     assert_eq!(sim.count(B, Kind::Init), 0);
@@ -144,9 +141,7 @@ fn responder_does_not_rekey_based_on_session_age() {
     assert!(sim.is_established(B));
 }
 
-/// §6.2: a peer acts in the role it holds in the session it sends on. After
-/// crossed initiations, both peers here send on the session they responded
-/// to, so neither stops at the initiator's cutoff.
+/// §6.2: crossed handshakes leave both peers sending as responders, without an initiator cutoff.
 #[test]
 fn crossed_handshakes_take_the_role_of_the_session_in_use() {
     let mut sim = Sim::new();
@@ -169,8 +164,7 @@ fn crossed_handshakes_take_the_role_of_the_session_in_use() {
     assert_eq!(sim.deliver(A, &from_b).expect_one_ip(), ip_packet);
 }
 
-/// §6.2: answering an initiation whose response never arrives leaves the
-/// session in use untouched, so its initiator still rekeys on schedule.
+/// §6.2: an unconfirmed session does not change the current session's rekey schedule.
 #[test]
 fn unconfirmed_initiation_keeps_the_role_of_the_session_in_use() {
     let mut sim = Sim::connected();
@@ -188,9 +182,7 @@ fn unconfirmed_initiation_keeps_the_role_of_the_session_in_use() {
     assert_fires_at(inits[0], REKEY_AFTER_TIME);
 }
 
-/// §6.2: having *received* data on a session older than
-/// `REJECT_AFTER_TIME - KEEPALIVE_TIMEOUT - REKEY_TIMEOUT`, the initiator
-/// starts a new handshake to avoid the session dying mid-conversation.
+/// §6.2: receiving data near expiry triggers a rekey to keep the session alive.
 #[test]
 fn initiator_rekeys_when_receiving_on_a_session_close_to_expiry() {
     let rekey_on_receive_after = REJECT_AFTER_TIME - KEEPALIVE_TIMEOUT - REKEY_TIMEOUT;
@@ -206,10 +198,8 @@ fn initiator_rekeys_when_receiving_on_a_session_close_to_expiry() {
     sim.assert_connectivity();
 }
 
-/// §6.1: if a peer received a data message but has not sent anything back
-/// within `KEEPALIVE_TIMEOUT`, it sends a passive keepalive. The keepalive
-/// counts as a reply, so it also suppresses the sender's rekey (§6.3), and it
-/// must not provoke a keepalive in return.
+/// §6.1 / §6.3: a passive keepalive answers data after `KEEPALIVE_TIMEOUT`,
+/// suppressing a rekey without triggering another keepalive.
 #[test]
 fn passive_keepalive_answers_unidirectional_traffic() {
     let mut sim = Sim::connected();
@@ -230,10 +220,8 @@ fn passive_keepalive_answers_unidirectional_traffic() {
     assert_eq!(sim.count(A, Kind::Keepalive), 0);
 }
 
-/// §6.3: if a data message remains unanswered for
-/// `KEEPALIVE_TIMEOUT + REKEY_TIMEOUT`, the sender assumes the session is
-/// dead and initiates a new handshake. The deadline counts from the *first*
-/// unanswered packet; later sends do not push it out.
+/// §6.3: a new handshake is due `KEEPALIVE_TIMEOUT + REKEY_TIMEOUT` after the
+/// first unanswered data packet. Later sends must not postpone it.
 #[test]
 fn unanswered_data_triggers_a_new_handshake() {
     let mut sim = Sim::connected();
@@ -252,8 +240,7 @@ fn unanswered_data_triggers_a_new_handshake() {
     assert_fires_at(inits[0], secs(1) + KEEPALIVE_TIMEOUT + REKEY_TIMEOUT);
 }
 
-/// §6.1: a configured persistent keepalive fires on its interval even with no
-/// user traffic at all.
+/// §6.1: persistent keepalives run even without user traffic.
 #[test]
 fn persistent_keepalive_fires_on_its_interval() {
     let mut sim = Sim::builder().persistent_keepalive_b(secs(25)).build();
@@ -270,7 +257,7 @@ fn persistent_keepalive_fires_on_its_interval() {
 
     assert!(
         sim.sent_at(A, Kind::Keepalive).is_empty(),
-        "keepalives are not data and must not be answered"
+        "keepalives must not trigger a reply"
     );
 }
 
@@ -285,14 +272,13 @@ fn zero_persistent_keepalive_is_off() {
     assert!(sim.sent_at(B, Kind::Keepalive).is_empty());
 }
 
-/// §6.1: sessions are discarded `REJECT_AFTER_TIME` after they were
-/// established. The responder simply goes silent.
+/// §6.1: the responder discards its session at `REJECT_AFTER_TIME`.
 #[test]
 fn responder_discards_the_session_after_reject_after_time() {
     let mut sim = Sim::connected();
     sim.assert_connectivity();
     sim.advance(secs(30)); // Let passive keepalives settle.
-    sim.cut_link(); // Keep the initiator's automatic renewal from re-establishing.
+    sim.cut_link(); // Prevent the initiator from renewing the session.
 
     sim.advance(REJECT_AFTER_TIME - secs(20));
 
@@ -307,8 +293,7 @@ fn responder_discards_the_session_after_reject_after_time() {
     );
 }
 
-/// A session past `REJECT_AFTER_TIME` rejects data even before
-/// `handle_timeout` gets to discard it.
+/// Expired sessions reject data even before `handle_timeout` runs.
 #[test]
 fn data_for_an_expired_session_is_rejected_before_timers_run() {
     let mut sim = Sim::connected();
@@ -320,8 +305,7 @@ fn data_for_an_expired_session_is_rejected_before_timers_run() {
     assert!(matches!(error, Error::NoCurrentSession));
 }
 
-/// A session past `REJECT_AFTER_TIME` refuses to encrypt even before
-/// `handle_timeout` gets to discard it, also on the responder.
+/// Responders also reject encryption on expired sessions before `handle_timeout` runs.
 #[test]
 fn responder_does_not_encrypt_on_an_expired_session_before_timers_run() {
     let mut sim = Sim::connected();
@@ -334,8 +318,7 @@ fn responder_does_not_encrypt_on_an_expired_session_before_timers_run() {
     ));
 }
 
-/// When the expired session was initiated by us, sanstun starts a new
-/// handshake right away instead of waiting for the next outgoing packet.
+/// The initiator renews an unused session on expiry, without waiting for outgoing data.
 #[test]
 fn initiator_renews_an_expired_session_automatically() {
     let mut sim = Sim::connected();
@@ -350,10 +333,8 @@ fn initiator_renews_an_expired_session_automatically() {
     sim.assert_connectivity();
 }
 
-/// A session that carried data was due a re-key at `REKEY_AFTER_TIME`. Both peers
-/// discard the session at the same instant, so surviving to `REJECT_AFTER_TIME`
-/// means that re-key never landed and there is nothing left for a handshake to
-/// reach. Waiting out `REKEY_ATTEMPT_TIME` on top would only confirm it.
+/// A used session should have rekeyed before expiry. If it expires, the tunnel
+/// gives up without another `REKEY_ATTEMPT_TIME` of retries.
 #[test]
 fn tunnel_expires_when_a_used_session_expires() {
     let mut sim = Sim::connected();
@@ -375,9 +356,8 @@ fn tunnel_expires_when_a_used_session_expires() {
     );
 }
 
-/// A re-key hands over a session that has carried nothing yet, so traffic stopping
-/// right after one leaves a session that ages out without ever being due a re-key
-/// of its own. That says nothing about the peer, and the tunnel has to survive it.
+/// An unused session never triggers an age-based rekey, so its expiry alone
+/// does not mean the peer is unreachable.
 #[test]
 fn tunnel_survives_a_session_a_rekey_left_unused() {
     let mut sim = Sim::connected();
@@ -393,8 +373,7 @@ fn tunnel_survives_a_session_a_rekey_left_unused() {
     sim.assert_connectivity();
 }
 
-/// Data sent on the previous session while a new one awaits confirmation was not
-/// sent on the new one, so the new session ages out like any unused one.
+/// Traffic on the previous session must not mark the unconfirmed session as used.
 #[test]
 fn data_sent_before_confirmation_does_not_count_for_the_new_session() {
     let mut sim = Sim::connected();
@@ -413,8 +392,8 @@ fn data_sent_before_confirmation_does_not_count_for_the_new_session() {
     sim.assert_connectivity();
 }
 
-/// §6.1: after `3 * REJECT_AFTER_TIME` without a successful handshake, all
-/// remaining state is wiped and the tunnel reports itself expired.
+/// §6.1: `3 * REJECT_AFTER_TIME` without a successful handshake expires the tunnel
+/// and drops its handshake and session state.
 #[test]
 fn tunnel_is_wiped_after_three_times_reject_after_time() {
     let mut sim = Sim::connected();
@@ -426,9 +405,8 @@ fn tunnel_is_wiped_after_three_times_reject_after_time() {
     assert_eq!(sim.expirations(B), 1);
 }
 
-/// sanstun-specific: the initiator refuses to *send* on a session within
-/// `KEEPALIVE_TIMEOUT` of its expiry, because the packet could reach the peer
-/// after the peer discarded the session.
+/// The initiator stops sending `KEEPALIVE_TIMEOUT` before expiry so packets
+/// can reach the peer while the session is still valid.
 #[test]
 fn initiator_stops_sending_on_a_session_close_to_expiry() {
     let mut sim = Sim::connected();
@@ -458,8 +436,7 @@ fn initiator_cutoff_follows_the_configured_keepalive_timeout() {
     ));
 }
 
-/// The responder has no way to renew the session itself, so it keeps using it
-/// right up to `REJECT_AFTER_TIME`.
+/// The responder relies on the initiator to rekey, so it can send until `REJECT_AFTER_TIME`.
 #[test]
 fn responder_keeps_sending_on_a_session_close_to_expiry() {
     let mut sim = Sim::connected();
@@ -471,8 +448,7 @@ fn responder_keeps_sending_on_a_session_close_to_expiry() {
     assert_eq!(sim.take_inbox(A), [ip_packet]);
 }
 
-/// Repeated rekeying rotates through the (eight-slot) session ring without
-/// dropping connectivity.
+/// Rekeying must preserve connectivity as the eight session slots are reused.
 #[test]
 fn repeated_rekeys_do_not_disturb_connectivity() {
     let mut sim = Sim::connected();
@@ -485,8 +461,7 @@ fn repeated_rekeys_do_not_disturb_connectivity() {
     }
 }
 
-/// §6.1 (transition period): right after a rekey, data encrypted under the
-/// previous session must still decrypt until the peer switches over.
+/// §6.1: the previous session remains usable during the transition to a new one.
 #[test]
 fn previous_session_remains_usable_during_rekey_transition() {
     let mut sim = Sim::connected();
@@ -512,15 +487,11 @@ fn previous_session_remains_usable_during_rekey_transition() {
     sim.deliver(A, &new_data).expect_one_ip();
 }
 
-/// A session can expire while we still owe the peer a passive keepalive, and
-/// there is then nothing left to encrypt that keepalive with. Its deadline has
-/// to go with the session, or every poll re-reads it as due and the caller is
-/// told to come back immediately, forever.
+/// Session expiry must clear pending keepalives, or their deadlines cause a busy loop.
 #[test]
 fn keepalive_does_not_outlive_the_session_it_needs() {
     let mut sim = Sim::connected();
 
-    // B receives data, so it owes A a keepalive in KEEPALIVE_TIMEOUT.
     sim.send_ip(A, &ipv4_packet(b"ping"));
 
     // With the link down, nothing re-establishes the session B would need.

@@ -1,10 +1,10 @@
-//! A sans-IO implementation of the WireGuard protocol, acting as both initiator and responder.
+//! A sans-IO implementation of the WireGuard protocol.
 //!
 //! # Example
 //!
-//! Alice and Bob complete a handshake and Alice sends Bob a packet. In a real application, an
-//! event loop carries each message over UDP and drives the timers with [`Tunnel::poll_timeout`]
-//! and [`Tunnel::handle_timeout`].
+//! Alice and Bob complete a handshake, then Alice sends Bob a packet. In an application, your
+//! event loop sends datagrams over UDP, handles events from [`Tunnel::poll_event`] and drives
+//! timers with [`Tunnel::poll_timeout`] and [`Tunnel::handle_timeout`].
 //!
 //! ```
 //! use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -26,13 +26,12 @@
 //! let initiation = alice_to_bob.initiate_handshake(now).unwrap();
 //! let message = match bob.receive(alice_addr, &initiation, now)? {
 //!     Received::Message(message) => message,
-//!     // Under load, send the cookie reply back instead of processing the message.
+//!     // Under load, send the cookie reply back to the peer.
 //!     Received::SendCookieReply(_) => unreachable!("not under load"),
 //! };
 //! bob_to_alice.begin_decapsulate(message, now)?;
 //! let response = match bob_to_alice.poll_event() {
 //!     Some(Event::SendHandshakeResponse(response)) => response,
-//!     // An event loop sends every datagram an event carries and sends due keepalives.
 //!     event => unreachable!("only the response is queued, got {event:?}"),
 //! };
 //! let message = match alice.receive(bob_addr, &response, now)? {
@@ -41,12 +40,12 @@
 //! };
 //! alice_to_bob.begin_decapsulate(message, now)?;
 //!
-//! // Alice encrypts a packet ...
+//! // Alice encrypts a packet.
 //! let packet = b"an IP packet";
 //! let mut buf = [0; 64];
 //! let data = alice_to_bob.begin_encapsulate(now)?.encrypt(packet, &mut buf)?;
 //!
-//! // ... and Bob decrypts it.
+//! // Bob decrypts and accepts it.
 //! let message = match bob.receive(alice_addr, &data, now)? {
 //!     Received::Message(message) => message,
 //!     Received::SendCookieReply(_) => unreachable!("not under load"),
@@ -63,27 +62,24 @@
 //!
 //! # Caller responsibilities
 //!
-//! sanstun authenticates and decrypts messages but leaves the following to the caller:
+//! sanstun handles the protocol and cryptography. Your application is responsible for:
 //!
-//! - **Cryptokey routing:** a decrypted packet only proves which peer sent it. Drop it unless its
-//!   source address is one that peer is allowed to use.
-//! - **Handshake routing:** [`HandshakeInitiation::peer_static_public`] is authenticated, but
-//!   anyone can generate a key pair and replays are only rejected for keys we created a tunnel
-//!   for. Do not create a tunnel for an unknown key based on it.
-//! - **Endpoint updates:** anyone can send a datagram from any address. Only move a peer's endpoint
-//!   to the source address of a message once [`Tunnel::begin_decapsulate`] accepted its handshake or
-//!   [`Tunnel::commit_decapsulate`] accepted its data.
-//! - **Bounded queues:** a [`PendingDecapsulate`] is cheap to create but costly to decrypt. When
-//!   deferring encryption or decryption to other threads, bound the queues in between so a flood of
-//!   messages cannot exhaust memory.
-//! - **Packet validation:** the plaintext of a data message is zero-padded to a multiple of 16
-//!   bytes. Parse the IP packet, check its declared length and strip the padding before passing it
-//!   on.
-//! - **Silent errors:** an [`Error`] says why a message was dropped. Never send it back to the
-//!   peer, as it can reveal internal state such as the replay window.
-//! - **Time:** every `now` must come from a monotonic clock, and the Unix time given to
-//!   [`Interface::new`] must not go backwards across restarts, or peers reject our handshake
-//!   initiations as replays.
+//! - **Cryptokey routing:** check that each decrypted packet's source IP is allowed for the peer
+//!   that sent it. Authentication alone does not grant permission to use an IP address.
+//! - **Handshake routing:** use [`HandshakeInitiation::peer_static_public`] to look up an authorized
+//!   peer. Anyone can generate a key pair, so an authenticated initiation is no reason to create a
+//!   tunnel for an unknown key. Replay checks only apply to keys you have created a tunnel for.
+//! - **Endpoint updates:** only update a peer's endpoint after [`Tunnel::begin_decapsulate`] accepts
+//!   its handshake or [`Tunnel::commit_decapsulate`] accepts its data. A datagram's source address
+//!   alone does not identify the peer.
+//! - **Bounded queues:** limit queues used to send encryption or decryption work to other threads.
+//!   A [`PendingDecapsulate`] is cheap to create but costly to decrypt, and a flood can exhaust memory.
+//! - **Packet validation:** parse decrypted IP packets, check their declared lengths and strip
+//!   padding before forwarding them. Data messages are zero-padded to a multiple of 16 bytes.
+//! - **Errors:** handle [`Error`] locally. Never send errors to peers; they can reveal internal
+//!   state such as the replay window.
+//! - **Time:** use a monotonic clock for `now`. The Unix time passed to [`Interface::new`] must
+//!   not go backwards across restarts, or peers may reject handshake initiations as replays.
 
 mod crypto;
 mod errors;

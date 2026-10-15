@@ -1,4 +1,4 @@
-//! <https://www.wireguard.com/papers/wireguard.pdf#page=14>
+//! Timers from the [WireGuard protocol](https://www.wireguard.com/papers/wireguard.pdf#page=14).
 
 use std::ops::{Index, IndexMut};
 use std::time::{Duration, Instant};
@@ -11,27 +11,26 @@ const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const COOKIE_EXPIRATION_TIME: Duration = Duration::from_secs(120);
 pub(crate) const MAX_JITTER: Duration = Duration::from_millis(333);
 pub(crate) const REKEY_AFTER_MESSAGES: u64 = 1 << 60;
-/// Counters at or above this are neither sent nor accepted, so the replay window's arithmetic
-/// never overflows.
+/// The exclusive counter limit, leaving room for the replay window's arithmetic.
 pub(crate) const REJECT_AFTER_MESSAGES: u64 = u64::MAX - (1 << 13);
 
 #[derive(Debug)]
 pub(crate) enum TimerName {
-    /// Time the last handshake completed, whether or not its session is in use
+    /// When the last handshake completed, even if its session is not in use.
     TimeLastHandshakeCompleted,
-    /// Time the last attempt for a new handshake began
+    /// When the current round of handshake attempts began.
     TimeLastHandshakeStarted,
-    /// Time we last received and authenticated a packet
+    /// When we last authenticated an incoming packet.
     TimeLastPacketReceived,
-    /// Time we last send a packet
+    /// When we last sent a packet.
     TimeLastPacketSent,
-    /// Time we last received and authenticated a DATA packet
+    /// When we last authenticated an incoming data packet.
     TimeLastDataPacketReceived,
-    /// Time we last send a DATA packet
+    /// When we last sent a data packet.
     TimeLastDataPacketSent,
-    /// Time we last sent persistent keepalive
+    /// When we last sent a persistent keepalive.
     TimePersistentKeepalive,
-    /// Time we last updated our timers
+    /// When we last updated the timers.
     TimeLastUpdate,
     Top,
 }
@@ -41,16 +40,12 @@ use self::TimerName::*;
 #[derive(Debug)]
 pub(crate) struct Timers {
     timers: [Instant; TimerName::Top as usize],
-    /// The last data packet we received without having sent a reply since.
-    ///
-    /// If `Some`, the passive-keepalive deadline is derived from it on demand.
+    /// When we last received data without replying, used for the passive-keepalive deadline.
     last_data_received_without_reply: Option<Instant>,
-    /// The first data packet we sent without having heard back since.
-    ///
-    /// If `Some`, the new-handshake deadline is derived from it on demand.
+    /// When we first sent data without a reply, used for the new-handshake deadline.
     first_data_sent_without_reply: Option<Instant>,
     persistent_keepalive: Option<Duration>,
-    /// When we should sent a scheduled handshake.
+    /// When the scheduled handshake is due.
     send_handshake_at: Option<Instant>,
 
     rekey_attempt_time: Duration,
@@ -72,42 +67,36 @@ impl Timers {
         }
     }
 
-    /// After `REJECT_AFTER_TIME * 3` without a new handshake, all ephemeral and
-    /// symmetric key material is dropped and the connection is considered dead.
+    /// Returns the connection expiry deadline, `REJECT_AFTER_TIME * 3` after the last handshake.
     pub(crate) fn reject_after_time(&self) -> Instant {
         self[TimeLastHandshakeCompleted] + REJECT_AFTER_TIME * 3
     }
 
-    /// After `REKEY_ATTEMPT_TIME` of unsuccessfully trying to complete a
-    /// handshake, we give up.
+    /// Returns the deadline for giving up on unanswered handshake attempts.
     pub(crate) fn rekey_attempt_time(&self) -> Instant {
         self[TimeLastHandshakeStarted] + self.rekey_attempt_time
     }
 
-    /// If we sent data but have not heard back within `KEEPALIVE_TIMEOUT +
-    /// REKEY_TIMEOUT`, we assume the session is dead and start a new handshake.
+    /// Returns the new-handshake deadline for data sent without a reply.
     pub(crate) fn rekey_after_time_without_response(&self) -> Option<Instant> {
         let first_packet_without_reply = self.first_data_sent_without_reply?;
 
         Some(first_packet_without_reply + self.keepalive_timeout + self.rekey_timeout)
     }
 
-    /// If we received data but have not sent anything back within
-    /// `KEEPALIVE_TIMEOUT`, we send a passive keepalive.
+    /// Returns the passive-keepalive deadline for data received without a reply.
     pub(crate) fn keepalive_after_time_without_send(&self) -> Option<Instant> {
         let last_data_received_without_reply = self.last_data_received_without_reply?;
 
         Some(last_data_received_without_reply + self.keepalive_timeout)
     }
 
-    /// If configured, we send a keepalive every `persistent_keepalive`.
+    /// Returns the next persistent-keepalive deadline, if configured.
     pub(crate) fn next_persistent_keepalive(&self) -> Option<Instant> {
         Some(self[TimePersistentKeepalive] + self.persistent_keepalive?)
     }
 
     pub(crate) fn clear(&mut self, now: Instant) {
-        // We don't really clear the timers, but we set them to the current time to
-        // so the reference time frame is the same
         for t in &mut self.timers[..] {
             *t = now;
         }
@@ -123,14 +112,9 @@ impl Timers {
             TimeLastDataPacketSent => {
                 match self.first_data_sent_without_reply {
                     Some(_) => {
-                        // This isn't the first timer tick (i.e. not the first packet)
-                        // we haven't received a response to.
+                        // Later sends must not postpone the deadline for the first unanswered packet.
                     }
-                    None => {
-                        // We sent a packet and haven't heard back yet.
-                        // Remember when, so we can derive the new-handshake deadline.
-                        self.first_data_sent_without_reply = Some(now)
-                    }
+                    None => self.first_data_sent_without_reply = Some(now),
                 }
             }
             _ => {}
@@ -139,7 +123,7 @@ impl Timers {
         self[timer_name] = now;
     }
 
-    /// The [`Instant`] at which an unanswered handshake initiation sent at `sent_at` is retried.
+    /// Returns the retry deadline for a handshake initiation sent at `sent_at`.
     pub(crate) fn rekey_timeout(&self, sent_at: Instant) -> Instant {
         sent_at + self.rekey_timeout
     }
@@ -150,10 +134,7 @@ impl Timers {
 
     pub(crate) fn schedule_handshake(&mut self, at: Instant) {
         let existing = self.send_handshake_at.replace(at);
-        debug_assert!(
-            existing.is_none(),
-            "Should never override existing handshake"
-        );
+        debug_assert!(existing.is_none(), "a handshake is already scheduled");
     }
 
     /// Clears the scheduled handshake if it is due at `now`.

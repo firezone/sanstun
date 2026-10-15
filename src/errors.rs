@@ -27,45 +27,41 @@ impl Display for Error {
                 available,
             } => write!(
                 f,
-                "the destination buffer is too small (required: {required}, available: {available})"
+                "destination buffer too small: need {required} bytes, have {available}"
             ),
-            Error::UnexpectedPacket => write!(
-                f,
-                "packet of this type was not expected in the current state"
-            ),
-            Error::WrongIndex => write!(f, "index in packet did not match local state"),
-            Error::WrongKey => write!(
-                f,
-                "decrypted public key from handshake initiation did not match expected key"
-            ),
+            Error::UnexpectedPacket => write!(f, "unexpected packet type for the current state"),
+            Error::WrongIndex => write!(f, "packet index does not match the expected index"),
+            Error::WrongKey => write!(f, "handshake public key does not match the expected peer"),
             Error::WrongTai64nTimestamp => {
-                write!(f, "timestamp of packet is in the past; possibly a replay?")
+                write!(
+                    f,
+                    "handshake timestamp is not newer than the last accepted timestamp"
+                )
             }
             Error::InvalidMac => {
-                write!(f, "MAC mismatch in packet")
+                write!(f, "invalid packet MAC")
             }
-            Error::InvalidAeadTag => write!(f, "failed to decrypt packet data"),
+            Error::InvalidAeadTag => write!(f, "packet authentication failed"),
             Error::InvalidCounter => {
-                write!(f, "packet counter is too old")
+                write!(f, "packet counter is outside the allowed range")
             }
             Error::DuplicateCounter => {
-                write!(f, "packet with same counter already processed")
+                write!(f, "packet counter has already been accepted")
             }
             Error::InvalidPacket => {
-                write!(f, "failed to parse packet (too short / invalid type / etc)")
+                write!(f, "invalid packet format")
             }
             Error::NoCurrentSession => write!(f, "no active session"),
-            Error::ConnectionExpired => write!(
-                f,
-                "the connection expired; create a new tunnel to reach the peer again"
-            ),
+            Error::ConnectionExpired => {
+                write!(f, "connection expired; create a new tunnel to reconnect")
+            }
             Error::EmptyPlaintext => write!(
                 f,
                 "an empty data message is a keepalive; send it with `Tunnel::encapsulate_keepalive`"
             ),
             Error::LowOrderPoint => write!(
                 f,
-                "public key is a low-order point, so the X25519 result is all zeros"
+                "low-order public key produces an all-zero X25519 shared secret"
             ),
             Error::RateLimited => write!(
                 f,

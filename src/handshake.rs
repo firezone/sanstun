@@ -35,21 +35,16 @@ const INITIAL_CHAIN_HASH: [u8; KEY_LEN] = [
     147, 232, 183, 14, 225, 156, 101, 186, 7, 158, 243,
 ];
 
-/// Parameters used by the noise protocol
+/// Long-lived parameters for the Noise handshake.
 struct NoiseParams {
-    /// Our static public key
     static_public: PublicKey,
-    /// Our static private key
     static_private: StaticSecret,
-    /// Static public key of the other party
     peer_static_public: PublicKey,
-    /// A shared key = DH(static_private, peer_static_public)
+    /// The precomputed X25519 shared secret for the two static keys.
     static_shared: SharedKey,
-    /// A pre-computation of HASH("mac1----", peer_static_public) for this peer
+    /// The precomputed `mac1` key for messages sent to this peer.
     sending_mac1_key: [u8; KEY_LEN],
-    /// A preshared key.
-    ///
-    /// Initialized to all zeroes by default.
+    /// The preshared key, or all zeros if none was configured.
     preshared_key: PresharedKey,
 }
 
@@ -83,20 +78,18 @@ impl std::fmt::Debug for HandshakeInitSentState {
 
 #[derive(Debug)]
 enum HandshakeState {
-    /// No handshake in process
     None,
-    /// We initiated the handshake
+    /// An initiation awaiting a response.
     InitSent(HandshakeInitSentState),
-    /// Handshake was established too long ago (implies no handshake is in progress)
+    /// The connection has expired and cannot start another handshake.
     Expired,
 }
 
-/// The handshake(s) currently in progress.
+/// Handshake state and cookie tracking for one peer.
 pub(crate) struct Handshake {
     params: NoiseParams,
-    /// Allow to have two outgoing handshakes in flight, because sometimes we may receive a delayed response to a handshake with bad networks
+    /// Keeps the previous initiation available for delayed responses.
     previous: HandshakeState,
-    /// Current handshake state
     state: HandshakeState,
     cookies: Cookies,
     stamper: TimeStamper,
@@ -188,8 +181,6 @@ fn derive_transport_keys(
     // temp3 = HMAC(temp1, temp2 || 0x2)
     // initiator.sending_key = temp2
     // initiator.receiving_key = temp3
-    // initiator.sending_key_counter = 0
-    // initiator.receiving_key_counter = 0
     let temp1 = b2s_hmac(chaining_key, &[]);
     let temp2 = b2s_hmac(&temp1, &[0x01]);
     let temp3 = b2s_hmac2(&temp1, &temp2, &[0x02]);
@@ -198,7 +189,6 @@ fn derive_transport_keys(
 }
 
 impl NoiseParams {
-    /// New noise params struct from our secret key, peers public key, and optional preshared key
     fn new(
         static_private: StaticSecret,
         static_public: PublicKey,
@@ -295,8 +285,7 @@ impl Handshake {
         initiation
     }
 
-    /// Answers a valid handshake initiation with a response and the session it establishes under
-    /// `local_index`.
+    /// Answers a handshake initiation and establishes a session with `local_index`.
     pub(super) fn receive_handshake_initialization(
         &mut self,
         packet: &HandshakeInitiation,
@@ -342,7 +331,7 @@ impl Handshake {
         packet: HandshakeResponse,
         now: Instant,
     ) -> Result<Session, Error> {
-        // Check if there is a handshake awaiting a response and return the correct one
+        // A delayed response may belong to the previous initiation.
         let (state, is_previous) = match (&self.state, &self.previous) {
             (HandshakeState::InitSent(s), _)
                 if s.local_index == Index::from_peer(packet.receiver_idx) =>
@@ -391,9 +380,6 @@ impl Handshake {
         // msg.encrypted_nothing = AEAD(key, 0, [empty], responder.hash)
         aead_chacha20_open(&mut [], &key, 0, &packet.encrypted_nothing, &hash)?;
 
-        // responder.hash = HASH(responder.hash || msg.encrypted_nothing)
-        // hash = b2s_hash(hash, buf[ENC_NOTHING_OFF..ENC_NOTHING_OFF + ENC_NOTHING_SZ]);
-
         let (temp2, temp3) = derive_transport_keys(&chaining_key);
 
         if is_previous {
@@ -428,7 +414,7 @@ impl Handshake {
             return Err(Error::WrongIndex);
         }
         // msg.encrypted_cookie = XAEAD(HASH(LABEL_COOKIE || responder.static_public), msg.nonce, cookie, last_received_msg.mac1)
-        let key = b2s_hash(LABEL_COOKIE, self.params.peer_static_public.as_bytes()); // TODO: pre-compute
+        let key = b2s_hash(LABEL_COOKIE, self.params.peer_static_public.as_bytes()); // TODO: Precompute this key.
 
         let mut cookie = [0u8; 16];
         xaead_open(
@@ -526,7 +512,7 @@ impl Handshake {
     /// Formats a handshake response without its MACs.
     #[expect(
         clippy::too_many_arguments,
-        reason = "The arguments are the handshake state so far."
+        reason = "Receives the accumulated handshake state."
     )]
     fn format_handshake_response(
         &self,
@@ -555,7 +541,7 @@ impl Handshake {
         sender_index.copy_from_slice(&local_index.to_le_bytes());
         // msg.receiver_index = little_endian(initiator.sender_index)
         receiver_index.copy_from_slice(&peer_index.to_le_bytes());
-        // msg.unencrypted_ephemeral = DH_PUBKEY(initiator.ephemeral_private)
+        // msg.unencrypted_ephemeral = DH_PUBKEY(responder.ephemeral_private)
         unencrypted_ephemeral
             .copy_from_slice(x25519_dalek::PublicKey::from(&ephemeral_private).as_bytes());
         // responder.hash = HASH(responder.hash || msg.unencrypted_ephemeral)
@@ -602,7 +588,7 @@ impl Handshake {
         ))
     }
 
-    // Compute and append mac1 and mac2 to a handshake message
+    /// Appends `mac1` and `mac2` to a handshake message.
     fn append_mac1_and_mac2(&mut self, local_index: Index, dst: &mut [u8]) {
         let mac1_off = dst.len() - 32;
         let mac2_off = dst.len() - 16;
@@ -612,7 +598,7 @@ impl Handshake {
 
         dst[mac1_off..mac2_off].copy_from_slice(&msg_mac1[..]);
 
-        //msg.mac2 = MAC(initiator.last_received_cookie, msg[0:offsetof(msg.mac2)])
+        // msg.mac2 = MAC(initiator.last_received_cookie, msg[0:offsetof(msg.mac2)])
         let msg_mac2: [u8; 16] =
             if let Some(WriteCookie { value: cookie, .. }) = self.cookies.write_cookie {
                 b2s_keyed_mac_16(&cookie, &dst[..mac2_off])

@@ -47,8 +47,7 @@ fn packets_behind_the_replay_window_are_rejected() {
     assert!(matches!(error, Error::InvalidCounter));
 }
 
-/// A large jump in counters slides the window forward: everything at or
-/// behind the new window edge is dead, but packets within it still decrypt.
+/// A counter jump advances the replay window without rejecting unseen packets inside it.
 #[test]
 fn counter_jump_slides_the_window() {
     const W: usize = REPLAY_WINDOW as usize;
@@ -65,10 +64,9 @@ fn counter_jump_slides_the_window() {
     let error = sim.deliver(B, &datagrams[W]).expect_err();
     assert!(matches!(error, Error::InvalidCounter));
 
-    // The oldest packet still inside the window decrypts despite the jump ...
+    // This is the oldest packet still inside the window.
     sim.deliver(B, &datagrams[2 * W + 1]).expect_one_ip();
 
-    // ... but only once.
     let error = sim.deliver(B, &datagrams[2 * W + 1]).expect_err();
     assert!(matches!(error, Error::DuplicateCounter));
 }

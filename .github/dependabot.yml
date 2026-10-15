@@ -4,8 +4,8 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    # The github-actions ecosystem doesn't support semver cooldowns, and because
-    # actions update very frequently, some would never get updated with one.
+    # Actions don't support semver cooldowns. A general cooldown can indefinitely
+    # delay updates to actions that release frequently.
     groups:
       security-all:
         applies-to: security-updates

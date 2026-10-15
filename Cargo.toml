@@ -49,9 +49,9 @@ name = "x25519_shared_key"
 harness = false
 
 [profile.release]
-lto = true        # Enable full link-time optimization.
-codegen-units = 1 # Use only 1 codegen-unit to enable full optimizations.
+lto = true
+codegen-units = 1
 
 [profile.bench]
-lto = true        # Enable full link-time optimization.
-codegen-units = 1 # Use only 1 codegen-unit to enable full optimizations.
+lto = true
+codegen-units = 1

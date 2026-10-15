@@ -18,31 +18,30 @@ use std::iter;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// What the caller needs to do, as returned by [`Tunnel::poll_event`].
+/// An action for the caller, returned by [`Tunnel::poll_event`].
 #[derive(Debug)]
 pub enum Event {
     /// Send this handshake initiation to the peer.
     SendHandshakeInitiation(Datagram),
-    /// Send this handshake response to the peer, which sent a valid handshake initiation.
+    /// Send this handshake response to the peer.
     SendHandshakeResponse(Datagram),
     /// A keepalive is due: send it with [`Tunnel::encapsulate_keepalive`].
     KeepaliveDue(Keepalive),
     /// The connection expired and all session state was dropped.
     ///
-    /// Emitted once per expiry. Drop the [`Tunnel`] and create a new one with
-    /// [`Interface::new_tunnel`](crate::Interface::new_tunnel) to reach the peer again, see
-    /// [`Tunnel::is_expired`].
+    /// Emitted once. Drop the [`Tunnel`] and create a new one with
+    /// [`Interface::new_tunnel`](crate::Interface::new_tunnel) to reconnect.
     ConnectionExpired,
 }
 
-/// A keepalive to send with [`Tunnel::encapsulate_keepalive`], e.g. when probing a path.
+/// A request to send a keepalive with [`Tunnel::encapsulate_keepalive`].
 #[derive(Debug)]
 #[must_use = "a keepalive is due; send it with `Tunnel::encapsulate_keepalive`"]
 pub struct Keepalive;
 
 /// The result of committing a decrypted packet.
 pub enum Committed<B> {
-    /// The first `len` bytes of `buffer` hold the decrypted payload, possibly followed by padding.
+    /// The first `len` bytes of `buffer` contain the decrypted payload, including any padding.
     Data { buffer: B, len: usize },
     /// The data message was a keepalive.
     Keepalive,
@@ -60,7 +59,7 @@ impl<B> std::fmt::Debug for Committed<B> {
     }
 }
 
-/// The optional settings of a [`Tunnel`], passed to
+/// Optional settings for a [`Tunnel`], passed to
 /// [`Interface::new_tunnel`](crate::Interface::new_tunnel).
 #[derive(Debug, Default)]
 pub struct TunnelConfig {
@@ -76,9 +75,9 @@ impl TunnelConfig {
         self
     }
 
-    /// Sends a keepalive once `interval` passed since the last message we sent.
+    /// Configures persistent keepalives at `interval`.
     ///
-    /// A zero `interval` leaves the persistent keepalive off.
+    /// A zero interval disables persistent keepalives.
     pub fn with_persistent_keepalive(mut self, interval: Duration) -> Self {
         self.persistent_keepalive = Some(interval).filter(|interval| !interval.is_zero());
 
@@ -86,7 +85,7 @@ impl TunnelConfig {
     }
 }
 
-/// A point-to-point WireGuard connection
+/// A point-to-point WireGuard connection.
 pub struct Tunnel {
     handshake: Handshake,
     sessions: Sessions,
@@ -99,10 +98,10 @@ pub struct Tunnel {
 }
 
 impl Tunnel {
-    /// Whether the connection expired, as announced by [`Event::ConnectionExpired`].
+    /// Returns whether the connection has expired, as announced by [`Event::ConnectionExpired`].
     ///
-    /// An expired tunnel is meant to be dropped: it has no timeout, formats no handshake
-    /// initiation and fails everything else with [`Error::ConnectionExpired`].
+    /// Drop expired tunnels. They have no further timeouts or handshake initiations, and
+    /// encapsulation and decapsulation fail with [`Error::ConnectionExpired`].
     pub fn is_expired(&self) -> bool {
         self.handshake.is_expired()
     }
@@ -115,7 +114,10 @@ impl Tunnel {
         Ok(())
     }
 
-    #[expect(clippy::too_many_arguments, reason = "We don't care that much.")]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Initializes the peer, session index, timers and key material."
+    )]
     pub(crate) fn new(
         static_private: StaticSecret,
         peer_static_public: PublicKey,
@@ -145,7 +147,7 @@ impl Tunnel {
         })
     }
 
-    /// Identifies this tunnel among those of its [`Interface`](crate::Interface).
+    /// Returns this tunnel's ID within its [`Interface`](crate::Interface).
     ///
     /// Route a [`ReceivedMessage`] here if its [`ReceivedMessage::tunnel_id`] matches.
     pub fn id(&self) -> TunnelId {
@@ -156,32 +158,31 @@ impl Tunnel {
         self.handshake.remote_static_public()
     }
 
-    /// Set the `REKEY_ATTEMPT_TIME`.
+    /// Sets how long to retry unanswered handshake initiations (`REKEY_ATTEMPT_TIME`).
     ///
-    /// Defaults to 90s. Must be at most 540s (`REJECT_AFTER_TIME * 3`), after which the tunnel
-    /// expires without a new handshake anyway.
+    /// Defaults to 90 seconds. Must be at most 540 seconds (`REJECT_AFTER_TIME * 3`), when a
+    /// tunnel without a new handshake expires.
     pub fn set_rekey_attempt_time(&mut self, rekey_attempt_time: Duration) {
         self.timers.set_rekey_attempt_time(rekey_attempt_time);
     }
 
-    /// Set the `KEEPALIVE_TIMEOUT`.
+    /// Sets how long to wait before replying to data with a keepalive (`KEEPALIVE_TIMEOUT`).
     ///
-    /// Defaults to 10s. Together with the `REKEY_TIMEOUT`, must be at most 180s
-    /// (`REJECT_AFTER_TIME`).
+    /// Defaults to 10 seconds. The sum of this and `REKEY_TIMEOUT` must not exceed
+    /// 180 seconds (`REJECT_AFTER_TIME`).
     pub fn set_keepalive_timeout(&mut self, keepalive_timeout: Duration) {
         self.timers.set_keepalive_timeout(keepalive_timeout);
     }
 
-    /// Set the `REKEY_TIMEOUT`, i.e. the interval at which an unanswered
-    /// handshake initiation is retried.
+    /// Sets the retry interval for unanswered handshake initiations (`REKEY_TIMEOUT`).
     ///
-    /// Defaults to 5s. Together with the `KEEPALIVE_TIMEOUT`, must be at most 180s
-    /// (`REJECT_AFTER_TIME`).
+    /// Defaults to 5 seconds. The sum of this and `KEEPALIVE_TIMEOUT` must not exceed
+    /// 180 seconds (`REJECT_AFTER_TIME`).
     pub fn set_rekey_timeout(&mut self, rekey_timeout: Duration) {
         self.timers.set_rekey_timeout(rekey_timeout);
     }
 
-    /// Prepares a data message, deferring writing and encrypting it to the returned [`PendingEncapsulate`].
+    /// Reserves a data message's counter for encryption with [`PendingEncapsulate::encrypt`].
     pub fn begin_encapsulate(&mut self, now: Instant) -> Result<PendingEncapsulate, Error> {
         self.ensure_not_expired()?;
 
@@ -195,7 +196,7 @@ impl Tunnel {
         Ok(pending)
     }
 
-    /// Encrypts a keepalive on the session that data messages are sent on.
+    /// Encrypts a keepalive using the current sending session.
     pub fn encapsulate_keepalive(
         &mut self,
         _keepalive: Keepalive,
@@ -213,7 +214,7 @@ impl Tunnel {
         Ok(Datagram::new(message))
     }
 
-    /// The session that data messages are sent on, if one is usable.
+    /// Returns a usable session for sending data, if one exists.
     fn sending_session(&mut self, now: Instant) -> Option<&mut session::Session> {
         let session = self.sessions.current_mut()?;
 
@@ -229,12 +230,11 @@ impl Tunnel {
         Some(session)
     }
 
-    /// Handles a message received from the network, as returned by [`Interface::receive`](crate::Interface::receive).
+    /// Handles a message from [`Interface::receive`](crate::Interface::receive).
     ///
-    /// Handshake messages and cookie replies are processed right away and return `None`. The
-    /// decryption of a data message is deferred to the returned [`PendingDecapsulate`]. Hand
-    /// the [`Decrypted`] message back to [`Tunnel::commit_decapsulate`] to complete the
-    /// decapsulation.
+    /// Processes handshakes and cookie replies immediately, returning `None`. For data messages,
+    /// returns a [`PendingDecapsulate`]; decrypt it and pass the result to
+    /// [`Tunnel::commit_decapsulate`] to accept the plaintext.
     pub fn begin_decapsulate(
         &mut self,
         message: ReceivedMessage,
@@ -252,7 +252,7 @@ impl Tunnel {
         Ok(None)
     }
 
-    /// Completes the decapsulation of a decrypted data message to obtain the plaintext.
+    /// Accepts a decrypted data message after checking its session and replay counter.
     pub fn commit_decapsulate<B: AsRef<[u8]>>(
         &mut self,
         decrypted: Decrypted<B>,
@@ -296,7 +296,7 @@ impl Tunnel {
     fn handle_handshake_init(&mut self, p: HandshakeInitiation, now: Instant) -> Result<(), Error> {
         let remote_idx = Index::from_peer(p.sender_idx());
 
-        tracing::debug!(%remote_idx, "Received handshake_initiation",);
+        tracing::debug!(%remote_idx, "Received handshake initiation");
 
         let local_idx = self.sessions.next_index();
         let (packet, session) =
@@ -309,7 +309,7 @@ impl Tunnel {
         self.timers.tick(TimerName::TimeLastPacketSent, now);
         self.timers.tick(TimerName::TimeLastHandshakeCompleted, now);
 
-        tracing::debug!(%local_idx, %remote_idx, "Sending handshake_response");
+        tracing::debug!(%local_idx, %remote_idx, "Sending handshake response");
 
         self.events
             .push_back(Event::SendHandshakeResponse(Datagram::new(packet)));
@@ -327,7 +327,7 @@ impl Tunnel {
         tracing::debug!(
             %local_idx,
             remote_idx = %Index::from_peer(p.sender_idx),
-            "Received handshake_response"
+            "Received handshake response"
         );
 
         let session = self.handshake.receive_handshake_response(p, now)?;
@@ -347,11 +347,11 @@ impl Tunnel {
     fn handle_cookie_reply(&mut self, p: CookieReply, now: Instant) -> Result<(), Error> {
         let local_idx = Index::from_peer(p.receiver_idx);
 
-        tracing::debug!(%local_idx, "Received cookie_reply");
+        tracing::debug!(%local_idx, "Received cookie reply");
 
         self.handshake.receive_cookie_reply(p, now)?;
 
-        tracing::debug!(%local_idx, "Did set cookie");
+        tracing::debug!(%local_idx, "Stored cookie");
 
         Ok(())
     }
@@ -378,7 +378,7 @@ impl Tunnel {
     /// Starts a handshake with the peer.
     ///
     /// Returns `None` if a handshake is already in progress or the tunnel
-    /// [expired](Tunnel::is_expired).
+    /// has [expired](Tunnel::is_expired).
     pub fn initiate_handshake(&mut self, now: Instant) -> Option<Datagram> {
         if self.handshake.is_in_progress() {
             return None;
@@ -389,7 +389,7 @@ impl Tunnel {
 
     /// Starts a new handshake with the peer, replacing one that is in progress.
     ///
-    /// Returns `None` once the tunnel [expired](Tunnel::is_expired).
+    /// Returns `None` once the tunnel has [expired](Tunnel::is_expired).
     pub fn restart_handshake(&mut self, now: Instant) -> Option<Datagram> {
         if self.is_expired() {
             return None;
@@ -402,7 +402,7 @@ impl Tunnel {
             .handshake
             .initiate_handshake(local_idx, &mut self.rng, now);
 
-        tracing::debug!(%local_idx, "Sending handshake_initiation");
+        tracing::debug!(%local_idx, "Sending handshake initiation");
 
         if starting_new_handshake {
             self.timers.tick(TimerName::TimeLastHandshakeStarted, now);
@@ -418,18 +418,16 @@ impl Tunnel {
         self.timers.clear(now);
     }
 
-    /// The [`Instant`] at which we need to retransmit our handshake initiation,
-    /// together with the local index of the in-flight handshake.
+    /// Returns the retry deadline and local index of the in-flight handshake initiation.
     ///
-    /// Returns `None` unless we are currently the initiator of an in-progress
-    /// handshake.
+    /// Returns `None` if no initiation is awaiting a response.
     fn handshake_rekey_timeout(&self) -> Option<(Instant, Index)> {
         let (time_sent, local_index) = self.handshake.in_flight_initiation()?;
 
         Some((self.timers.rekey_timeout(time_sent), local_index))
     }
 
-    /// Advances the timers to `now`, queuing whatever is due for [`Tunnel::poll_event`].
+    /// Advances timers to `now` and queues due events for [`Tunnel::poll_event`].
     pub fn handle_timeout(&mut self, now: Instant) {
         if self.is_expired() {
             return;
@@ -450,84 +448,62 @@ impl Tunnel {
                 scheduled_handshake_at
                     .checked_duration_since(now)
                     .is_some_and(|remaining| remaining <= MAX_JITTER),
-                "Should never suspend for longer than jitter duration"
+                "the scheduled handshake must be within the jitter interval"
             );
 
-            // We have a handshake scheduled but the deadline is not expired yet.
-            // Don't do anything to avoid repeated printing of logs.
-            // The below logic would still evaluate that we need to send another handshake.
+            // Wait for the scheduled handshake rather than scheduling another one.
             return;
         }
 
         let mut handshake_initiation_required = false;
         let mut keepalive_required = false;
 
-        // Both peers derive a session's lifetime from the same handshake, so the remote
-        // discards it at the same moment we do. A session that carried data was due a
-        // re-key at REKEY_AFTER_TIME, so reaching its expiry means that re-key never
-        // landed and there is no shared state left to reach.
+        // A session that sent data should have rekeyed before expiry; otherwise presume it lost.
         if let Some(expired_current) = self.sessions.expire(now) {
             if expired_current.sent_data() {
-                tracing::debug!("CONNECTION_EXPIRED(REJECT_AFTER_TIME)");
+                tracing::debug!("Connection expired (REJECT_AFTER_TIME)");
                 self.expire(now);
                 return;
             }
 
-            // In case our session expired, create a new one iff we initiated it.
             if expired_current.role() == Role::Initiator && !self.handshake.is_in_progress() {
                 handshake_initiation_required = true;
             }
         }
 
-        // Clear cookie after COOKIE_EXPIRATION_TIME
         if self
             .handshake
             .cookie_expiration()
             .is_some_and(|deadline| now >= deadline)
         {
-            tracing::debug!("COOKIE_EXPIRED");
+            tracing::debug!("Cookie expired");
             self.handshake.clear_cookie();
         }
 
-        // Handshake state and sessions are discarded after (REJECT_AFTER_TIME * 3) ms
-        // if no new keys have been exchanged. Handshake secrets are zeroized on drop,
-        // session keys are only dropped.
+        // Dropping handshake secrets zeroizes them; session keys are only dropped.
         if now >= self.timers.reject_after_time() {
-            tracing::debug!("CONNECTION_EXPIRED(REJECT_AFTER_TIME * 3)");
+            tracing::debug!("Connection expired (REJECT_AFTER_TIME * 3)");
             self.expire(now);
             return;
         }
 
         if let Some((rekey_timeout, local_idx)) = self.handshake_rekey_timeout() {
-            // Handshake Initiation Retransmission
             if now >= self.timers.rekey_attempt_time() {
-                // After REKEY_ATTEMPT_TIME ms of trying to initiate a new handshake,
-                // the retries give up and cease, and clear all existing packets queued
-                // up to be sent. If a packet is explicitly queued up to be sent, then
-                // this timer is reset.
-                tracing::debug!(%local_idx, "CONNECTION_EXPIRED(REKEY_ATTEMPT_TIME)");
+                tracing::debug!(%local_idx, "Connection expired (REKEY_ATTEMPT_TIME)");
                 self.expire(now);
                 return;
             }
 
             if now >= rekey_timeout {
-                // A handshake initiation is retried after REKEY_TIMEOUT + jitter ms,
-                // if a response has not been received, where jitter is some random
-                // value between 0 and 333 ms (`MAX_JITTER`).
-                tracing::debug!(%local_idx, "HANDSHAKE(REKEY_TIMEOUT)");
+                tracing::debug!(%local_idx, "Retrying handshake (REKEY_TIMEOUT)");
                 handshake_initiation_required = true;
             }
         } else {
-            // After sending a packet, if the sender was the original initiator
-            // of the handshake and if the current session key is REKEY_AFTER_TIME
-            // ms old, we initiate a new handshake. If the sender was the original
-            // responder of the handshake, it does not re-initiate a new handshake
-            // after REKEY_AFTER_TIME ms like the original initiator does.
             if self
                 .rekey_after_time_on_send()
                 .is_some_and(|deadline| now >= deadline)
             {
-                tracing::debug!("HANDSHAKE(REKEY_AFTER_TIME (on send))");
+                tracing::debug!("Rekeying after sending data (REKEY_AFTER_TIME)");
                 handshake_initiation_required = true;
             }
 
@@ -535,58 +511,49 @@ impl Tunnel {
                 .rekey_after_messages()
                 .is_some_and(|deadline| now >= deadline)
             {
-                tracing::debug!("HANDSHAKE(REKEY_AFTER_MESSAGES)");
+                tracing::debug!("Rekeying after message limit (REKEY_AFTER_MESSAGES)");
                 handshake_initiation_required = true;
             }
 
-            // After receiving a packet, if the receiver was the original initiator
-            // of the handshake and if the current session key is REJECT_AFTER_TIME
-            // - KEEPALIVE_TIMEOUT - REKEY_TIMEOUT ms old, we initiate a new
-            // handshake.
             if self
                 .reject_after_time_on_receive()
                 .is_some_and(|deadline| now >= deadline)
             {
                 tracing::debug!(
-                    "HANDSHAKE(REJECT_AFTER_TIME - KEEPALIVE_TIMEOUT - REKEY_TIMEOUT (on receive))"
+                    "Rekeying after receiving data (REJECT_AFTER_TIME - KEEPALIVE_TIMEOUT - REKEY_TIMEOUT)"
                 );
                 handshake_initiation_required = true;
             }
 
-            // If we have sent a packet to a given peer but have not received a
-            // packet after from that peer for (KEEPALIVE + REKEY_TIMEOUT) ms,
-            // we initiate a new handshake.
             if self
                 .timers
                 .rekey_after_time_without_response()
                 .is_some_and(|deadline| now >= deadline)
             {
-                tracing::debug!("HANDSHAKE(KEEPALIVE + REKEY_TIMEOUT)");
+                tracing::debug!(
+                    "Starting handshake after no reply (KEEPALIVE_TIMEOUT + REKEY_TIMEOUT)"
+                );
                 handshake_initiation_required = true;
             }
 
             if !handshake_initiation_required {
-                // If a packet has been received from a given peer, but we have not sent one back
-                // to the given peer in KEEPALIVE ms, we send an empty packet.
                 if self
                     .timers
                     .keepalive_after_time_without_send()
                     .is_some_and(|deadline| now >= deadline)
                 {
-                    tracing::debug!("KEEPALIVE(KEEPALIVE_TIMEOUT)");
-                    // Consume the deadline now; the send below may fail and nothing else
-                    // would clear it.
+                    tracing::debug!("Keepalive due (KEEPALIVE_TIMEOUT)");
+                    // Clear the deadline even if sending fails.
                     self.timers.consume_passive_keepalive();
                     keepalive_required = true;
                 }
 
-                // Persistent KEEPALIVE
                 if self
                     .timers
                     .next_persistent_keepalive()
                     .is_some_and(|deadline| now >= deadline)
                 {
-                    tracing::debug!("KEEPALIVE(PERSISTENT_KEEPALIVE)");
+                    tracing::debug!("Persistent keepalive due");
                     self.timers.tick(TimerName::TimePersistentKeepalive, now);
                     keepalive_required = true;
                 }
@@ -603,8 +570,7 @@ impl Tunnel {
             return;
         }
 
-        // A keepalive is only ever sent on an established session; there is no need to queue it
-        // or start a handshake.
+        // Keepalives do not start handshakes or wait for a session to become available.
         if keepalive_required && self.sending_session(now).is_some() {
             self.events.push_back(Event::KeepaliveDue(Keepalive));
         }
@@ -615,13 +581,10 @@ impl Tunnel {
         self.events.pop_front()
     }
 
-    /// Returns the [`Instant`] at which [`Tunnel::handle_timeout`] next needs to
-    /// be called.
+    /// Returns the next deadline for calling [`Tunnel::handle_timeout`].
     ///
-    /// Calling it earlier than the given [`Instant`] is safe but unlikely to
-    /// have any effect. Driving the state machine by repeatedly polling at the
-    /// returned [`Instant`] is sufficient: there is no need to call
-    /// [`Tunnel::handle_timeout`] on a fixed interval. Returns `None` once the tunnel
+    /// After handling a timeout, poll again for the next deadline. A fixed timer interval is
+    /// unnecessary, though early calls are safe. Returns `None` once the tunnel has
     /// [expired](Tunnel::is_expired).
     pub fn poll_timeout(&self) -> Option<Instant> {
         if self.is_expired() {
@@ -631,13 +594,12 @@ impl Tunnel {
         let next = self.next_deadline()?;
         let last_update = self.timers[TimerName::TimeLastUpdate];
 
-        // Never announce an [`Instant`] in the past: a deadline may already have
-        // elapsed by the time the caller polls us.
+        // A deadline may have elapsed before the last timer update.
         Some(next.max(last_update))
     }
 
     fn next_deadline(&self) -> Option<Instant> {
-        // Mimic `handle_timeout`: if we have a handshake scheduled, no other timer matters.
+        // Match `handle_timeout`'s priority for scheduled handshakes.
         if let Some(scheduled_handshake) = self.timers.scheduled_handshake() {
             return Some(scheduled_handshake);
         }
@@ -648,13 +610,11 @@ impl Tunnel {
             .chain(iter::once(self.timers.reject_after_time()));
 
         if let Some((rekey_timeout, _)) = self.handshake_rekey_timeout() {
-            // While a handshake is in progress, only the handshake timers matter.
             common_timers
                 .chain(iter::once(rekey_timeout))
                 .chain(iter::once(self.timers.rekey_attempt_time()))
                 .min()
         } else {
-            // Persistent keep-alive only makes sense if the current session is active.
             let persistent_keepalive = self
                 .sessions
                 .current()
@@ -671,8 +631,7 @@ impl Tunnel {
         }
     }
 
-    /// Either peer starts a new handshake once the current session has sent
-    /// `REKEY_AFTER_MESSAGES`; that became due with the last packet sent.
+    /// Returns when the current session reached `REKEY_AFTER_MESSAGES` sent messages.
     fn rekey_after_messages(&self) -> Option<Instant> {
         self.sessions
             .current()
