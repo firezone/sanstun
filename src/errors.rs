@@ -8,8 +8,7 @@ pub enum Error {
     UnexpectedPacket,
     WrongIndex,
     WrongKey,
-    // The key is boxed to keep `Error` small: it is part of every decapsulation result.
-    ReplayedHandshakeInitiation { peer_static_public: Box<PublicKey> },
+    ReplayedHandshakeInitiation { peer_static_public: PublicKey },
     InvalidMac,
     InvalidAeadTag,
     InvalidCounter,
