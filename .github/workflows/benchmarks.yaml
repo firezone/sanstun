@@ -21,8 +21,8 @@ jobs:
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
     # The binaries link against the runner's glibc, so this has to match the image's base.
     runs-on: ubuntu-24.04
-    # Bencher runs one Bare Metal job at a time, so a run may queue behind others.
-    timeout-minutes: 60
+    # Bencher's Bare Metal runner is shared, so a job may queue for a long time.
+    timeout-minutes: 120
     permissions:
       contents: read
       pull-requests: write
@@ -57,6 +57,8 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             args=(
               --branch "$GITHUB_HEAD_REF"
@@ -77,11 +79,21 @@ jobs:
             )
           fi
 
-          bencher run "${args[@]}" \
+          job=$(bencher run "${args[@]}" \
             --testbed "bare-metal-$BENCHER_SPEC" \
             --spec "$BENCHER_SPEC" \
             --image "$IMAGE" \
             --job-timeout 300 \
-            --err \
             --adapter rust_criterion \
+            --detach \
+            --quiet \
+            --format json | jq -r .job)
+
+          # Waiting as part of the submission gives up after twice `--job-timeout`, which
+          # the queue alone can exceed. Attaching lets us wait longer than the job may run.
+          bencher run \
+            --project "$BENCHER_PROJECT" \
+            --job "$job" \
+            --job-timeout 6600 \
+            --err \
             --github-actions "$GH_TOKEN"
