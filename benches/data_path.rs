@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use criterion::{BatchSize, Criterion};
-use sanstun::{Event, Interface, Received, Tunnel, TunnelConfig};
+use sanstun::{Interface, Received, ReceivedMessage, Tunnel, TunnelConfig};
 use zeroize::Zeroizing;
 
 const PACKET_SIZES: [usize; 2] = [64, 1280];
@@ -131,11 +131,13 @@ fn begin_decapsulate(
     message: &[u8],
     now: Instant,
 ) -> sanstun::PendingDecapsulate {
-    let Received::Message(message) = interface.receive(addr, message, now).unwrap() else {
+    let Received::Message(ReceivedMessage::TransportData(message)) =
+        interface.receive(addr, message, now).unwrap()
+    else {
         unreachable!()
     };
 
-    tunnel.begin_decapsulate(message, now).unwrap().unwrap()
+    tunnel.begin_decapsulate(message, now).unwrap()
 }
 
 /// Establishes two tunnels and returns the initiator, the responder's interface and the responder.
@@ -151,18 +153,19 @@ fn established_tunnels(addr: SocketAddr, now: Instant) -> (Tunnel, Interface, Tu
         .unwrap();
 
     let initiation = a.initiate_handshake(now).unwrap();
-    let Received::Message(message) = interface_b.receive(addr, &initiation, now).unwrap() else {
+    let Received::Message(ReceivedMessage::HandshakeInitiation(initiation)) =
+        interface_b.receive(addr, &initiation, now).unwrap()
+    else {
         unreachable!()
     };
-    b.begin_decapsulate(message, now).unwrap();
+    let response = b.handle_handshake_initiation(initiation, now).unwrap();
 
-    let Some(Event::SendHandshakeResponse(response)) = b.poll_event() else {
+    let Received::Message(ReceivedMessage::HandshakeResponse(response)) =
+        interface_a.receive(addr, &response, now).unwrap()
+    else {
         unreachable!()
     };
-    let Received::Message(message) = interface_a.receive(addr, &response, now).unwrap() else {
-        unreachable!()
-    };
-    a.begin_decapsulate(message, now).unwrap();
+    a.handle_handshake_response(response, now).unwrap();
 
     (a, interface_b, b)
 }

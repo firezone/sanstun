@@ -364,8 +364,8 @@ impl PendingEncapsulate {
     /// Zero-padding rounds the payload up to a multiple of 16 bytes. Including the header and tag,
     /// `dst` must hold at least `plaintext.len().next_multiple_of(16) + 32` bytes.
     ///
-    /// Empty plaintext fails with [`Error::EmptyPlaintext`]. Send keepalives with
-    /// [`Tunnel::encapsulate_keepalive`](crate::Tunnel::encapsulate_keepalive).
+    /// Empty plaintext fails with [`Error::EmptyPlaintext`]. The [`Tunnel`](crate::Tunnel) sends
+    /// keepalives itself, as [`Event::SendKeepalive`](crate::Event::SendKeepalive).
     pub fn encrypt<'a>(
         self,
         plaintext: &[u8],

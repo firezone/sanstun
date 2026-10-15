@@ -9,7 +9,7 @@
 //! ```
 //! use std::time::{Instant, SystemTime, UNIX_EPOCH};
 //!
-//! use sanstun::{Committed, Event, Interface, Received, TunnelConfig};
+//! use sanstun::{Committed, Interface, Received, ReceivedMessage, TunnelConfig};
 //! use zeroize::Zeroizing;
 //!
 //! let now = Instant::now();
@@ -24,21 +24,22 @@
 //!
 //! // Alice initiates the handshake and Bob responds.
 //! let initiation = alice_to_bob.initiate_handshake(now).unwrap();
-//! let message = match bob.receive(alice_addr, &initiation, now)? {
-//!     Received::Message(message) => message,
+//! let response = match bob.receive(alice_addr, &initiation, now)? {
+//!     Received::Message(ReceivedMessage::HandshakeInitiation(initiation)) => {
+//!         bob_to_alice.handle_handshake_initiation(initiation, now)?
+//!     }
 //!     // Under load, send the cookie reply back to the peer.
 //!     Received::SendCookieReply(_) => unreachable!("not under load"),
+//!     received => unreachable!("expected an initiation, got {received:?}"),
 //! };
-//! bob_to_alice.begin_decapsulate(message, now)?;
-//! let response = match bob_to_alice.poll_event() {
-//!     Some(Event::SendHandshakeResponse(response)) => response,
-//!     event => unreachable!("only the response is queued, got {event:?}"),
+//!
+//! // Alice completes the handshake and confirms it with a keepalive for Bob.
+//! let _keepalive = match alice.receive(bob_addr, &response, now)? {
+//!     Received::Message(ReceivedMessage::HandshakeResponse(response)) => {
+//!         alice_to_bob.handle_handshake_response(response, now)?
+//!     }
+//!     received => unreachable!("expected a response, got {received:?}"),
 //! };
-//! let message = match alice.receive(bob_addr, &response, now)? {
-//!     Received::Message(message) => message,
-//!     Received::SendCookieReply(_) => unreachable!("not under load"),
-//! };
-//! alice_to_bob.begin_decapsulate(message, now)?;
 //!
 //! // Alice encrypts a packet.
 //! let packet = b"an IP packet";
@@ -46,11 +47,12 @@
 //! let data = alice_to_bob.begin_encapsulate(now)?.encrypt(packet, &mut buf)?;
 //!
 //! // Bob decrypts and accepts it.
-//! let message = match bob.receive(alice_addr, &data, now)? {
-//!     Received::Message(message) => message,
-//!     Received::SendCookieReply(_) => unreachable!("not under load"),
+//! let decrypted = match bob.receive(alice_addr, &data, now)? {
+//!     Received::Message(ReceivedMessage::TransportData(message)) => {
+//!         bob_to_alice.begin_decapsulate(message, now)?.decrypt(&data, [0; 64])
+//!     }
+//!     received => unreachable!("expected data, got {received:?}"),
 //! };
-//! let decrypted = bob_to_alice.begin_decapsulate(message, now)?.unwrap().decrypt(&data, [0; 64]);
 //! match bob_to_alice.commit_decapsulate(decrypted, now)? {
 //!     // The plaintext is zero-padded to a multiple of 16 bytes.
 //!     Committed::Data { buffer, len } => assert_eq!(&buffer[..len], b"an IP packet\0\0\0\0"),
@@ -69,8 +71,9 @@
 //! - **Handshake routing:** use [`HandshakeInitiation::peer_static_public`] to look up an authorized
 //!   peer. Anyone can generate a key pair, so an authenticated initiation is no reason to create a
 //!   tunnel for an unknown key. Replay checks only apply to keys you have created a tunnel for.
-//! - **Endpoint updates:** only update a peer's endpoint after [`Tunnel::begin_decapsulate`] accepts
-//!   its handshake or [`Tunnel::commit_decapsulate`] accepts its data. A datagram's source address
+//! - **Endpoint updates:** only update a peer's endpoint after [`Tunnel::handle_handshake_initiation`]
+//!   or [`Tunnel::handle_handshake_response`] accepts its handshake or
+//!   [`Tunnel::commit_decapsulate`] accepts its data. A datagram's source address
 //!   alone does not identify the peer.
 //! - **Bounded queues:** limit queues used to send encryption or decryption work to other threads.
 //!   A [`PendingDecapsulate`] is cheap to create but costly to decrypt, and a flood can exhaust memory.
@@ -106,4 +109,4 @@ pub use message::{
     TransportData,
 };
 pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
-pub use tunnel::{Committed, Event, Keepalive, Tunnel, TunnelConfig};
+pub use tunnel::{Committed, Event, Tunnel, TunnelConfig};

@@ -3,8 +3,7 @@ use crate::handshake::Handshake;
 use crate::index::{Index, TunnelId};
 use crate::keys::{PresharedKey, PublicKey, StaticSecret};
 use crate::message::{
-    CookieReply, DATA_OVERHEAD_SZ, Datagram, HandshakeInitiation, HandshakeResponse,
-    ReceivedMessage, TransportData,
+    CookieReply, DATA_OVERHEAD_SZ, Datagram, HandshakeInitiation, HandshakeResponse, TransportData,
 };
 use crate::ring_buffer::RingBuffer;
 use crate::session::{self, Decrypted, PendingDecapsulate, PendingEncapsulate, Role, Sessions};
@@ -23,21 +22,14 @@ use std::time::{Duration, Instant};
 pub enum Event {
     /// Send this handshake initiation to the peer.
     SendHandshakeInitiation(Datagram),
-    /// Send this handshake response to the peer.
-    SendHandshakeResponse(Datagram),
-    /// A keepalive is due: send it with [`Tunnel::encapsulate_keepalive`].
-    KeepaliveDue(Keepalive),
+    /// Send this keepalive to the peer.
+    SendKeepalive(Datagram),
     /// The connection expired and all session state was dropped.
     ///
     /// Emitted once. Drop the [`Tunnel`] and create a new one with
     /// [`Interface::new_tunnel`](crate::Interface::new_tunnel) to reconnect.
     ConnectionExpired,
 }
-
-/// A request to send a keepalive with [`Tunnel::encapsulate_keepalive`].
-#[derive(Debug)]
-#[must_use = "a keepalive is due; send it with `Tunnel::encapsulate_keepalive`"]
-pub struct Keepalive;
 
 /// The result of committing a decrypted packet.
 pub enum Committed<B> {
@@ -149,7 +141,8 @@ impl Tunnel {
 
     /// Returns this tunnel's ID within its [`Interface`](crate::Interface).
     ///
-    /// Route a [`ReceivedMessage`] here if its [`ReceivedMessage::tunnel_id`] matches.
+    /// Route a [`ReceivedMessage`](crate::ReceivedMessage) here if its
+    /// [`ReceivedMessage::tunnel_id`](crate::ReceivedMessage::tunnel_id) matches.
     pub fn id(&self) -> TunnelId {
         self.sessions.tunnel_id()
     }
@@ -197,13 +190,7 @@ impl Tunnel {
     }
 
     /// Encrypts a keepalive using the current sending session.
-    pub fn encapsulate_keepalive(
-        &mut self,
-        _keepalive: Keepalive,
-        now: Instant,
-    ) -> Result<Datagram, Error> {
-        self.ensure_not_expired()?;
-
+    fn encrypt_keepalive(&mut self, now: Instant) -> Result<Datagram, Error> {
         let mut message = [0u8; DATA_OVERHEAD_SZ];
         self.sending_session(now)
             .ok_or(Error::NoCurrentSession)?
@@ -228,28 +215,6 @@ impl Tunnel {
         }
 
         Some(session)
-    }
-
-    /// Handles a message from [`Interface::receive`](crate::Interface::receive).
-    ///
-    /// Processes handshakes and cookie replies immediately, returning `None`. For data messages,
-    /// returns a [`PendingDecapsulate`]; decrypt it and pass the result to
-    /// [`Tunnel::commit_decapsulate`] to accept the plaintext.
-    pub fn begin_decapsulate(
-        &mut self,
-        message: ReceivedMessage,
-        now: Instant,
-    ) -> Result<Option<PendingDecapsulate>, Error> {
-        self.ensure_not_expired()?;
-
-        match message {
-            ReceivedMessage::HandshakeInitiation(p) => self.handle_handshake_init(p, now)?,
-            ReceivedMessage::HandshakeResponse(p) => self.handle_handshake_response(p, now)?,
-            ReceivedMessage::CookieReply(p) => self.handle_cookie_reply(p, now)?,
-            ReceivedMessage::TransportData(p) => return self.handle_data(p, now).map(Some),
-        }
-
-        Ok(None)
     }
 
     /// Accepts a decrypted data message after checking its session and replay counter.
@@ -293,7 +258,16 @@ impl Tunnel {
         Ok(Committed::Data { buffer, len })
     }
 
-    fn handle_handshake_init(&mut self, p: HandshakeInitiation, now: Instant) -> Result<(), Error> {
+    /// Answers a handshake initiation.
+    ///
+    /// Returns the response to send back on the path the initiation arrived on.
+    pub fn handle_handshake_initiation(
+        &mut self,
+        p: HandshakeInitiation,
+        now: Instant,
+    ) -> Result<Datagram, Error> {
+        self.ensure_not_expired()?;
+
         let remote_idx = Index::from_peer(p.sender_idx());
 
         tracing::debug!(%remote_idx, "Received handshake initiation");
@@ -311,17 +285,19 @@ impl Tunnel {
 
         tracing::debug!(%local_idx, %remote_idx, "Sending handshake response");
 
-        self.events
-            .push_back(Event::SendHandshakeResponse(Datagram::new(packet)));
-
-        Ok(())
+        Ok(Datagram::new(packet))
     }
 
-    fn handle_handshake_response(
+    /// Completes a handshake this tunnel initiated.
+    ///
+    /// Returns the keepalive that confirms the session to the responder.
+    pub fn handle_handshake_response(
         &mut self,
         p: HandshakeResponse,
         now: Instant,
-    ) -> Result<(), Error> {
+    ) -> Result<Datagram, Error> {
+        self.ensure_not_expired()?;
+
         let local_idx = Index::from_peer(p.receiver_idx);
 
         tracing::debug!(
@@ -338,13 +314,13 @@ impl Tunnel {
         self.timers.tick(TimerName::TimeLastHandshakeCompleted, now);
         self.sessions.set_current(local_idx);
 
-        // The keepalive confirms the session to the responder.
-        self.events.push_back(Event::KeepaliveDue(Keepalive));
-
-        Ok(())
+        self.encrypt_keepalive(now)
     }
 
-    fn handle_cookie_reply(&mut self, p: CookieReply, now: Instant) -> Result<(), Error> {
+    /// Stores the cookie from a reply to this tunnel's handshake initiation.
+    pub fn handle_cookie_reply(&mut self, p: CookieReply, now: Instant) -> Result<(), Error> {
+        self.ensure_not_expired()?;
+
         let local_idx = Index::from_peer(p.receiver_idx);
 
         tracing::debug!(%local_idx, "Received cookie reply");
@@ -356,11 +332,17 @@ impl Tunnel {
         Ok(())
     }
 
-    fn handle_data(
-        &self,
+    /// Prepares a data message for decryption.
+    ///
+    /// Decrypt the returned [`PendingDecapsulate`] and pass the result to
+    /// [`Tunnel::commit_decapsulate`] to accept the plaintext.
+    pub fn begin_decapsulate(
+        &mut self,
         packet: TransportData,
         now: Instant,
     ) -> Result<PendingDecapsulate, Error> {
+        self.ensure_not_expired()?;
+
         let remote_idx = Index::from_peer(packet.receiver_idx);
 
         let session = self.sessions.in_slot_of(remote_idx).ok_or_else(|| {
@@ -571,12 +553,15 @@ impl Tunnel {
         }
 
         // Keepalives do not start handshakes or wait for a session to become available.
-        if keepalive_required && self.sending_session(now).is_some() {
-            self.events.push_back(Event::KeepaliveDue(Keepalive));
+        if keepalive_required {
+            match self.encrypt_keepalive(now) {
+                Ok(keepalive) => self.events.push_back(Event::SendKeepalive(keepalive)),
+                Err(e) => tracing::trace!("Skipping keepalive: {e}"),
+            }
         }
     }
 
-    /// Returns the next [`Event`] queued by [`Tunnel::handle_timeout`] or [`Tunnel::begin_decapsulate`].
+    /// Returns the next [`Event`] queued by [`Tunnel::handle_timeout`].
     pub fn poll_event(&mut self) -> Option<Event> {
         self.events.pop_front()
     }

@@ -537,17 +537,35 @@ impl Sim {
             Err(e) => return vec![Out::Err(e)],
         };
 
-        match node.tunn.begin_decapsulate(message, now) {
-            Ok(None) => {}
-            Err(e) => outs.push(Out::Err(e)),
-            Ok(Some(pending)) => {
-                let decrypted = pending.decrypt(datagram, vec![0u8; BUF]);
-                match self.commit(to, decrypted) {
-                    Ok(None) => {}
-                    Ok(Some(ip_packet)) => outs.push(Out::Ip(ip_packet)),
+        match message {
+            ReceivedMessage::HandshakeInitiation(init) => {
+                match node.tunn.handle_handshake_initiation(init, now) {
+                    Ok(response) => outs.push(Out::Net(response.to_vec())),
                     Err(e) => outs.push(Out::Err(e)),
                 }
             }
+            ReceivedMessage::HandshakeResponse(response) => {
+                match node.tunn.handle_handshake_response(response, now) {
+                    Ok(keepalive) => outs.push(Out::Net(keepalive.to_vec())),
+                    Err(e) => outs.push(Out::Err(e)),
+                }
+            }
+            ReceivedMessage::CookieReply(reply) => {
+                if let Err(e) = node.tunn.handle_cookie_reply(reply, now) {
+                    outs.push(Out::Err(e));
+                }
+            }
+            ReceivedMessage::TransportData(data) => match node.tunn.begin_decapsulate(data, now) {
+                Err(e) => outs.push(Out::Err(e)),
+                Ok(pending) => {
+                    let decrypted = pending.decrypt(datagram, vec![0u8; BUF]);
+                    match self.commit(to, decrypted) {
+                        Ok(None) => {}
+                        Ok(Some(ip_packet)) => outs.push(Out::Ip(ip_packet)),
+                        Err(e) => outs.push(Out::Err(e)),
+                    }
+                }
+            },
         }
         outs.extend(self.drain_events(to).into_iter().map(Out::Net));
 
@@ -556,22 +574,13 @@ impl Sim {
 
     /// Drains `peer`'s events and returns outgoing datagrams.
     fn drain_events(&mut self, peer: Peer) -> Vec<Vec<u8>> {
-        let now = self.now;
         let node = self.node_mut(peer);
         let mut outgoing = Vec::new();
 
         while let Some(event) = node.tunn.poll_event() {
             match event {
                 sanstun::Event::SendHandshakeInitiation(datagram)
-                | sanstun::Event::SendHandshakeResponse(datagram) => {
-                    outgoing.push(datagram.to_vec())
-                }
-                sanstun::Event::KeepaliveDue(keepalive) => outgoing.push(
-                    node.tunn
-                        .encapsulate_keepalive(keepalive, now)
-                        .expect("a keepalive is only due on a usable session")
-                        .to_vec(),
-                ),
+                | sanstun::Event::SendKeepalive(datagram) => outgoing.push(datagram.to_vec()),
                 sanstun::Event::ConnectionExpired => node.expirations += 1,
             }
         }
@@ -587,10 +596,11 @@ impl Sim {
         datagram: &[u8],
     ) -> Result<PendingDecapsulate, Error> {
         let now = self.now;
-        let packet = self.receive(to, datagram);
-        let pending = self.tunn_mut(to).begin_decapsulate(packet, now)?;
+        let ReceivedMessage::TransportData(data) = self.receive(to, datagram) else {
+            panic!("expected a data message");
+        };
 
-        Ok(pending.expect("a data message"))
+        self.tunn_mut(to).begin_decapsulate(data, now)
     }
 
     /// Commits a decryption on `to`, returning an IP packet or `None` for a keepalive.

@@ -54,10 +54,9 @@ fn poll_timeout_predicts_the_passive_keepalive() {
     tunn.handle_timeout(wake - Duration::from_millis(1));
     assert!(tunn.poll_event().is_none());
     tunn.handle_timeout(wake);
-    let Some(Event::KeepaliveDue(keepalive)) = tunn.poll_event() else {
+    let Some(Event::SendKeepalive(packet)) = tunn.poll_event() else {
         panic!("expected the keepalive");
     };
-    let packet = tunn.encapsulate_keepalive(keepalive, wake).unwrap();
     assert_eq!(packet.len(), KEEPALIVE_SIZE);
 
     // Sending the keepalive leaves only the session expiry timer.

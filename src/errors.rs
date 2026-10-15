@@ -57,7 +57,7 @@ impl Display for Error {
             }
             Error::EmptyPlaintext => write!(
                 f,
-                "an empty data message is a keepalive; send it with `Tunnel::encapsulate_keepalive`"
+                "an empty data message is a keepalive; the tunnel sends those itself"
             ),
             Error::LowOrderPoint => write!(
                 f,
