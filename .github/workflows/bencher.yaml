@@ -17,7 +17,8 @@ permissions: {}
 
 jobs:
   track:
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    # Dependabot's runs get no access to the Bencher API key.
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.actor.login != 'dependabot[bot]' }}
     runs-on: ubuntu-latest
     # Bencher runs one Bare Metal job at a time, so a run may queue behind others.
     timeout-minutes: 60
