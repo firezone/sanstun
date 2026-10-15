@@ -1,7 +1,7 @@
 name: Benchmarks
 
-# Runs the benchmarks of pull requests, including from forks, so this workflow must never have access to
-# secrets. `bencher.yaml` reports the results to Bencher once this workflow completes.
+# Builds the benchmarks of pull requests, including from forks, so this workflow must never have
+# access to secrets. `bencher.yaml` runs them on Bencher once this workflow completes.
 on:
   push:
     branches: ["main"]
@@ -16,19 +16,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  criterion:
-    # Bencher is only free for public projects.
-    if: ${{ !github.event.repository.private }}
-    runs-on: ubuntu-latest
+  image:
+    # The binaries link against the runner's glibc, so this has to match the image's base.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo bench --bench '*' -- --noplot | tee criterion.txt
-        shell: bash
+      - run: |
+          set -euo pipefail
+
+          mkdir benches-image
+          cargo bench --no-run --message-format=json \
+            | jq -r 'select(.reason == "compiler-artifact" and .target.kind == ["bench"]) | .executable, "benches-image/\(.target.name)"' \
+            | xargs -n 2 cp
+          docker build -f benches/Dockerfile -t sanstun-benches benches-image
+          docker save -o benches-image.tar sanstun-benches
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: criterion
-          path: criterion.txt
+          name: benches-image
+          path: benches-image.tar

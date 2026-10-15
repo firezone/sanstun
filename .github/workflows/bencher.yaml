@@ -1,7 +1,8 @@
 name: Bencher
 
-# Reports the results of `benchmarks.yaml` to Bencher. This workflow has access to secrets, so it must
-# never run code from the benchmarked commit, which may come from a fork, and only trusts the GitHub API.
+# Runs the image built by `benchmarks.yaml` on Bencher's Bare Metal runners. This workflow has access to
+# secrets, so it must never run code from the benchmarked commit, which may come from a fork, and only
+# trusts the GitHub API. Bencher runs the image in its own sandbox.
 on:
   workflow_run:
     workflows: [Benchmarks]
@@ -10,14 +11,16 @@ on:
 env:
   BENCHER_PROJECT: sanstun
   BENCHER_API_KEY: ${{ secrets.BENCHER_API_KEY }}
-  BENCHER_TESTBED: ubuntu-latest
+  BENCHER_SPEC: intel-v1
 
 permissions: {}
 
 jobs:
   track:
-    if: ${{ !github.event.repository.private && github.event.workflow_run.conclusion == 'success' }}
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
+    # Bencher runs one Bare Metal job at a time, so a run may queue behind others.
+    timeout-minutes: 60
     permissions:
       actions: read
       checks: write
@@ -30,10 +33,17 @@ jobs:
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: criterion
+          name: benches-image
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ github.token }}
       - uses: bencherdev/bencher@f80847436d7157936b40525db4c2a1064124f04a # v0.6.13
+      - run: |
+          image="registry.bencher.dev/$BENCHER_PROJECT:$HEAD_SHA"
+          docker load -i benches-image.tar
+          docker tag sanstun-benches "$image"
+          docker login registry.bencher.dev -u "$BENCHER_PROJECT" --password-stdin <<< "$BENCHER_API_KEY"
+          docker push "$image"
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
       - run: |
           if [ "$EVENT" = push ]; then
             args=(
@@ -59,7 +69,10 @@ jobs:
 
           bencher run "${args[@]}" \
             --hash "$HEAD_SHA" \
+            --testbed "bare-metal-$BENCHER_SPEC" \
+            --spec "$BENCHER_SPEC" \
+            --image "$IMAGE" \
+            --job-timeout 300 \
             --err \
             --adapter rust_criterion \
-            --github-actions "$GH_TOKEN" \
-            --file criterion.txt
+            --github-actions "$GH_TOKEN"
