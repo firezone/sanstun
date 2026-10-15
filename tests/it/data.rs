@@ -3,8 +3,9 @@
 
 use crate::harness::{
     DATA_OVERHEAD, KEEPALIVE_SIZE, Outcome as _, Peer::A, Peer::B, Sim, ipv4_packet, ipv6_packet,
+    secs,
 };
-use sanstun::{Committed, Error, Event, Keepalive};
+use sanstun::{Committed, Error, ReceivedMessage};
 
 #[test]
 fn ipv4_packets_round_trip() {
@@ -32,10 +33,7 @@ fn data_messages_are_zero_padded_to_a_multiple_of_16_bytes() {
         let plaintext = vec![0xff; len];
         let datagram = sim.encapsulate(A, &plaintext);
         let now = sim.now;
-        let message = sim.receive(B, &datagram);
-        let Ok(Some(pending)) = sim.tunn_mut(B).begin_decapsulate(message, now) else {
-            panic!("expected a data message");
-        };
+        let pending = sim.prepare_decrypt(B, &datagram).unwrap();
         let decrypted = pending.decrypt(&datagram, vec![0u8; 4096]);
         let Ok(Committed::Data {
             buffer,
@@ -56,51 +54,43 @@ fn data_messages_are_zero_padded_to_a_multiple_of_16_bytes() {
 // §6.1: keepalives prove liveness but carry no IP packet to forward.
 #[test]
 fn keepalives_are_consumed_silently() {
-    let mut sim = Sim::connected();
+    let mut sim = Sim::new();
+    let init = sim.initiate_handshake(A);
+    let response = sim.deliver(B, &init).expect_one_net();
 
-    let now = sim.now;
-    let keepalive = sim
-        .tunn_mut(A)
-        .encapsulate_keepalive(Keepalive, now)
-        .unwrap();
+    let keepalive = sim.deliver(A, &response).expect_one_net();
     assert_eq!(keepalive.len(), KEEPALIVE_SIZE);
 
     sim.deliver(B, &keepalive).expect_consumed();
 }
 
 #[test]
-fn keepalive_without_a_session_fails() {
-    let mut sim = Sim::new();
-    let now = sim.now;
-
-    assert!(matches!(
-        sim.tunn_mut(A).encapsulate_keepalive(Keepalive, now),
-        Err(Error::NoCurrentSession)
-    ));
-}
-
-#[test]
-fn handshake_response_leaves_the_keepalive_to_the_caller() {
+fn handshake_response_returns_the_confirming_keepalive() {
     let mut sim = Sim::new();
     let init = sim.initiate_handshake(A);
     let response = sim.deliver(B, &init).expect_one_net();
     let now = sim.now;
 
-    let message = sim.receive(A, &response);
-    let tunn = sim.tunn_mut(A);
-    assert!(tunn.begin_decapsulate(message, now).unwrap().is_none());
-    let event = tunn.poll_event();
-    let Some(Event::KeepaliveDue(keepalive)) = event else {
-        panic!("expected a due keepalive, got {event:?}");
+    let ReceivedMessage::HandshakeResponse(response) = sim.receive(A, &response) else {
+        panic!("expected a handshake response");
     };
+    let tunn = sim.tunn_mut(A);
+    let keepalive = tunn.handle_handshake_response(response, now).unwrap();
     assert!(tunn.poll_event().is_none());
 
-    let keepalive = sim
-        .tunn_mut(A)
-        .encapsulate_keepalive(keepalive, now)
-        .unwrap();
     sim.deliver(B, &keepalive).expect_consumed();
     sim.assert_connectivity();
+}
+
+#[test]
+fn keepalive_without_a_session_is_skipped() {
+    let mut sim = Sim::builder().persistent_keepalive_b(secs(25)).build();
+    let now = sim.now;
+
+    let tunn = sim.tunn_mut(B);
+    tunn.handle_timeout(now + secs(25));
+
+    assert!(tunn.poll_event().is_none());
 }
 
 #[test]

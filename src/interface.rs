@@ -332,7 +332,7 @@ impl Interface {
 /// The result of [`Interface::receive`].
 #[derive(Debug)]
 pub enum Received {
-    /// Route the message to its [`Tunnel`](crate::Tunnel) and hand it to [`Tunnel::begin_decapsulate`].
+    /// Route the message to its [`Tunnel`](crate::Tunnel) and pass it to the method for its type.
     Message(ReceivedMessage),
     /// Send this cookie reply to the peer. The interface is under load and requires a valid
     /// cookie before processing the handshake.
