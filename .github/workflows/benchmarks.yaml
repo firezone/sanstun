@@ -1,7 +1,5 @@
 name: Benchmarks
 
-# Builds the benchmarks of pull requests, including from forks, so this workflow must never have
-# access to secrets. `bencher.yaml` runs them on Bencher once this workflow completes.
 on:
   push:
     branches: ["main"]
@@ -16,25 +14,74 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  image:
+  bencher:
+    # Runs with the Bencher API key, so never for code from forks. Dependabot's PRs get no access to it.
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
     # The binaries link against the runner's glibc, so this has to match the image's base.
     runs-on: ubuntu-24.04
+    # Bencher runs one Bare Metal job at a time, so a run may queue behind others.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      pull-requests: write
+      checks: write
+    env:
+      BENCHER_PROJECT: sanstun
+      BENCHER_API_KEY: ${{ secrets.BENCHER_API_KEY }}
+      BENCHER_SPEC: intel-v1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: |
+      - uses: bencherdev/bencher@f80847436d7157936b40525db4c2a1064124f04a # v0.6.13
+      - name: Push image to the Bencher registry
+        run: |
           set -euo pipefail
 
           mkdir benches-image
           cargo bench --no-run --message-format=json \
             | jq -r 'select(.reason == "compiler-artifact" and .target.kind == ["bench"]) | .executable, "benches-image/\(.target.name)"' \
             | xargs -n 2 cp
-          docker build -f benches/Dockerfile -t sanstun-benches benches-image
-          docker save -o benches-image.tar sanstun-benches
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: benches-image
-          path: benches-image.tar
+
+          image="registry.bencher.dev/$BENCHER_PROJECT:$GITHUB_SHA"
+          docker build -f benches/Dockerfile -t "$image" benches-image
+          docker login registry.bencher.dev -u "$BENCHER_PROJECT" --password-stdin <<< "$BENCHER_API_KEY"
+          docker push "$image"
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Run on Bencher Bare Metal
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            args=(
+              --branch "$GITHUB_HEAD_REF"
+              --start-point "$GITHUB_BASE_REF"
+              --start-point-hash "$BASE_SHA"
+              --start-point-clone-thresholds
+              --start-point-reset
+            )
+          else
+            args=(
+              --branch main
+              --threshold-measure latency
+              --threshold-test t_test
+              --threshold-min-sample-size 10
+              --threshold-max-sample-size 64
+              --threshold-upper-boundary 0.99
+              --thresholds-reset
+            )
+          fi
+
+          bencher run "${args[@]}" \
+            --testbed "bare-metal-$BENCHER_SPEC" \
+            --spec "$BENCHER_SPEC" \
+            --image "$IMAGE" \
+            --job-timeout 300 \
+            --err \
+            --adapter rust_criterion \
+            --github-actions "$GH_TOKEN"
