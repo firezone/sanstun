@@ -1,12 +1,14 @@
 use std::fmt::Display;
 
+use crate::PublicKey;
+
 #[derive(Debug)]
 pub enum Error {
     DestinationBufferTooSmall { required: usize, available: usize },
     UnexpectedPacket,
     WrongIndex,
     WrongKey,
-    WrongTai64nTimestamp,
+    ReplayedHandshakeInitiation { peer_static_public: PublicKey },
     InvalidMac,
     InvalidAeadTag,
     InvalidCounter,
@@ -32,12 +34,10 @@ impl Display for Error {
             Error::UnexpectedPacket => write!(f, "unexpected packet type for the current state"),
             Error::WrongIndex => write!(f, "packet index does not match the expected index"),
             Error::WrongKey => write!(f, "handshake public key does not match the expected peer"),
-            Error::WrongTai64nTimestamp => {
-                write!(
-                    f,
-                    "handshake timestamp is not newer than the last accepted timestamp"
-                )
-            }
+            Error::ReplayedHandshakeInitiation { .. } => write!(
+                f,
+                "handshake initiation is not newer than the last one accepted from this peer"
+            ),
             Error::InvalidMac => {
                 write!(f, "invalid packet MAC")
             }
