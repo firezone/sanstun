@@ -89,7 +89,7 @@ fn replayed_handshake_initiation_is_rejected() {
 
     let error = sim.deliver(B, &init).expect_err();
 
-    assert!(matches!(error, Error::WrongTai64nTimestamp));
+    assert!(matches!(error, Error::ReplayedHandshakeInitiation { .. }));
 }
 
 // Replay protection must survive tunnel replacement, so the `Interface` remembers timestamps.
@@ -102,7 +102,7 @@ fn replayed_handshake_initiation_is_rejected_after_the_tunnel_is_replaced() {
     sim.replace_tunnel(B);
     let error = sim.deliver(B, &init).expect_err();
 
-    assert!(matches!(error, Error::WrongTai64nTimestamp));
+    assert!(matches!(error, Error::ReplayedHandshakeInitiation { .. }));
 }
 
 // Keeping two outgoing handshakes allows a delayed response to complete either one.

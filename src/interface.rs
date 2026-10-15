@@ -147,7 +147,7 @@ impl Interface {
     /// Messages beyond this budget fail with [`Error::RateLimited`].
     ///
     /// For peers you have created a tunnel for, handshake initiations must be newer than the last
-    /// accepted one or they fail with [`Error::WrongTai64nTimestamp`].
+    /// accepted one or they fail with [`Error::ReplayedHandshakeInitiation`].
     ///
     /// Cookies are bound to `src_addr`, the datagram's source address and port.
     pub fn receive(
@@ -181,7 +181,9 @@ impl Interface {
                     .get_mut(&init.peer_static_public())
                 {
                     if !init.timestamp().after(last) {
-                        return Err(Error::WrongTai64nTimestamp);
+                        return Err(Error::ReplayedHandshakeInitiation {
+                            peer_static_public: init.peer_static_public(),
+                        });
                     }
                     *last = init.timestamp();
                 }
