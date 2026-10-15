@@ -8,7 +8,7 @@ pub enum Error {
     UnexpectedPacket,
     WrongIndex,
     WrongKey,
-    ReplayedHandshakeInitiation { peer_static_public: PublicKey },
+    ReplayedHandshakeInitiation { peer_static_public: Box<PublicKey> },
     InvalidMac,
     InvalidAeadTag,
     InvalidCounter,
