@@ -188,6 +188,7 @@ impl ReceivedMessage {
 ///
 /// The bytes are heap-allocated to keep [`Received`](crate::Received) and
 /// [`Event`](crate::Event) cheap to move.
+#[derive(Clone, PartialEq, Eq)]
 pub struct Datagram(Box<[u8]>);
 
 impl Datagram {
