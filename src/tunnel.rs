@@ -141,8 +141,8 @@ impl Tunnel {
 
     /// Returns this tunnel's ID within its [`Interface`](crate::Interface).
     ///
-    /// Route a [`ReceivedMessage`](crate::ReceivedMessage) here if its
-    /// [`ReceivedMessage::tunnel_id`](crate::ReceivedMessage::tunnel_id) matches.
+    /// Route a [`ReceivedMessage`](crate::ReceivedMessage) other than a handshake initiation
+    /// here if its `tunnel_id` matches.
     pub fn id(&self) -> TunnelId {
         self.sessions.tunnel_id()
     }

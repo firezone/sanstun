@@ -131,6 +131,9 @@ fn data_messages_name_the_receiving_tunnel() {
 
     let message = sim.receive(B, &datagram);
 
-    assert_eq!(message.tunnel_id(), Some(sim.tunn(B).id()));
+    let ReceivedMessage::TransportData(data) = message else {
+        panic!("expected a data message");
+    };
+    assert_eq!(data.tunnel_id(), sim.tunn(B).id());
     assert_ne!(sim.tunn(A).id(), sim.tunn(B).id());
 }
