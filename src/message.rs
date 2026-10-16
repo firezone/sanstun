@@ -90,11 +90,25 @@ pub struct HandshakeResponse {
     pub(crate) encrypted_nothing: [u8; 16],
 }
 
+impl HandshakeResponse {
+    /// Returns the destination tunnel's [`Tunnel::id`](crate::Tunnel::id).
+    pub fn tunnel_id(&self) -> TunnelId {
+        Index::from_peer(self.receiver_idx).tunnel_id()
+    }
+}
+
 #[derive(Debug)]
 pub struct CookieReply {
     pub(crate) receiver_idx: u32,
     pub(crate) nonce: [u8; 24],
     pub(crate) encrypted_cookie: [u8; 32],
+}
+
+impl CookieReply {
+    /// Returns the destination tunnel's [`Tunnel::id`](crate::Tunnel::id).
+    pub fn tunnel_id(&self) -> TunnelId {
+        Index::from_peer(self.receiver_idx).tunnel_id()
+    }
 }
 
 #[derive(Debug)]
@@ -103,32 +117,24 @@ pub struct TransportData {
     pub(crate) counter: u64,
 }
 
+impl TransportData {
+    /// Returns the destination tunnel's [`Tunnel::id`](crate::Tunnel::id).
+    pub fn tunnel_id(&self) -> TunnelId {
+        Index::from_peer(self.receiver_idx).tunnel_id()
+    }
+}
+
 /// A network message parsed by [`Interface::receive`](crate::Interface::receive).
 ///
 /// Messages can only be obtained through that method and cannot be cloned or constructed directly.
+/// Route a handshake initiation to its tunnel by [`HandshakeInitiation::peer_static_public`]
+/// and every other message by its `tunnel_id`.
 #[derive(Debug)]
 pub enum ReceivedMessage {
     HandshakeInitiation(HandshakeInitiation),
     HandshakeResponse(HandshakeResponse),
     CookieReply(CookieReply),
     TransportData(TransportData),
-}
-
-impl ReceivedMessage {
-    /// Returns the destination tunnel's [`Tunnel::id`](crate::Tunnel::id).
-    ///
-    /// Returns `None` for handshake initiations, which are routed by
-    /// [`HandshakeInitiation::peer_static_public`].
-    pub fn tunnel_id(&self) -> Option<TunnelId> {
-        let receiver_idx = match self {
-            ReceivedMessage::HandshakeInitiation(_) => return None,
-            ReceivedMessage::HandshakeResponse(p) => p.receiver_idx,
-            ReceivedMessage::CookieReply(p) => p.receiver_idx,
-            ReceivedMessage::TransportData(p) => p.receiver_idx,
-        };
-
-        Some(Index::from_peer(receiver_idx).tunnel_id())
-    }
 }
 
 /// Bytes to send to the peer as one UDP datagram.
