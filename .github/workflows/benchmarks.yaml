@@ -21,12 +21,8 @@ jobs:
       (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
     # The binaries link against the runner's glibc, so this has to match the image's base.
     runs-on: ubuntu-24.04
-    # Bencher runs one Bare Metal job at a time, so a run may queue behind others.
-    timeout-minutes: 60
     permissions:
       contents: read
-      pull-requests: write
-      checks: write
     env:
       BENCHER_PROJECT: sanstun
       BENCHER_API_KEY: ${{ secrets.BENCHER_API_KEY }}
@@ -55,8 +51,9 @@ jobs:
       - name: Run on Bencher Bare Metal
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+
           if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
             args=(
               --branch "$GITHUB_HEAD_REF"
@@ -77,11 +74,12 @@ jobs:
             )
           fi
 
+          # Bare Metal jobs can queue for hours, so only submit the job. Its results and
+          # alerts show up on Bencher once it has run.
           bencher run "${args[@]}" \
             --testbed "bare-metal-$BENCHER_SPEC" \
             --spec "$BENCHER_SPEC" \
             --image "$IMAGE" \
             --job-timeout 300 \
-            --err \
             --adapter rust_criterion \
-            --github-actions "$GH_TOKEN"
+            --detach
