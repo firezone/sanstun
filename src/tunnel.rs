@@ -502,7 +502,7 @@ impl Tunnel {
             self.handshake.clear_cookie();
         }
 
-        // Dropping handshake secrets zeroizes them; session keys are only dropped.
+        // Dropping handshake secrets and session keys zeroizes them.
         if now >= self.timers.reject_after_time() {
             tracing::debug!("Connection expired (REJECT_AFTER_TIME * 3)");
             self.expire(now);

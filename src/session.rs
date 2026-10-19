@@ -7,8 +7,9 @@ use crate::errors::Error;
 use crate::message::{AEAD_TAG_SZ, DATA, DATA_HEADER_SZ, DataMessage, TransportData};
 use crate::replay::ReceivingKeyCounterValidator;
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
+use subtle::ConstantTimeEq as _;
+use zeroize::Zeroizing;
 
 pub(crate) struct Session {
     established_at: Instant,
@@ -17,8 +18,8 @@ pub(crate) struct Session {
     received_data: bool,
     receiving_index: Index,
     sending_index: Index,
-    receiver: Arc<Key>,
-    sender: Arc<Key>,
+    receiver: SessionKey,
+    sender: SessionKey,
     sending_key_counter: u64,
     receiving_key_counter: ReceivingKeyCounterValidator,
 }
@@ -59,12 +60,8 @@ impl Session {
             received_data: false,
             receiving_index: local_index,
             sending_index: peer_index,
-            receiver: Arc::new(Key(LessSafeKey::new(
-                UnboundKey::new(&CHACHA20_POLY1305, receiving_key).unwrap(),
-            ))),
-            sender: Arc::new(Key(LessSafeKey::new(
-                UnboundKey::new(&CHACHA20_POLY1305, sending_key).unwrap(),
-            ))),
+            receiver: SessionKey::new(receiving_key),
+            sender: SessionKey::new(sending_key),
             sending_key_counter: 0,
             receiving_key_counter: Default::default(),
         }
@@ -121,8 +118,8 @@ impl Session {
     }
 
     /// Returns whether `key` is this session's receiving key.
-    pub(crate) fn receives_with(&self, key: &Arc<Key>) -> bool {
-        Arc::ptr_eq(&self.receiver, key)
+    pub(crate) fn receives_with(&self, key: &SessionKey) -> bool {
+        self.receiver.0.ct_eq(&key.0[..]).into()
     }
 
     /// Returns whether the sending counter has reached [`REKEY_AFTER_MESSAGES`].
@@ -158,7 +155,7 @@ impl Session {
         self.receiving_key_counter.will_accept(packet.counter)?;
 
         Ok(PendingDecapsulate {
-            key: Arc::clone(&self.receiver),
+            key: self.receiver.clone(),
             receiving_index: self.receiving_index,
             counter: packet.counter,
         })
@@ -188,7 +185,7 @@ impl Session {
         self.sending_key_counter += 1;
 
         PendingEncapsulate {
-            key: Arc::clone(&self.sender),
+            key: self.sender.clone(),
             receiver_index: self.sending_index,
             counter,
         }
@@ -353,7 +350,7 @@ fn slot_of(index: Index) -> usize {
 #[derive(Debug)]
 #[must_use = "the data message is not sent until it is encrypted"]
 pub struct PendingEncapsulate {
-    key: Arc<Key>,
+    key: SessionKey,
     receiver_index: Index,
     counter: u64,
 }
@@ -408,6 +405,7 @@ impl PendingEncapsulate {
 
         let computed_tag = self
             .key
+            .aead()
             .seal_in_place_separate_tag(
                 Nonce::assume_unique_for_key(nonce(self.counter)),
                 Aad::from(&[]),
@@ -427,7 +425,7 @@ impl PendingEncapsulate {
 #[derive(Debug)]
 #[must_use = "the data message is not decrypted until `decrypt` is called"]
 pub struct PendingDecapsulate {
-    key: Arc<Key>,
+    key: SessionKey,
     receiving_index: Index,
     counter: u64,
 }
@@ -471,6 +469,7 @@ impl PendingDecapsulate {
 
         let plaintext = self
             .key
+            .aead()
             .open_in_place(
                 Nonce::assume_unique_for_key(nonce(self.counter)),
                 Aad::from(&[]),
@@ -497,10 +496,8 @@ pub struct Decrypted<B> {
     pub(crate) counter: u64,
     pub(crate) plaintext_len: Result<usize, Error>,
     pub(crate) buffer: B,
-    /// Identifies the original session even after its index has been reused.
-    ///
-    /// Released on the tunnel's thread to keep reference-count updates off decryption workers.
-    pub(crate) key: Arc<Key>,
+    /// Identifies the session the message was decrypted with, even after its index was reused.
+    pub(crate) key: SessionKey,
 }
 
 impl<B> std::fmt::Debug for Decrypted<B> {
@@ -513,18 +510,29 @@ impl<B> std::fmt::Debug for Decrypted<B> {
     }
 }
 
-/// A session key aligned separately from its [`Arc`]'s reference count.
+/// The raw key of one direction of a session.
 ///
-/// This avoids cache-line contention between key readers and reference-count updates.
-#[derive(Debug)]
-#[repr(align(128))]
-pub(crate) struct Key(LessSafeKey);
+/// Pending messages carry a copy, so encrypting and decrypting on other threads shares no memory
+/// with the session.
+#[derive(Clone)]
+pub(crate) struct SessionKey(Zeroizing<[u8; 32]>);
 
-impl std::ops::Deref for Key {
-    type Target = LessSafeKey;
+impl SessionKey {
+    fn new(key: &[u8; 32]) -> Self {
+        Self(Zeroizing::new(*key))
+    }
 
-    fn deref(&self) -> &LessSafeKey {
-        &self.0
+    /// ChaCha20-Poly1305 has no key schedule, so this only copies the key.
+    fn aead(&self) -> LessSafeKey {
+        LessSafeKey::new(
+            UnboundKey::new(&CHACHA20_POLY1305, &self.0[..]).expect("key has 32 bytes"),
+        )
+    }
+}
+
+impl std::fmt::Debug for SessionKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SessionKey")
     }
 }
 
