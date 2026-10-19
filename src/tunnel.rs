@@ -247,14 +247,10 @@ impl Tunnel {
             counter,
             plaintext_len,
             buffer,
-            key,
+            session: id,
         } = decrypted;
 
-        let Some(session) = self
-            .sessions
-            .get_mut(remote_idx)
-            .filter(|s| s.receives_with(&key))
-        else {
+        let Some(session) = self.sessions.get_mut(remote_idx).filter(|s| s.is(id)) else {
             tracing::trace!(%remote_idx, "Session was replaced during decryption");
             return Err(Error::NoCurrentSession);
         };
@@ -496,7 +492,7 @@ impl Tunnel {
             self.handshake.clear_cookie();
         }
 
-        // Dropping handshake secrets zeroizes them; session keys are only dropped.
+        // Dropping handshake secrets and session keys zeroizes them.
         if now >= self.timers.reject_after_time() {
             tracing::debug!("Connection expired (REJECT_AFTER_TIME * 3)");
             self.expire(now);
