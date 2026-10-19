@@ -50,6 +50,9 @@ pub(crate) struct InnerHandshakeInitiation {
     pub(crate) chaining_key: Zeroizing<[u8; 32]>,
     pub(crate) hash: [u8; 32],
     pub(crate) timestamp: Tai64N,
+    /// Set by the [`Interface`](crate::Interface) if the initiation is not newer than the last
+    /// one it accepted from this peer.
+    pub(crate) replayed: bool,
 }
 
 impl std::fmt::Debug for HandshakeInitiation {
@@ -65,7 +68,8 @@ impl HandshakeInitiation {
     /// Returns the initiator's static public key for routing to its [`Tunnel`](crate::Tunnel).
     ///
     /// [`Interface::receive`](crate::Interface::receive) verifies that the initiator holds the
-    /// matching private key. For peers you have created a tunnel for, it also rejects replays.
+    /// matching private key. For peers you have created a tunnel for, it also detects replays,
+    /// which their [`Tunnel`](crate::Tunnel) then rejects.
     ///
     /// Anyone can generate a key pair, and unknown peers are not checked for replays.
     /// Do not authorize an unknown peer or create a tunnel for it based on this key.
@@ -87,43 +91,6 @@ impl HandshakeInitiation {
     /// but not authorized: see [`HandshakeInitiation::peer_static_public`].
     pub fn timestamp(&self) -> u128 {
         self.0.timestamp.to_u128()
-    }
-}
-
-/// A handshake initiation that [`Interface::receive`](crate::Interface::receive) rejected
-/// because it is not newer than the last one accepted from its peer.
-///
-/// Identifies the rejected duplicate, but cannot be used to answer it: no [`Tunnel`](crate::Tunnel)
-/// method accepts it.
-pub struct ReplayedHandshakeInitiation(Box<InnerHandshakeInitiation>);
-
-impl ReplayedHandshakeInitiation {
-    pub(crate) fn new(init: HandshakeInitiation) -> Self {
-        Self(init.0)
-    }
-
-    /// See [`HandshakeInitiation::peer_static_public`].
-    pub fn peer_static_public(&self) -> PublicKey {
-        self.0.peer_static_public
-    }
-
-    /// See [`HandshakeInitiation::sender_index`].
-    pub fn sender_index(&self) -> u32 {
-        self.0.sender_idx
-    }
-
-    /// See [`HandshakeInitiation::timestamp`].
-    pub fn timestamp(&self) -> u128 {
-        self.0.timestamp.to_u128()
-    }
-}
-
-impl std::fmt::Debug for ReplayedHandshakeInitiation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ReplayedHandshakeInitiation")
-            .field("sender_index", &self.sender_index())
-            .field("peer_static_public", &self.peer_static_public())
-            .finish_non_exhaustive()
     }
 }
 

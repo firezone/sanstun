@@ -4,7 +4,7 @@ use crate::index::TunnelIndices;
 use crate::message::{
     COOKIE_REPLY, COOKIE_REPLY_SZ, CookieReply, DATA, DATA_OVERHEAD_SZ, HANDSHAKE_INIT,
     HANDSHAKE_INIT_SZ, HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeResponse, Macs, ReceivedMessage,
-    ReplayedHandshakeInitiation, TransportData,
+    TransportData,
 };
 use crate::ratelimiter::RateLimiter;
 use crate::tai64n::{Tai64N, TimeStamper};
@@ -113,7 +113,7 @@ impl Interface {
     /// Fails with [`Error::LowOrderPoint`] if `peer_static_public` is a low-order point.
     ///
     /// Enables handshake replay checks for `peer_static_public`. These remain in effect even
-    /// if the tunnel is dropped or replaced.
+    /// if the tunnel is dropped or replaced, so a replay is rejected by every later tunnel too.
     pub fn new_tunnel(
         &mut self,
         peer_static_public: PublicKey,
@@ -146,8 +146,9 @@ impl Interface {
     /// per IPv4 address or IPv6 /64.
     /// Messages beyond this budget fail with [`Error::RateLimited`].
     ///
-    /// For peers you have created a tunnel for, handshake initiations must be newer than the last
-    /// accepted one or they fail with [`Error::ReplayedHandshakeInitiation`].
+    /// For peers you have created a tunnel for, handshake initiations that are not newer than the
+    /// last accepted one are marked as replays: their [`Tunnel`] fails them with
+    /// [`Error::ReplayedHandshakeInitiation`].
     ///
     /// Cookies are bound to `src_addr`, the datagram's source address and port.
     pub fn receive(
@@ -170,7 +171,7 @@ impl Interface {
                     return Ok(Received::SendCookieReply(reply));
                 }
 
-                let init = parse_handshake_init(
+                let mut init = parse_handshake_init(
                     &self.static_private,
                     &self.static_public,
                     datagram.try_into().expect("handshake length was checked"),
@@ -180,12 +181,11 @@ impl Interface {
                     .last_handshake_timestamps
                     .get_mut(&init.peer_static_public())
                 {
-                    if !init.0.timestamp.after(last) {
-                        return Err(Error::ReplayedHandshakeInitiation(
-                            ReplayedHandshakeInitiation::new(init),
-                        ));
+                    if init.0.timestamp.after(last) {
+                        *last = init.0.timestamp;
+                    } else {
+                        init.0.replayed = true;
                     }
-                    *last = init.0.timestamp;
                 }
 
                 ReceivedMessage::HandshakeInitiation(init)
