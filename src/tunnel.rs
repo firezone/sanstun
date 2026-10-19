@@ -287,7 +287,7 @@ impl Tunnel {
     ) -> Result<Datagram, Error> {
         self.ensure_not_expired()?;
 
-        let remote_idx = Index::from_peer(p.sender_idx());
+        let remote_idx = Index::from_peer(p.sender_index());
 
         tracing::debug!(%remote_idx, "Received handshake initiation");
 

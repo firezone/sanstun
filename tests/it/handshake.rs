@@ -5,7 +5,7 @@ use crate::harness::{
     HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, MAX_JITTER, Outcome as _, Peer::A, Peer::B,
     REJECT_AFTER_TIME, REKEY_TIMEOUT, Sim, classify, ipv4_packet, secs,
 };
-use sanstun::{Error, Interface, PublicKey, TunnelConfig};
+use sanstun::{Error, Interface, PublicKey, ReceivedMessage, TunnelConfig};
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
@@ -130,11 +130,36 @@ fn replayed_handshake_initiation_is_rejected() {
     let mut sim = Sim::new();
 
     let init = sim.initiate_handshake(A);
-    sim.deliver(B, &init).expect_one_net();
+    let ReceivedMessage::HandshakeInitiation(accepted) = sim.receive(B, &init) else {
+        panic!("expected a handshake initiation");
+    };
 
     let error = sim.deliver(B, &init).expect_err();
 
-    assert!(matches!(error, Error::ReplayedHandshakeInitiation { .. }));
+    let Error::ReplayedHandshakeInitiation(replayed) = error else {
+        panic!("expected a replayed initiation, got {error:?}");
+    };
+    assert_eq!(replayed.peer_static_public(), accepted.peer_static_public());
+    assert_eq!(replayed.sender_index(), accepted.sender_index());
+    assert_eq!(replayed.timestamp(), accepted.timestamp());
+}
+
+#[test]
+fn each_initiation_has_a_fresh_sender_index_and_a_later_timestamp() {
+    let mut sim = Sim::new();
+    let first = sim.initiate_handshake(A);
+    sim.advance(secs(1));
+    let second = sim.force_handshake_initiation(A);
+
+    let ReceivedMessage::HandshakeInitiation(first) = sim.receive(B, &first) else {
+        panic!("expected a handshake initiation");
+    };
+    let ReceivedMessage::HandshakeInitiation(second) = sim.receive(B, &second) else {
+        panic!("expected a handshake initiation");
+    };
+
+    assert_ne!(first.sender_index(), second.sender_index());
+    assert!(second.timestamp() > first.timestamp());
 }
 
 // Replay protection must survive tunnel replacement, so the `Interface` remembers timestamps.
@@ -147,7 +172,7 @@ fn replayed_handshake_initiation_is_rejected_after_the_tunnel_is_replaced() {
     sim.replace_tunnel(B);
     let error = sim.deliver(B, &init).expect_err();
 
-    assert!(matches!(error, Error::ReplayedHandshakeInitiation { .. }));
+    assert!(matches!(error, Error::ReplayedHandshakeInitiation(_)));
 }
 
 // Keeping two outgoing handshakes allows a delayed response to complete either one.

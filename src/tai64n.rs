@@ -50,6 +50,11 @@ impl Tai64N {
         Tai64N { secs, nano }
     }
 
+    /// Returns the 12 bytes of the timestamp as one big-endian number.
+    pub(crate) fn to_u128(self) -> u128 {
+        (u128::from(self.secs) << 32) | u128::from(self.nano)
+    }
+
     /// Returns whether this timestamp is later than `other`.
     pub(crate) fn after(&self, other: &Tai64N) -> bool {
         (self.secs > other.secs) || ((self.secs == other.secs) && (self.nano > other.nano))
