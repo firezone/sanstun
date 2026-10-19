@@ -4,7 +4,7 @@ use crate::index::TunnelIndices;
 use crate::message::{
     COOKIE_REPLY, COOKIE_REPLY_SZ, CookieReply, DATA, DATA_OVERHEAD_SZ, HANDSHAKE_INIT,
     HANDSHAKE_INIT_SZ, HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeResponse, Macs, ReceivedMessage,
-    TransportData,
+    ReplayedHandshakeInitiation, TransportData,
 };
 use crate::ratelimiter::RateLimiter;
 use crate::tai64n::{Tai64N, TimeStamper};
@@ -181,11 +181,9 @@ impl Interface {
                     .get_mut(&init.peer_static_public())
                 {
                     if !init.0.timestamp.after(last) {
-                        return Err(Error::ReplayedHandshakeInitiation {
-                            peer_static_public: init.peer_static_public(),
-                            sender_index: init.sender_index(),
-                            timestamp: init.timestamp(),
-                        });
+                        return Err(Error::ReplayedHandshakeInitiation(
+                            ReplayedHandshakeInitiation::new(init),
+                        ));
                     }
                     *last = init.0.timestamp;
                 }

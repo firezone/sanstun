@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::PublicKey;
+use crate::ReplayedHandshakeInitiation;
 
 #[derive(Debug)]
 pub enum Error {
@@ -11,11 +11,8 @@ pub enum Error {
     UnexpectedPacket,
     WrongIndex,
     WrongKey,
-    ReplayedHandshakeInitiation {
-        peer_static_public: PublicKey,
-        sender_index: u32,
-        timestamp: u128,
-    },
+    /// A handshake initiation was not newer than the last one accepted from its peer.
+    ReplayedHandshakeInitiation(ReplayedHandshakeInitiation),
     InvalidMac,
     InvalidAeadTag,
     InvalidCounter,
@@ -41,7 +38,7 @@ impl Display for Error {
             Error::UnexpectedPacket => write!(f, "unexpected packet type for the current state"),
             Error::WrongIndex => write!(f, "packet index does not match the expected index"),
             Error::WrongKey => write!(f, "handshake public key does not match the expected peer"),
-            Error::ReplayedHandshakeInitiation { .. } => write!(
+            Error::ReplayedHandshakeInitiation(_) => write!(
                 f,
                 "handshake initiation is not newer than the last one accepted from this peer"
             ),

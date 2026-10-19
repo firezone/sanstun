@@ -106,7 +106,7 @@ pub use interface::{Interface, Received};
 pub use keys::{PresharedKey, PublicKey, StaticSecret};
 pub use message::{
     CookieReply, DataMessage, Datagram, HandshakeInitiation, HandshakeResponse, ReceivedMessage,
-    TransportData,
+    ReplayedHandshakeInitiation, TransportData,
 };
 pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
 pub use tunnel::{Committed, Event, Tunnel, TunnelConfig};
