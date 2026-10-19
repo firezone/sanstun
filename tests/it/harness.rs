@@ -680,7 +680,7 @@ impl Sim {
     pub fn try_encapsulate(&mut self, from: Peer, ip_packet: &[u8]) -> Result<Vec<u8>, Error> {
         let now = self.now;
         let mut buf = vec![0u8; BUF];
-        let packet = self
+        let (packet, _) = self
             .node_mut(from)
             .tunn
             .begin_encapsulate(now)?

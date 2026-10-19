@@ -18,7 +18,7 @@ fn encrypt_runs_on_another_thread() {
     let datagram = std::thread::scope(|s| {
         s.spawn(|| {
             let mut buf = vec![0u8; BUF];
-            pending.encrypt(&ip_packet, &mut buf).unwrap().to_vec()
+            pending.encrypt(&ip_packet, &mut buf).unwrap().0.to_vec()
         })
         .join()
         .unwrap()
@@ -47,7 +47,7 @@ fn encryptions_running_out_of_order_keep_their_counters() {
         .rev()
         .map(|(pending, ip_packet)| {
             let mut buf = vec![0u8; BUF];
-            pending.encrypt(ip_packet, &mut buf).unwrap().to_vec()
+            pending.encrypt(ip_packet, &mut buf).unwrap().0.to_vec()
         })
         .collect::<Vec<_>>();
     datagrams.reverse();

@@ -34,7 +34,7 @@ fn bench_data_path(c: &mut Criterion) {
         group.bench_function("encrypt", |b| {
             b.iter_batched(
                 || sender.begin_encapsulate(now).unwrap(),
-                |pending| black_box(pending.encrypt(&payload, &mut buf).unwrap().len()),
+                |pending| black_box(pending.encrypt(&payload, &mut buf).unwrap().0.len()),
                 BatchSize::SmallInput,
             )
         });
@@ -118,6 +118,7 @@ fn data_message(tunnel: &mut Tunnel, payload: &[u8], now: Instant) -> Vec<u8> {
         .unwrap()
         .encrypt(payload, &mut message)
         .unwrap()
+        .0
         .len();
     message.truncate(len);
 

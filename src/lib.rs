@@ -44,7 +44,7 @@
 //! // Alice encrypts a packet.
 //! let packet = b"an IP packet";
 //! let mut buf = [0; 64];
-//! let data = alice_to_bob.begin_encapsulate(now)?.encrypt(packet, &mut buf)?;
+//! let (data, _key) = alice_to_bob.begin_encapsulate(now)?.encrypt(packet, &mut buf)?;
 //!
 //! // Bob decrypts and accepts it.
 //! let decrypted = match bob.receive(alice_addr, &data, now)? {
@@ -110,5 +110,5 @@ pub use message::{
     CookieReply, DataMessage, Datagram, HandshakeInitiation, HandshakeResponse, ReceivedMessage,
     TransportData,
 };
-pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
+pub use session::{Decrypted, KeyHandle, PendingDecapsulate, PendingEncapsulate};
 pub use tunnel::{Committed, Event, Tunnel, TunnelConfig};

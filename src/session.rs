@@ -370,7 +370,7 @@ impl PendingEncapsulate {
         self,
         plaintext: &[u8],
         dst: &'a mut [u8],
-    ) -> Result<DataMessage<'a>, Error> {
+    ) -> Result<(DataMessage<'a>, KeyHandle), Error> {
         if plaintext.is_empty() {
             return Err(Error::EmptyPlaintext);
         }
@@ -382,7 +382,7 @@ impl PendingEncapsulate {
         self,
         plaintext: &[u8],
         dst: &'a mut [u8],
-    ) -> Result<DataMessage<'a>, Error> {
+    ) -> Result<(DataMessage<'a>, KeyHandle), Error> {
         let padded_len = plaintext.len().next_multiple_of(PADDING_MULTIPLE);
         let len = DATA_HEADER_SZ + padded_len + AEAD_TAG_SZ;
         let available = dst.len();
@@ -416,8 +416,16 @@ impl PendingEncapsulate {
             .expect("plaintext of a data message is always within the AEAD's limits");
         tag.copy_from_slice(computed_tag.as_ref());
 
-        Ok(DataMessage(message))
+        Ok((DataMessage(message), KeyHandle { _key: self.key }))
     }
+}
+
+/// The key a message was encrypted with, handed back so that it is released on the tunnel's thread.
+///
+/// Dropping it updates the key's reference count, which on an encryption worker would bounce that
+/// cache line between threads for every message.
+pub struct KeyHandle {
+    _key: Arc<Key>,
 }
 
 /// A data message ready for decryption after an initial replay check.
