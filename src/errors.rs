@@ -4,11 +4,18 @@ use crate::PublicKey;
 
 #[derive(Debug)]
 pub enum Error {
-    DestinationBufferTooSmall { required: usize, available: usize },
+    DestinationBufferTooSmall {
+        required: usize,
+        available: usize,
+    },
     UnexpectedPacket,
     WrongIndex,
     WrongKey,
-    ReplayedHandshakeInitiation { peer_static_public: PublicKey },
+    ReplayedHandshakeInitiation {
+        peer_static_public: PublicKey,
+        sender_index: u32,
+        timestamp: u128,
+    },
     InvalidMac,
     InvalidAeadTag,
     InvalidCounter,

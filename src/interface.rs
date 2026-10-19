@@ -183,6 +183,8 @@ impl Interface {
                     if !init.0.timestamp.after(last) {
                         return Err(Error::ReplayedHandshakeInitiation {
                             peer_static_public: init.peer_static_public(),
+                            sender_index: init.sender_index(),
+                            timestamp: init.timestamp(),
                         });
                     }
                     *last = init.0.timestamp;

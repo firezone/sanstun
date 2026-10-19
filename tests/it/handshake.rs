@@ -130,11 +130,22 @@ fn replayed_handshake_initiation_is_rejected() {
     let mut sim = Sim::new();
 
     let init = sim.initiate_handshake(A);
-    sim.deliver(B, &init).expect_one_net();
+    let ReceivedMessage::HandshakeInitiation(accepted) = sim.receive(B, &init) else {
+        panic!("expected a handshake initiation");
+    };
 
     let error = sim.deliver(B, &init).expect_err();
 
-    assert!(matches!(error, Error::ReplayedHandshakeInitiation { .. }));
+    let Error::ReplayedHandshakeInitiation {
+        sender_index,
+        timestamp,
+        ..
+    } = error
+    else {
+        panic!("expected a replayed initiation, got {error:?}");
+    };
+    assert_eq!(sender_index, accepted.sender_index());
+    assert_eq!(timestamp, accepted.timestamp());
 }
 
 #[test]
