@@ -193,7 +193,9 @@ fn poll_timeout_is_due_while_events_are_queued() {
     tunn.handle_handshake_response(response, now).unwrap();
 
     assert!(tunn.poll_timeout().is_some_and(|wake| wake <= now));
-    assert!(matches!(tunn.poll_event(), Some(Event::Established { at }) if at == now));
+    assert!(
+        matches!(tunn.poll_event(), Some(Event::Established { confirmed_at, .. }) if confirmed_at == now)
+    );
     assert!(tunn.poll_timeout().is_some_and(|wake| wake > now));
 }
 

@@ -184,7 +184,7 @@ struct Node {
     inbox: Vec<Vec<u8>>,
     errors: Vec<Error>,
     expirations: usize,
-    establishments: Vec<Instant>,
+    establishments: Vec<(Instant, Instant)>,
     drop_outgoing: bool,
 }
 
@@ -400,8 +400,8 @@ impl Sim {
         self.node(peer).expirations
     }
 
-    /// Returns when `peer` announced [`sanstun::Event::Established`].
-    pub fn establishments(&self, peer: Peer) -> &[Instant] {
+    /// Returns `(started_at, confirmed_at)` of each [`sanstun::Event::Established`] from `peer`.
+    pub fn establishments(&self, peer: Peer) -> &[(Instant, Instant)] {
         &self.node(peer).establishments
     }
 
@@ -589,7 +589,10 @@ impl Sim {
             match event {
                 sanstun::Event::SendHandshakeInitiation(datagram)
                 | sanstun::Event::SendKeepalive(datagram) => outgoing.push(datagram.to_vec()),
-                sanstun::Event::Established { at } => node.establishments.push(at),
+                sanstun::Event::Established {
+                    started_at,
+                    confirmed_at,
+                } => node.establishments.push((started_at, confirmed_at)),
                 sanstun::Event::ConnectionExpired => node.expirations += 1,
             }
         }

@@ -24,11 +24,19 @@ pub enum Event {
     SendHandshakeInitiation(Datagram),
     /// Send this keepalive to the peer.
     SendKeepalive(Datagram),
-    /// The tunnel confirmed its first session at `at`.
+    /// The tunnel confirmed its first session.
     ///
     /// Emitted once per tunnel: for the initiator, when it accepts the handshake response; for
     /// the responder, when it accepts the first data message or keepalive under the new session.
-    Established { at: Instant },
+    /// `confirmed_at - started_at` is how long the handshake took.
+    Established {
+        /// For the initiator, when it sent its first handshake initiation, so the duration
+        /// includes retries. For the responder, when it accepted the initiation that created the
+        /// session.
+        started_at: Instant,
+        /// When the session was confirmed.
+        confirmed_at: Instant,
+    },
     /// The connection expired and all session state was dropped.
     ///
     /// Emitted once. Drop the [`Tunnel`] and create a new one with
@@ -89,6 +97,7 @@ pub struct Tunnel {
     timers: Timers,
     rng: ForwardSecureRng,
     events: RingBuffer<Event, 16>,
+    first_initiation_at: Option<Instant>,
     established: bool,
 
     /// Reserves this tunnel's index in its [`Interface`](crate::Interface) while the tunnel is alive.
@@ -141,6 +150,7 @@ impl Tunnel {
             timers: Timers::new(config.persistent_keepalive, now),
             rng: ForwardSecureRng::new(rng),
             events: RingBuffer::new(),
+            first_initiation_at: None,
             established: false,
             _index_lease: index_lease,
         })
@@ -253,10 +263,11 @@ impl Tunnel {
             return Err(Error::NoCurrentSession);
         }
         let len = session.finish_receive_packet_data(counter, plaintext_len)?;
+        let accepted_at = session.established_at();
 
         self.sessions.set_current(remote_idx);
         self.timers.tick(TimerName::TimeLastPacketReceived, now);
-        self.confirm_first_session(now);
+        self.confirm_first_session(accepted_at, now);
 
         if len == 0 {
             return Ok(Committed::Keepalive);
@@ -321,18 +332,21 @@ impl Tunnel {
         self.timers.tick(TimerName::TimeLastPacketReceived, now);
         self.timers.tick(TimerName::TimeLastHandshakeCompleted, now);
         self.sessions.set_current(local_idx);
-        self.confirm_first_session(now);
+        self.confirm_first_session(self.first_initiation_at.unwrap_or(now), now);
 
         self.encrypt_keepalive(now)
     }
 
-    fn confirm_first_session(&mut self, now: Instant) {
+    fn confirm_first_session(&mut self, started_at: Instant, now: Instant) {
         if self.established {
             return;
         }
 
         self.established = true;
-        self.events.push_back(Event::Established { at: now });
+        self.events.push_back(Event::Established {
+            started_at,
+            confirmed_at: now,
+        });
     }
 
     /// Stores the cookie from a reply to this tunnel's handshake initiation.
@@ -409,6 +423,7 @@ impl Tunnel {
             self.timers.tick(TimerName::TimeLastHandshakeStarted, now);
         }
         self.timers.tick(TimerName::TimeLastPacketSent, now);
+        self.first_initiation_at.get_or_insert(now);
 
         Some(Datagram::new(packet))
     }

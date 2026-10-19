@@ -2,8 +2,8 @@
 //! failures and replay of handshake messages.
 
 use crate::harness::{
-    HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, Outcome as _, Peer::A, Peer::B,
-    REJECT_AFTER_TIME, Sim, classify, ipv4_packet, secs,
+    HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, MAX_JITTER, Outcome as _, Peer::A, Peer::B,
+    REJECT_AFTER_TIME, REKEY_TIMEOUT, Sim, classify, ipv4_packet, secs,
 };
 use sanstun::{Error, Interface, PublicKey, TunnelConfig};
 use std::time::{Duration, Instant};
@@ -33,7 +33,10 @@ fn handshake_completes_in_one_round_trip() {
 fn each_tunnel_announces_its_first_confirmed_session_once() {
     let mut sim = Sim::new();
 
+    let initiated_at = sim.now;
     let init = sim.initiate_handshake(A);
+    sim.advance(secs(1));
+    let accepted_at = sim.now;
     let response = sim.deliver(B, &init).expect_one_net();
     assert!(
         sim.establishments(B).is_empty(),
@@ -42,11 +45,11 @@ fn each_tunnel_announces_its_first_confirmed_session_once() {
 
     sim.advance(secs(1));
     let keepalive = sim.deliver(A, &response).expect_one_net();
-    assert_eq!(sim.establishments(A), [sim.now]);
+    assert_eq!(sim.establishments(A), [(initiated_at, sim.now)]);
 
     sim.advance(secs(1));
     sim.deliver(B, &keepalive).expect_consumed();
-    assert_eq!(sim.establishments(B), [sim.now]);
+    assert_eq!(sim.establishments(B), [(accepted_at, sim.now)]);
 
     // Later handshakes and data do not announce again.
     let init = sim.initiate_handshake(B);
@@ -54,6 +57,21 @@ fn each_tunnel_announces_its_first_confirmed_session_once() {
     sim.assert_connectivity();
     assert_eq!(sim.establishments(A).len(), 1);
     assert_eq!(sim.establishments(B).len(), 1);
+}
+
+#[test]
+fn established_session_started_with_the_first_of_several_initiations() {
+    let mut sim = Sim::new();
+
+    let initiated_at = sim.now;
+    let _lost = sim.initiate_handshake(A);
+    sim.advance(REKEY_TIMEOUT + MAX_JITTER + secs(1));
+
+    let &[(started_at, confirmed_at)] = sim.establishments(A) else {
+        panic!("expected one establishment");
+    };
+    assert_eq!(started_at, initiated_at);
+    assert!(confirmed_at - started_at >= REKEY_TIMEOUT);
 }
 
 #[test]
