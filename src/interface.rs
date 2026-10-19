@@ -180,12 +180,12 @@ impl Interface {
                     .last_handshake_timestamps
                     .get_mut(&init.peer_static_public())
                 {
-                    if !init.timestamp().after(last) {
+                    if !init.0.timestamp.after(last) {
                         return Err(Error::ReplayedHandshakeInitiation {
                             peer_static_public: init.peer_static_public(),
                         });
                     }
-                    *last = init.timestamp();
+                    *last = init.0.timestamp;
                 }
 
                 ReceivedMessage::HandshakeInitiation(init)

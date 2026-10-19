@@ -55,7 +55,7 @@ pub(crate) struct InnerHandshakeInitiation {
 impl std::fmt::Debug for HandshakeInitiation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("HandshakeInitiation")
-            .field("sender_idx", &self.sender_idx())
+            .field("sender_index", &self.sender_index())
             .field("peer_static_public", &self.peer_static_public())
             .finish_non_exhaustive()
     }
@@ -73,12 +73,20 @@ impl HandshakeInitiation {
         self.0.peer_static_public
     }
 
-    pub(crate) fn sender_idx(&self) -> u32 {
+    /// Returns the index the initiator chose for the session this initiation would create.
+    ///
+    /// Each initiation from a tunnel carries a fresh index. The message is authenticated but not
+    /// authorized: see [`HandshakeInitiation::peer_static_public`].
+    pub fn sender_index(&self) -> u32 {
         self.0.sender_idx
     }
 
-    pub(crate) fn timestamp(&self) -> Tai64N {
-        self.0.timestamp
+    /// Returns the initiator's TAI64N timestamp as a single number.
+    ///
+    /// A later initiation from the same peer has a larger timestamp. The message is authenticated
+    /// but not authorized: see [`HandshakeInitiation::peer_static_public`].
+    pub fn timestamp(&self) -> u128 {
+        self.0.timestamp.to_u128()
     }
 }
 

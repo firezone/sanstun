@@ -5,7 +5,7 @@ use crate::harness::{
     HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, MAX_JITTER, Outcome as _, Peer::A, Peer::B,
     REJECT_AFTER_TIME, REKEY_TIMEOUT, Sim, classify, ipv4_packet, secs,
 };
-use sanstun::{Error, Interface, PublicKey, TunnelConfig};
+use sanstun::{Error, Interface, PublicKey, ReceivedMessage, TunnelConfig};
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
@@ -135,6 +135,24 @@ fn replayed_handshake_initiation_is_rejected() {
     let error = sim.deliver(B, &init).expect_err();
 
     assert!(matches!(error, Error::ReplayedHandshakeInitiation { .. }));
+}
+
+#[test]
+fn each_initiation_has_a_fresh_sender_index_and_a_later_timestamp() {
+    let mut sim = Sim::new();
+    let first = sim.initiate_handshake(A);
+    sim.advance(secs(1));
+    let second = sim.force_handshake_initiation(A);
+
+    let ReceivedMessage::HandshakeInitiation(first) = sim.receive(B, &first) else {
+        panic!("expected a handshake initiation");
+    };
+    let ReceivedMessage::HandshakeInitiation(second) = sim.receive(B, &second) else {
+        panic!("expected a handshake initiation");
+    };
+
+    assert_ne!(first.sender_index(), second.sender_index());
+    assert!(second.timestamp() > first.timestamp());
 }
 
 // Replay protection must survive tunnel replacement, so the `Interface` remembers timestamps.
