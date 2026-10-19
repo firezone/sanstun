@@ -130,18 +130,11 @@ fn replayed_handshake_initiation_is_rejected() {
     let mut sim = Sim::new();
 
     let init = sim.initiate_handshake(A);
-    let ReceivedMessage::HandshakeInitiation(accepted) = sim.receive(B, &init) else {
-        panic!("expected a handshake initiation");
-    };
+    sim.deliver(B, &init).expect_one_net();
 
     let error = sim.deliver(B, &init).expect_err();
 
-    let Error::ReplayedHandshakeInitiation(replayed) = error else {
-        panic!("expected a replayed initiation, got {error:?}");
-    };
-    assert_eq!(replayed.peer_static_public(), accepted.peer_static_public());
-    assert_eq!(replayed.sender_index(), accepted.sender_index());
-    assert_eq!(replayed.timestamp(), accepted.timestamp());
+    assert!(matches!(error, Error::ReplayedHandshakeInitiation));
 }
 
 #[test]
@@ -172,7 +165,7 @@ fn replayed_handshake_initiation_is_rejected_after_the_tunnel_is_replaced() {
     sim.replace_tunnel(B);
     let error = sim.deliver(B, &init).expect_err();
 
-    assert!(matches!(error, Error::ReplayedHandshakeInitiation(_)));
+    assert!(matches!(error, Error::ReplayedHandshakeInitiation));
 }
 
 // Keeping two outgoing handshakes allows a delayed response to complete either one.

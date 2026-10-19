@@ -169,6 +169,7 @@ pub(crate) fn parse_handshake_init(
         chaining_key,
         hash,
         timestamp: Tai64N::parse(&timestamp),
+        replayed: false,
     })))
 }
 
@@ -301,6 +302,7 @@ impl Handshake {
             ref chaining_key,
             hash,
             timestamp: _,
+            replayed: _,
         } = *packet.0;
 
         if !bool::from(

@@ -1,7 +1,5 @@
 use std::fmt::Display;
 
-use crate::ReplayedHandshakeInitiation;
-
 #[derive(Debug)]
 pub enum Error {
     DestinationBufferTooSmall {
@@ -12,7 +10,7 @@ pub enum Error {
     WrongIndex,
     WrongKey,
     /// A handshake initiation was not newer than the last one accepted from its peer.
-    ReplayedHandshakeInitiation(ReplayedHandshakeInitiation),
+    ReplayedHandshakeInitiation,
     InvalidMac,
     InvalidAeadTag,
     InvalidCounter,
@@ -38,7 +36,7 @@ impl Display for Error {
             Error::UnexpectedPacket => write!(f, "unexpected packet type for the current state"),
             Error::WrongIndex => write!(f, "packet index does not match the expected index"),
             Error::WrongKey => write!(f, "handshake public key does not match the expected peer"),
-            Error::ReplayedHandshakeInitiation(_) => write!(
+            Error::ReplayedHandshakeInitiation => write!(
                 f,
                 "handshake initiation is not newer than the last one accepted from this peer"
             ),
