@@ -6,7 +6,9 @@ use crate::message::{
     CookieReply, DATA_OVERHEAD_SZ, Datagram, HandshakeInitiation, HandshakeResponse, TransportData,
 };
 use crate::ring_buffer::RingBuffer;
-use crate::session::{self, Decrypted, PendingDecapsulate, PendingEncapsulate, Role, Sessions};
+use crate::session::{
+    self, Decrypted, PendingDecapsulate, PendingEncapsulate, Plaintext, Role, Sessions,
+};
 use crate::tai64n::TimeStamper;
 use crate::timers::{MAX_JITTER, TimerName, Timers};
 
@@ -235,7 +237,7 @@ impl Tunnel {
     }
 
     /// Accepts a decrypted data message after checking its session and replay counter.
-    pub fn commit_decapsulate<B: AsRef<[u8]>>(
+    pub fn commit_decapsulate<B>(
         &mut self,
         decrypted: Decrypted<B>,
         now: Instant,
@@ -245,8 +247,7 @@ impl Tunnel {
         let Decrypted {
             receiving_index: remote_idx,
             counter,
-            plaintext_len,
-            buffer,
+            plaintext,
             key,
         } = decrypted;
 
@@ -262,16 +263,16 @@ impl Tunnel {
             tracing::trace!(%remote_idx, "Session expired during decryption");
             return Err(Error::NoCurrentSession);
         }
-        let len = session.finish_receive_packet_data(counter, plaintext_len)?;
+        let plaintext = session.finish_receive_packet_data(counter, plaintext)?;
         let accepted_at = session.established_at();
 
         self.sessions.set_current(remote_idx);
         self.timers.tick(TimerName::TimeLastPacketReceived, now);
         self.confirm_first_session(accepted_at, now);
 
-        if len == 0 {
+        let Plaintext::Data { buffer, len } = plaintext else {
             return Ok(Committed::Keepalive);
-        }
+        };
         self.timers.tick(TimerName::TimeLastDataPacketReceived, now);
 
         Ok(Committed::Data { buffer, len })

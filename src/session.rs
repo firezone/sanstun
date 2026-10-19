@@ -165,18 +165,18 @@ impl Session {
     }
 
     /// Commits an authenticated message's counter and returns its plaintext length.
-    pub(super) fn finish_receive_packet_data(
+    pub(super) fn finish_receive_packet_data<B>(
         &mut self,
         counter: u64,
-        plaintext_len: Result<usize, Error>,
-    ) -> Result<usize, Error> {
-        let plaintext_len = plaintext_len?;
+        plaintext: Result<Plaintext<B>, Error>,
+    ) -> Result<Plaintext<B>, Error> {
+        let plaintext = plaintext?;
 
         // Recheck after authentication: another copy may have been accepted during decryption.
         self.receiving_key_counter.mark_did_receive(counter)?;
-        self.received_data |= plaintext_len > 0;
+        self.received_data |= matches!(plaintext, Plaintext::Data { .. });
 
-        Ok(plaintext_len)
+        Ok(plaintext)
     }
 
     fn prepare_message(&mut self) -> PendingEncapsulate {
@@ -438,13 +438,14 @@ impl PendingDecapsulate {
     /// Pass the original data message as `message`. The result owns `dst`; commit it with
     /// [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate) to obtain the plaintext.
     pub fn decrypt<B: AsMut<[u8]>>(self, message: &[u8], mut dst: B) -> Decrypted<B> {
-        let plaintext_len = self.decrypt_in_place(message, dst.as_mut());
+        let plaintext = self
+            .decrypt_in_place(message, dst.as_mut())
+            .map(|len| Plaintext::new(dst, len));
 
         Decrypted {
             receiving_index: self.receiving_index,
             counter: self.counter,
-            plaintext_len,
-            buffer: dst,
+            plaintext,
             key: self.key,
         }
     }
@@ -495,12 +496,32 @@ fn data_header(receiver_index: [u8; 4], counter: u64) -> [u8; DATA_HEADER_SZ] {
 pub struct Decrypted<B> {
     pub(crate) receiving_index: Index,
     pub(crate) counter: u64,
-    pub(crate) plaintext_len: Result<usize, Error>,
-    pub(crate) buffer: B,
+    pub(crate) plaintext: Result<Plaintext<B>, Error>,
     /// Identifies the original session even after its index has been reused.
     ///
     /// Released on the tunnel's thread to keep reference-count updates off decryption workers.
     pub(crate) key: Arc<Key>,
+}
+
+impl<B> Decrypted<B> {
+    /// Maps the plaintext of a data message before it is committed.
+    ///
+    /// Work that needs only the plaintext, such as parsing it, can thus happen on the thread that
+    /// decrypted the message.
+    pub fn map<C>(self, f: impl FnOnce(B, usize) -> C) -> Decrypted<C> {
+        Decrypted {
+            receiving_index: self.receiving_index,
+            counter: self.counter,
+            plaintext: self.plaintext.map(|plaintext| match plaintext {
+                Plaintext::Keepalive => Plaintext::Keepalive,
+                Plaintext::Data { buffer, len } => Plaintext::Data {
+                    buffer: f(buffer, len),
+                    len,
+                },
+            }),
+            key: self.key,
+        }
+    }
 }
 
 impl<B> std::fmt::Debug for Decrypted<B> {
@@ -508,8 +529,38 @@ impl<B> std::fmt::Debug for Decrypted<B> {
         f.debug_struct("Decrypted")
             .field("receiving_index", &self.receiving_index)
             .field("counter", &self.counter)
-            .field("plaintext_len", &self.plaintext_len)
+            .field(
+                "plaintext_len",
+                &self.plaintext.as_ref().map(|plaintext| plaintext.len()),
+            )
             .finish_non_exhaustive()
+    }
+}
+
+/// The plaintext of a decrypted data message.
+pub(crate) enum Plaintext<B> {
+    Keepalive,
+    /// The first `len` bytes of `buffer`, including any padding.
+    Data {
+        buffer: B,
+        len: usize,
+    },
+}
+
+impl<B> Plaintext<B> {
+    fn new(buffer: B, len: usize) -> Self {
+        if len == 0 {
+            return Self::Keepalive;
+        }
+
+        Self::Data { buffer, len }
+    }
+
+    fn len(&self) -> usize {
+        match self {
+            Self::Keepalive => 0,
+            Self::Data { len, .. } => *len,
+        }
     }
 }
 
@@ -574,10 +625,7 @@ mod tests {
             .unwrap();
         let decrypted = pending.decrypt(&message, [0; 32]);
 
-        assert!(matches!(
-            decrypted.plaintext_len,
-            Err(Error::InvalidAeadTag)
-        ));
+        assert!(matches!(decrypted.plaintext, Err(Error::InvalidAeadTag)));
     }
 
     fn session(receiving_index: Index) -> Session {
