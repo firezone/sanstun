@@ -4,7 +4,7 @@ use crate::harness::{
     KEEPALIVE_SIZE, KEEPALIVE_TIMEOUT, Kind, MAX_JITTER, Outcome as _, Peer::A, Peer::B,
     REJECT_AFTER_TIME, REKEY_AFTER_TIME, REKEY_TIMEOUT, Sim, classify, ipv4_packet, secs,
 };
-use sanstun::{Error, Event};
+use sanstun::{Error, Event, ReceivedMessage};
 use std::time::Duration;
 
 /// Timer-driven handshakes use up to 333ms of jitter, exposed through `poll_timeout`.
@@ -176,6 +176,27 @@ fn the_announced_session_expiry_is_actionable() {
         Some(wake),
         "polling at the announced instant left the same deadline outstanding"
     );
+}
+
+#[test]
+fn poll_timeout_is_due_while_events_are_queued() {
+    let mut sim = Sim::new();
+    let init = sim.initiate_handshake(A);
+    let response = sim.deliver(B, &init).expect_one_net();
+    sim.advance(secs(1));
+
+    let ReceivedMessage::HandshakeResponse(response) = sim.receive(A, &response) else {
+        panic!("expected a handshake response");
+    };
+    let now = sim.now;
+    let tunn = sim.tunn_mut(A);
+    tunn.handle_handshake_response(response, now).unwrap();
+
+    assert!(tunn.poll_timeout().is_some_and(|wake| wake <= now));
+    assert!(
+        matches!(tunn.poll_event(), Some(Event::Established { confirmed_at, .. }) if confirmed_at == now)
+    );
+    assert!(tunn.poll_timeout().is_some_and(|wake| wake > now));
 }
 
 #[test]
