@@ -5,7 +5,7 @@ use crate::harness::{
     DATA_OVERHEAD, KEEPALIVE_SIZE, Outcome as _, Peer::A, Peer::B, Sim, ipv4_packet, ipv6_packet,
     secs,
 };
-use sanstun::{Committed, Error, ReceivedMessage};
+use sanstun::{Committed, Error, Event, ReceivedMessage};
 
 #[test]
 fn ipv4_packets_round_trip() {
@@ -76,6 +76,7 @@ fn handshake_response_returns_the_confirming_keepalive() {
     };
     let tunn = sim.tunn_mut(A);
     let keepalive = tunn.handle_handshake_response(response, now).unwrap();
+    assert!(matches!(tunn.poll_event(), Some(Event::Established { .. })));
     assert!(tunn.poll_event().is_none());
 
     sim.deliver(B, &keepalive).expect_consumed();

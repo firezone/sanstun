@@ -30,6 +30,33 @@ fn handshake_completes_in_one_round_trip() {
 }
 
 #[test]
+fn each_tunnel_announces_its_first_confirmed_session_once() {
+    let mut sim = Sim::new();
+
+    let init = sim.initiate_handshake(A);
+    let response = sim.deliver(B, &init).expect_one_net();
+    assert!(
+        sim.establishments(B).is_empty(),
+        "the responder waits for key confirmation"
+    );
+
+    sim.advance(secs(1));
+    let keepalive = sim.deliver(A, &response).expect_one_net();
+    assert_eq!(sim.establishments(A), [sim.now]);
+
+    sim.advance(secs(1));
+    sim.deliver(B, &keepalive).expect_consumed();
+    assert_eq!(sim.establishments(B), [sim.now]);
+
+    // Later handshakes and data do not announce again.
+    let init = sim.initiate_handshake(B);
+    sim.route(B, init);
+    sim.assert_connectivity();
+    assert_eq!(sim.establishments(A).len(), 1);
+    assert_eq!(sim.establishments(B).len(), 1);
+}
+
+#[test]
 fn handshake_messages_have_the_sizes_mandated_by_the_paper() {
     let mut sim = Sim::new();
 

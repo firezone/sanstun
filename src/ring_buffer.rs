@@ -25,6 +25,10 @@ impl<T, const N: usize> RingBuffer<T, N> {
         }
     }
 
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     /// Removes the oldest item.
     pub(crate) fn pop_front(&mut self) -> Option<T> {
         if self.len == 0 {

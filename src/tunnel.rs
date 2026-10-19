@@ -24,6 +24,11 @@ pub enum Event {
     SendHandshakeInitiation(Datagram),
     /// Send this keepalive to the peer.
     SendKeepalive(Datagram),
+    /// The tunnel confirmed its first session at `at`.
+    ///
+    /// Emitted once per tunnel: for the initiator, when it accepts the handshake response; for
+    /// the responder, when it accepts the first data message or keepalive under the new session.
+    Established { at: Instant },
     /// The connection expired and all session state was dropped.
     ///
     /// Emitted once. Drop the [`Tunnel`] and create a new one with
@@ -84,6 +89,7 @@ pub struct Tunnel {
     timers: Timers,
     rng: ForwardSecureRng,
     events: RingBuffer<Event, 16>,
+    established: bool,
 
     /// Reserves this tunnel's index in its [`Interface`](crate::Interface) while the tunnel is alive.
     _index_lease: Arc<()>,
@@ -135,6 +141,7 @@ impl Tunnel {
             timers: Timers::new(config.persistent_keepalive, now),
             rng: ForwardSecureRng::new(rng),
             events: RingBuffer::new(),
+            established: false,
             _index_lease: index_lease,
         })
     }
@@ -249,6 +256,7 @@ impl Tunnel {
 
         self.sessions.set_current(remote_idx);
         self.timers.tick(TimerName::TimeLastPacketReceived, now);
+        self.confirm_first_session(now);
 
         if len == 0 {
             return Ok(Committed::Keepalive);
@@ -313,8 +321,18 @@ impl Tunnel {
         self.timers.tick(TimerName::TimeLastPacketReceived, now);
         self.timers.tick(TimerName::TimeLastHandshakeCompleted, now);
         self.sessions.set_current(local_idx);
+        self.confirm_first_session(now);
 
         self.encrypt_keepalive(now)
+    }
+
+    fn confirm_first_session(&mut self, now: Instant) {
+        if self.established {
+            return;
+        }
+
+        self.established = true;
+        self.events.push_back(Event::Established { at: now });
     }
 
     /// Stores the cookie from a reply to this tunnel's handshake initiation.
@@ -562,7 +580,10 @@ impl Tunnel {
         }
     }
 
-    /// Returns the next [`Event`] queued by [`Tunnel::handle_timeout`].
+    /// Returns the next queued [`Event`].
+    ///
+    /// [`Tunnel::handle_timeout`], [`Tunnel::handle_handshake_response`] and
+    /// [`Tunnel::commit_decapsulate`] queue events.
     pub fn poll_event(&mut self) -> Option<Event> {
         self.events.pop_front()
     }
@@ -570,15 +591,21 @@ impl Tunnel {
     /// Returns the next deadline for calling [`Tunnel::handle_timeout`].
     ///
     /// After handling a timeout, poll again for the next deadline. A fixed timer interval is
-    /// unnecessary, though early calls are safe. Returns `None` once the tunnel has
-    /// [expired](Tunnel::is_expired).
+    /// unnecessary, though early calls are safe. While events are queued, the deadline has
+    /// already passed, so that a caller draining [`Tunnel::poll_event`] after each timeout
+    /// handles them. Returns `None` once the tunnel has [expired](Tunnel::is_expired).
     pub fn poll_timeout(&self) -> Option<Instant> {
         if self.is_expired() {
             return None;
         }
 
-        let next = self.next_deadline()?;
         let last_update = self.timers[TimerName::TimeLastUpdate];
+
+        if !self.events.is_empty() {
+            return Some(last_update);
+        }
+
+        let next = self.next_deadline()?;
 
         // A deadline may have elapsed before the last timer update.
         Some(next.max(last_update))
