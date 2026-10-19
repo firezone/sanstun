@@ -237,7 +237,7 @@ impl Tunnel {
     }
 
     /// Accepts a decrypted data message after checking its session and replay counter.
-    pub fn commit_decapsulate<B: AsRef<[u8]>>(
+    pub fn commit_decapsulate<B>(
         &mut self,
         decrypted: Decrypted<B>,
         now: Instant,
