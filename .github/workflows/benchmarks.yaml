@@ -34,6 +34,9 @@ jobs:
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: bencherdev/bencher@f80847436d7157936b40525db4c2a1064124f04a # v0.6.13
+      # Runs each benchmark once, so a broken one fails here instead of on Bencher.
+      - name: Test benches
+        run: cargo bench --benches -- --test
       - name: Push image to the Bencher registry
         run: |
           set -euo pipefail
