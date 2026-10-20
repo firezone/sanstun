@@ -109,6 +109,12 @@ impl fmt::Display for Index {
     }
 }
 
+impl fmt::Display for TunnelId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
