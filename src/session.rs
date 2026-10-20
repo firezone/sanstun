@@ -119,7 +119,10 @@ impl Session {
 
     /// Returns whether `key` is this session's receiving key.
     pub(crate) fn receives_with(&self, key: &SessionKey) -> bool {
-        self.receiver.0.ct_eq(&key.0[..]).into()
+        let (ours_lo, ours_hi) = self.receiver.words();
+        let (theirs_lo, theirs_hi) = key.words();
+
+        (ours_lo.ct_eq(&theirs_lo) & ours_hi.ct_eq(&theirs_hi)).into()
     }
 
     /// Returns whether the sending counter has reached [`REKEY_AFTER_MESSAGES`].
@@ -571,6 +574,16 @@ pub(crate) struct SessionKey(Zeroizing<[u8; 32]>);
 impl SessionKey {
     fn new(key: &[u8; 32]) -> Self {
         Self(Zeroizing::new(*key))
+    }
+
+    /// The key as two words, for comparing it in constant time without a byte loop.
+    fn words(&self) -> (u128, u128) {
+        let (lo, hi) = self.0.split_at(16);
+
+        (
+            u128::from_ne_bytes(lo.try_into().expect("16 bytes")),
+            u128::from_ne_bytes(hi.try_into().expect("16 bytes")),
+        )
     }
 
     /// ChaCha20-Poly1305 has no key schedule, so this only copies the key.
