@@ -504,10 +504,25 @@ pub struct Decrypted<B> {
 }
 
 impl<B> Decrypted<B> {
+    /// The plaintext of a data message that decrypted.
+    ///
+    /// Decryption proves the message came from the peer with this session's key, but only
+    /// [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate) checks it against the
+    /// replay window and against the session still being current. Until then it may be a replay,
+    /// so use it only for work without side effects, such as parsing or prefetching, and act on it
+    /// only once it has been committed.
+    pub fn plaintext(&self) -> Option<&B> {
+        match &self.plaintext {
+            Ok(Plaintext::Data { buffer, .. }) => Some(buffer),
+            Ok(Plaintext::Keepalive) | Err(_) => None,
+        }
+    }
+
     /// Maps the plaintext of a data message before it is committed.
     ///
     /// Work that needs only the plaintext, such as parsing it, can thus happen on the thread that
-    /// decrypted the message.
+    /// decrypted the message. The same caveat as for [`Decrypted::plaintext`] applies: the message
+    /// has not been committed yet, so `f` must have no side effects.
     pub fn map<C>(self, f: impl FnOnce(B, usize) -> C) -> Decrypted<C> {
         Decrypted {
             receiving_index: self.receiving_index,
