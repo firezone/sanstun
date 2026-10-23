@@ -8,10 +8,10 @@ use crate::message::{AEAD_TAG_SZ, DATA, DATA_HEADER_SZ, DataMessage, TransportDa
 use crate::replay::ReceivingKeyCounterValidator;
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
 use std::time::{Duration, Instant};
-use subtle::ConstantTimeEq as _;
 use zeroize::Zeroizing;
 
 pub(crate) struct Session {
+    id: SessionId,
     established_at: Instant,
     role: Role,
     sent_data: bool,
@@ -34,6 +34,10 @@ impl std::fmt::Debug for Session {
     }
 }
 
+/// Identifies a session of a tunnel even after its index has been reused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SessionId(u64);
+
 /// Our role in the handshake that established a session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Role {
@@ -54,6 +58,7 @@ impl Session {
         now: Instant,
     ) -> Session {
         Session {
+            id: SessionId(0),
             established_at: now,
             role,
             sent_data: false,
@@ -117,12 +122,8 @@ impl Session {
         time + keepalive_timeout <= self.established_at + REJECT_AFTER_TIME
     }
 
-    /// Returns whether `key` is this session's receiving key.
-    pub(crate) fn receives_with(&self, key: &SessionKey) -> bool {
-        let (ours_lo, ours_hi) = self.receiver.words();
-        let (theirs_lo, theirs_hi) = key.words();
-
-        (ours_lo.ct_eq(&theirs_lo) & ours_hi.ct_eq(&theirs_hi)).into()
+    pub(crate) fn id(&self) -> SessionId {
+        self.id
     }
 
     /// Returns whether the sending counter has reached [`REKEY_AFTER_MESSAGES`].
@@ -160,6 +161,7 @@ impl Session {
         Ok(PendingDecapsulate {
             key: self.receiver.clone(),
             receiving_index: self.receiving_index,
+            session: self.id,
             counter: packet.counter,
         })
     }
@@ -204,6 +206,8 @@ pub(crate) struct Sessions {
     current: Option<Index>,
     /// The most recently allocated local index.
     last_index: Index,
+    /// The number of sessions inserted so far, which identifies the next one.
+    inserted: u64,
 }
 
 impl Sessions {
@@ -213,6 +217,7 @@ impl Sessions {
             slots: Default::default(),
             current: None,
             last_index: index,
+            inserted: 0,
         }
     }
 
@@ -238,7 +243,10 @@ impl Sessions {
     }
 
     /// Stores a new session, replacing the one in its slot.
-    pub(crate) fn insert(&mut self, session: Session) {
+    pub(crate) fn insert(&mut self, mut session: Session) {
+        session.id = SessionId(self.inserted);
+        self.inserted += 1;
+
         let index = session.receiving_index;
         *self.slot_mut(index) = Some(session);
     }
@@ -430,6 +438,7 @@ impl PendingEncapsulate {
 pub struct PendingDecapsulate {
     key: SessionKey,
     receiving_index: Index,
+    session: SessionId,
     counter: u64,
 }
 
@@ -445,9 +454,9 @@ impl PendingDecapsulate {
 
         Decrypted {
             receiving_index: self.receiving_index,
+            session: self.session,
             counter: self.counter,
             plaintext,
-            key: self.key,
         }
     }
 
@@ -497,10 +506,10 @@ fn data_header(receiver_index: [u8; 4], counter: u64) -> [u8; DATA_HEADER_SZ] {
 #[must_use = "the data message is not accepted until it is committed to the `Tunnel`"]
 pub struct Decrypted<B> {
     pub(crate) receiving_index: Index,
+    /// Identifies the session the message was decrypted with, even after its index was reused.
+    pub(crate) session: SessionId,
     pub(crate) counter: u64,
     pub(crate) plaintext: Result<Plaintext<B>, Error>,
-    /// Identifies the session the message was decrypted with, even after its index was reused.
-    pub(crate) key: SessionKey,
 }
 
 impl<B> Decrypted<B> {
@@ -526,6 +535,7 @@ impl<B> Decrypted<B> {
     pub fn map<C>(self, f: impl FnOnce(B, usize) -> C) -> Decrypted<C> {
         Decrypted {
             receiving_index: self.receiving_index,
+            session: self.session,
             counter: self.counter,
             plaintext: self.plaintext.map(|plaintext| match plaintext {
                 Plaintext::Keepalive => Plaintext::Keepalive,
@@ -534,7 +544,6 @@ impl<B> Decrypted<B> {
                     len,
                 },
             }),
-            key: self.key,
         }
     }
 }
@@ -589,16 +598,6 @@ pub(crate) struct SessionKey(Zeroizing<[u8; 32]>);
 impl SessionKey {
     fn new(key: &[u8; 32]) -> Self {
         Self(Zeroizing::new(*key))
-    }
-
-    /// The key as two words, for comparing it in constant time without a byte loop.
-    fn words(&self) -> (u128, u128) {
-        let (lo, hi) = self.0.split_at(16);
-
-        (
-            u128::from_ne_bytes(lo.try_into().expect("16 bytes")),
-            u128::from_ne_bytes(hi.try_into().expect("16 bytes")),
-        )
     }
 
     /// ChaCha20-Poly1305 has no key schedule, so this only copies the key.

@@ -246,15 +246,15 @@ impl Tunnel {
 
         let Decrypted {
             receiving_index: remote_idx,
+            session: session_id,
             counter,
             plaintext,
-            key,
         } = decrypted;
 
         let Some(session) = self
             .sessions
             .get_mut(remote_idx)
-            .filter(|s| s.receives_with(&key))
+            .filter(|s| s.id() == session_id)
         else {
             tracing::trace!(%remote_idx, "Session was replaced during decryption");
             return Err(Error::NoCurrentSession);
