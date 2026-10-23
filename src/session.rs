@@ -7,6 +7,7 @@ use crate::errors::Error;
 use crate::message::{AEAD_TAG_SZ, DATA, DATA_HEADER_SZ, DataMessage, TransportData};
 use crate::replay::ReceivingKeyCounterValidator;
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
+use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
@@ -136,34 +137,55 @@ impl Session {
         self.sending_key_counter >= REJECT_AFTER_MESSAGES
     }
 
-    /// Reserves a counter for a data message to be encrypted later.
-    pub(super) fn prepare_packet_data(&mut self) -> PendingEncapsulate {
+    /// Starts a batch of data messages whose counters are reserved when it is finished.
+    pub(super) fn prepare_packet_data(&mut self) -> EncapsulateBatch<'_> {
         self.sent_data = true;
-        self.prepare_message()
+
+        EncapsulateBatch { session: self }
     }
 
-    /// Assigns the next counter to a keepalive.
-    pub(super) fn prepare_keepalive(&mut self) -> PendingEncapsulate {
-        self.prepare_message()
+    /// Encrypts a keepalive with the next counter into `dst`.
+    pub(super) fn encrypt_keepalive(&mut self, dst: &mut [u8]) -> Result<(), Error> {
+        let counter = self.reserve_counters(NonZeroUsize::MIN)?;
+        encrypt_payload(&self.sender.aead(), self.sending_index, counter, &[], dst)?;
+
+        Ok(())
     }
 
-    /// Checks a data message's index and counter before decryption.
+    /// Reserves `len` consecutive counters and returns the first.
+    fn reserve_counters(&mut self, len: NonZeroUsize) -> Result<u64, Error> {
+        let first = self.sending_key_counter;
+        let end = u64::try_from(len.get())
+            .ok()
+            .and_then(|len| first.checked_add(len))
+            .filter(|end| *end <= REJECT_AFTER_MESSAGES)
+            .ok_or(Error::NoCurrentSession)?;
+        self.sending_key_counter = end;
+
+        Ok(first)
+    }
+
+    /// Starts a batch of received data messages with `packet`.
     pub(super) fn prepare_receive_packet_data(
         &self,
         packet: TransportData,
-    ) -> Result<PendingDecapsulate, Error> {
+    ) -> Result<DecapsulateBatch<'_>, Error> {
+        let mut batch = DecapsulateBatch {
+            session: self,
+            counters: Vec::new(),
+        };
+        batch.increment(packet)?;
+
+        Ok(batch)
+    }
+
+    /// Checks a data message's index and counter before decryption.
+    fn will_receive(&self, packet: &TransportData) -> Result<(), Error> {
         if Index::from_peer(packet.receiver_idx) != self.receiving_index {
             return Err(Error::WrongIndex);
         }
         // Reject known replays before paying for decryption.
-        self.receiving_key_counter.will_accept(packet.counter)?;
-
-        Ok(PendingDecapsulate {
-            key: self.receiver.clone(),
-            receiving_index: self.receiving_index,
-            session: self.id,
-            counter: packet.counter,
-        })
+        self.receiving_key_counter.will_accept(packet.counter)
     }
 
     /// Commits an authenticated message's counter and returns its plaintext length.
@@ -179,21 +201,6 @@ impl Session {
         self.received_data |= matches!(plaintext, Plaintext::Data { .. });
 
         Ok(plaintext)
-    }
-
-    fn prepare_message(&mut self) -> PendingEncapsulate {
-        debug_assert!(
-            !self.sending_counter_exhausted(),
-            "the sending key is exhausted"
-        );
-        let counter = self.sending_key_counter;
-        self.sending_key_counter += 1;
-
-        PendingEncapsulate {
-            key: self.sender.clone(),
-            receiver_index: self.sending_index,
-            counter,
-        }
     }
 }
 
@@ -256,8 +263,22 @@ impl Sessions {
         self.get(self.current?)
     }
 
-    pub(crate) fn current_mut(&mut self) -> Option<&mut Session> {
-        self.get_mut(self.current?)
+    /// Returns the current session if it is usable for sending.
+    pub(crate) fn sending_session(
+        &mut self,
+        keepalive_timeout: Duration,
+        now: Instant,
+    ) -> Option<&mut Session> {
+        let session = self.get_mut(self.current?)?;
+
+        if session.sending_counter_exhausted() || session.expired_at(now) {
+            return None;
+        }
+        if !session.should_use_at(now, keepalive_timeout) && session.role() == Role::Initiator {
+            return None;
+        }
+
+        Some(session)
     }
 
     /// Returns the session in `index`'s slot, which may belong to a different index.
@@ -352,146 +373,262 @@ fn slot_of(index: Index) -> usize {
     index.session() % N_SESSIONS as usize
 }
 
-/// A data message ready for encryption, with its counter already reserved.
+/// A batch of data messages to encrypt on the current sending session.
 ///
-/// The reserved counter fixes the nonce, so encryption can run on any thread and in any order.
+/// Borrows the [`Tunnel`](crate::Tunnel) until [`EncapsulateBatch::finish`] reserves the
+/// batch's counters, so nothing else can reserve a counter in between.
+#[must_use = "no counters are reserved until the batch is finished"]
+pub struct EncapsulateBatch<'t> {
+    session: &'t mut Session,
+}
+
+impl EncapsulateBatch<'_> {
+    /// Reserves `len` consecutive counters and releases the tunnel.
+    ///
+    /// Fails with [`Error::NoCurrentSession`] if the session cannot send `len` more messages
+    /// (`REJECT_AFTER_MESSAGES`). No counter is reserved then.
+    pub fn finish(self, len: NonZeroUsize) -> Result<PendingEncapsulate, Error> {
+        let first_counter = self.session.reserve_counters(len)?;
+
+        Ok(PendingEncapsulate {
+            key: self.session.sender.clone(),
+            receiver_index: self.session.sending_index,
+            first_counter,
+            len,
+        })
+    }
+}
+
+/// Data messages ready for encryption, with consecutive counters already reserved.
+///
+/// The reserved counters fix the nonces, so encryption can run on any thread and in any order.
 /// The receiver's replay window allows some reordering of messages.
 ///
 /// This holds the session key even after the session expires. Encrypt and send it promptly.
 #[derive(Debug)]
-#[must_use = "the data message is not sent until it is encrypted"]
+#[must_use = "the data messages are not sent until they are encrypted"]
 pub struct PendingEncapsulate {
     key: SessionKey,
     receiver_index: Index,
-    counter: u64,
+    first_counter: u64,
+    len: NonZeroUsize,
 }
 
+#[expect(clippy::len_without_is_empty, reason = "a batch is never empty")]
 impl PendingEncapsulate {
-    /// Encrypts `plaintext` into a data message at the start of `dst`.
-    ///
-    /// Zero-padding rounds the payload up to a multiple of 16 bytes. Including the header and tag,
-    /// `dst` must hold at least `plaintext.len().next_multiple_of(16) + 32` bytes.
-    ///
-    /// Empty plaintext fails with [`Error::EmptyPlaintext`]. The [`Tunnel`](crate::Tunnel) sends
-    /// keepalives itself, as [`Event::SendKeepalive`](crate::Event::SendKeepalive).
-    pub fn encrypt<'a>(
-        self,
-        plaintext: &[u8],
-        dst: &'a mut [u8],
-    ) -> Result<DataMessage<'a>, Error> {
-        if plaintext.is_empty() {
-            return Err(Error::EmptyPlaintext);
-        }
-
-        self.encrypt_payload(plaintext, dst)
+    /// Returns the number of reserved counters.
+    pub fn len(&self) -> usize {
+        self.len.get()
     }
 
-    pub(crate) fn encrypt_payload<'a>(
-        self,
-        plaintext: &[u8],
-        dst: &'a mut [u8],
-    ) -> Result<DataMessage<'a>, Error> {
-        let padded_len = plaintext.len().next_multiple_of(PADDING_MULTIPLE);
-        let len = DATA_HEADER_SZ + padded_len + AEAD_TAG_SZ;
-        let available = dst.len();
+    /// Encrypts each plaintext into a data message at the start of its buffer, as the iterator
+    /// is pulled.
+    ///
+    /// The messages take the reserved counters in order. Encrypting fewer messages than
+    /// reserved leaves the remaining counters unused, which the receiver tolerates. Pulling more
+    /// is a bug; the iterator ends after the last reserved counter.
+    ///
+    /// Zero-padding rounds each payload up to a multiple of 16 bytes. Including the header and
+    /// tag, a buffer must hold at least `plaintext.len().next_multiple_of(16) + 32` bytes.
+    ///
+    /// An empty plaintext fails with [`Error::EmptyPlaintext`]. The [`Tunnel`](crate::Tunnel)
+    /// sends keepalives itself, as [`Event::SendKeepalive`](crate::Event::SendKeepalive).
+    pub fn encrypt<'a, I>(self, messages: I) -> impl Iterator<Item = Result<DataMessage<'a>, Error>>
+    where
+        I: IntoIterator<Item = (&'a [u8], &'a mut [u8])>,
+    {
+        let aead = self.key.aead();
+        let mut remaining = self.len.get();
+        let mut counter = self.first_counter;
 
-        let Some(message) = dst.get_mut(..len) else {
-            return Err(Error::DestinationBufferTooSmall {
-                required: len,
-                available,
-            });
-        };
+        messages.into_iter().map_while(move |(plaintext, dst)| {
+            if remaining == 0 {
+                debug_assert!(false, "more messages than reserved counters");
+                return None;
+            }
+            remaining -= 1;
 
-        let (header, rest) = message.split_at_mut(DATA_HEADER_SZ);
-        let (data, tag) = rest.split_at_mut(padded_len);
+            let message = if plaintext.is_empty() {
+                Err(Error::EmptyPlaintext)
+            } else {
+                encrypt_payload(&aead, self.receiver_index, counter, plaintext, dst)
+            };
+            counter += 1;
 
-        header.copy_from_slice(&data_header(
-            self.receiver_index.to_le_bytes(),
-            self.counter,
-        ));
-
-        let (payload, padding) = data.split_at_mut(plaintext.len());
-        payload.copy_from_slice(plaintext);
-        padding.fill(0);
-
-        let computed_tag = self
-            .key
-            .aead()
-            .seal_in_place_separate_tag(
-                Nonce::assume_unique_for_key(nonce(self.counter)),
-                Aad::from(&[]),
-                data,
-            )
-            .expect("plaintext of a data message is always within the AEAD's limits");
-        tag.copy_from_slice(computed_tag.as_ref());
-
-        Ok(DataMessage(message))
+            Some(message)
+        })
     }
 }
 
-/// A data message ready for decryption after an initial replay check.
+fn encrypt_payload<'a>(
+    aead: &LessSafeKey,
+    receiver_index: Index,
+    counter: u64,
+    plaintext: &[u8],
+    dst: &'a mut [u8],
+) -> Result<DataMessage<'a>, Error> {
+    let padded_len = plaintext.len().next_multiple_of(PADDING_MULTIPLE);
+    let len = DATA_HEADER_SZ + padded_len + AEAD_TAG_SZ;
+    let available = dst.len();
+
+    let Some(message) = dst.get_mut(..len) else {
+        return Err(Error::DestinationBufferTooSmall {
+            required: len,
+            available,
+        });
+    };
+
+    let (header, rest) = message.split_at_mut(DATA_HEADER_SZ);
+    let (data, tag) = rest.split_at_mut(padded_len);
+
+    header.copy_from_slice(&data_header(receiver_index.to_le_bytes(), counter));
+
+    let (payload, padding) = data.split_at_mut(plaintext.len());
+    payload.copy_from_slice(plaintext);
+    padding.fill(0);
+
+    let computed_tag = aead
+        .seal_in_place_separate_tag(
+            Nonce::assume_unique_for_key(nonce(counter)),
+            Aad::from(&[]),
+            data,
+        )
+        .expect("plaintext of a data message is always within the AEAD's limits");
+    tag.copy_from_slice(computed_tag.as_ref());
+
+    Ok(DataMessage(message))
+}
+
+/// A batch of data messages received for one session.
 ///
-/// Its counter is only marked as received when the [`Decrypted`] result is committed to the
+/// Borrows the [`Tunnel`](crate::Tunnel) until [`DecapsulateBatch::finish`].
+#[must_use = "the data messages are not decrypted until the batch is finished"]
+pub struct DecapsulateBatch<'t> {
+    session: &'t Session,
+    counters: Vec<u64>,
+}
+
+impl DecapsulateBatch<'_> {
+    /// Adds a data message received for the same session.
+    ///
+    /// Fails with [`Error::WrongIndex`] for a message of another session; begin a new batch for
+    /// it. Fails with [`Error::DuplicateCounter`] or [`Error::InvalidCounter`] if the replay
+    /// window already rejects the message's counter. The batch is unchanged on failure.
+    pub fn increment(&mut self, message: TransportData) -> Result<(), Error> {
+        self.session.will_receive(&message)?;
+        self.counters.push(message.counter);
+
+        Ok(())
+    }
+
+    /// Releases the tunnel.
+    pub fn finish(self) -> PendingDecapsulate {
+        PendingDecapsulate {
+            key: self.session.receiver.clone(),
+            receiving_index: self.session.receiving_index,
+            session: self.session.id,
+            counters: self.counters,
+        }
+    }
+}
+
+/// Data messages ready for decryption after an initial replay check.
+///
+/// A counter is only marked as received when its [`Decrypted`] result is committed to the
 /// [`Tunnel`](crate::Tunnel). Failed authentication never advances the replay window.
 #[derive(Debug)]
-#[must_use = "the data message is not decrypted until `decrypt` is called"]
+#[must_use = "the data messages are not decrypted until `decrypt` is called"]
 pub struct PendingDecapsulate {
     key: SessionKey,
     receiving_index: Index,
     session: SessionId,
-    counter: u64,
+    counters: Vec<u64>,
 }
 
+#[expect(clippy::len_without_is_empty, reason = "a batch is never empty")]
 impl PendingDecapsulate {
-    /// Copies the ciphertext of `message` to the start of `dst` and decrypts it in place.
+    /// Returns the number of data messages in the batch.
+    pub fn len(&self) -> usize {
+        self.counters.len()
+    }
+
+    /// Copies the ciphertext of each message to the start of its buffer and decrypts it in place.
     ///
-    /// Pass the original data message as `message`. The result owns `dst`; commit it with
-    /// [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate) to obtain the plaintext.
-    pub fn decrypt<B: AsMut<[u8]>>(self, message: &[u8], mut dst: B) -> Decrypted<B> {
-        let plaintext = self
-            .decrypt_in_place(message, dst.as_mut())
-            .map(|len| Plaintext::new(dst, len));
+    /// Pass the original data messages in the order they were added to the batch. The results
+    /// own their buffers; commit each with
+    /// [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate) to obtain its
+    /// plaintext. A message that fails to decrypt does not affect the others.
+    ///
+    /// Passing fewer messages than the batch holds drops the rest. Passing more is a bug; the
+    /// extra messages are ignored.
+    pub fn decrypt<'a, B, I>(self, messages: I) -> DecryptedBatch<B>
+    where
+        B: AsMut<[u8]>,
+        I: IntoIterator<Item = (&'a [u8], B)>,
+    {
+        let aead = self.key.aead();
+        let mut messages = messages.into_iter();
+        let mut decrypted = Vec::with_capacity(self.counters.len());
 
-        Decrypted {
-            receiving_index: self.receiving_index,
-            session: self.session,
-            counter: self.counter,
-            plaintext,
-        }
-    }
+        for &counter in &self.counters {
+            let Some((message, mut dst)) = messages.next() else {
+                break;
+            };
+            let plaintext =
+                decrypt_in_place(&aead, self.receiving_index, counter, message, dst.as_mut())
+                    .map(|len| Plaintext::new(dst, len));
 
-    fn decrypt_in_place(&self, message: &[u8], dst: &mut [u8]) -> Result<usize, Error> {
-        let expected_header = data_header(self.receiving_index.to_le_bytes(), self.counter);
-        let Some((header, ciphertext)) = message.split_first_chunk::<DATA_HEADER_SZ>() else {
-            return Err(Error::InvalidAeadTag);
-        };
-        if *header != expected_header {
-            return Err(Error::InvalidAeadTag);
-        }
-
-        let ct_len = ciphertext.len();
-        let available = dst.len();
-
-        let Some(buf) = dst.get_mut(..ct_len) else {
-            return Err(Error::DestinationBufferTooSmall {
-                required: ct_len,
-                available,
+            decrypted.push(Decrypted {
+                receiving_index: self.receiving_index,
+                session: self.session,
+                counter,
+                plaintext,
             });
-        };
-        buf.copy_from_slice(ciphertext);
+        }
+        debug_assert!(
+            messages.next().is_none(),
+            "more messages than the batch holds"
+        );
 
-        let plaintext = self
-            .key
-            .aead()
-            .open_in_place(
-                Nonce::assume_unique_for_key(nonce(self.counter)),
-                Aad::from(&[]),
-                buf,
-            )
-            .map_err(|_| Error::InvalidAeadTag)?;
-
-        Ok(plaintext.len())
+        DecryptedBatch(decrypted.into_iter())
     }
+}
+
+fn decrypt_in_place(
+    aead: &LessSafeKey,
+    receiving_index: Index,
+    counter: u64,
+    message: &[u8],
+    dst: &mut [u8],
+) -> Result<usize, Error> {
+    let expected_header = data_header(receiving_index.to_le_bytes(), counter);
+    let Some((header, ciphertext)) = message.split_first_chunk::<DATA_HEADER_SZ>() else {
+        return Err(Error::InvalidAeadTag);
+    };
+    if *header != expected_header {
+        return Err(Error::InvalidAeadTag);
+    }
+
+    let ct_len = ciphertext.len();
+    let available = dst.len();
+
+    let Some(buf) = dst.get_mut(..ct_len) else {
+        return Err(Error::DestinationBufferTooSmall {
+            required: ct_len,
+            available,
+        });
+    };
+    buf.copy_from_slice(ciphertext);
+
+    let plaintext = aead
+        .open_in_place(
+            Nonce::assume_unique_for_key(nonce(counter)),
+            Aad::from(&[]),
+            buf,
+        )
+        .map_err(|_| Error::InvalidAeadTag)?;
+
+    Ok(plaintext.len())
 }
 
 fn data_header(receiver_index: [u8; 4], counter: u64) -> [u8; DATA_HEADER_SZ] {
@@ -500,6 +637,32 @@ fn data_header(receiver_index: [u8; 4], counter: u64) -> [u8; DATA_HEADER_SZ] {
     header[4..8].copy_from_slice(&receiver_index);
     header[8..].copy_from_slice(&counter.to_le_bytes());
     header
+}
+
+/// The results of decrypting one batch, in the order its messages were added.
+#[must_use = "the data messages are not accepted until they are committed to the `Tunnel`"]
+pub struct DecryptedBatch<B>(std::vec::IntoIter<Decrypted<B>>);
+
+impl<B> Iterator for DecryptedBatch<B> {
+    type Item = Decrypted<B>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<B> ExactSizeIterator for DecryptedBatch<B> {}
+
+impl<B> std::fmt::Debug for DecryptedBatch<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("DecryptedBatch")
+            .field(&self.0.as_slice())
+            .finish()
+    }
 }
 
 /// A decryption result awaiting [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate).
@@ -590,7 +753,7 @@ impl<B> Plaintext<B> {
 
 /// The raw key of one direction of a session.
 ///
-/// Pending messages carry a copy, so encrypting and decrypting on other threads shares no memory
+/// Pending batches carry a copy, so encrypting and decrypting on other threads shares no memory
 /// with the session.
 #[derive(Clone)]
 pub(crate) struct SessionKey(Zeroizing<[u8; 32]>);
@@ -624,10 +787,26 @@ mod tests {
         session.sending_key_counter = REJECT_AFTER_MESSAGES - 1;
         assert!(!session.sending_counter_exhausted());
 
-        let pending = session.prepare_packet_data();
+        let pending = session
+            .prepare_packet_data()
+            .finish(NonZeroUsize::MIN)
+            .unwrap();
 
-        assert_eq!(pending.counter, REJECT_AFTER_MESSAGES - 1);
+        assert_eq!(pending.first_counter, REJECT_AFTER_MESSAGES - 1);
         assert!(session.sending_counter_exhausted());
+    }
+
+    #[test]
+    fn batch_beyond_the_message_limit_reserves_nothing() {
+        let mut session = session(Index::new_local(0));
+        session.sending_key_counter = REJECT_AFTER_MESSAGES - 1;
+
+        let result = session
+            .prepare_packet_data()
+            .finish(NonZeroUsize::new(2).unwrap());
+
+        assert!(matches!(result, Err(Error::NoCurrentSession)));
+        assert_eq!(session.sending_key_counter, REJECT_AFTER_MESSAGES - 1);
     }
 
     #[test]
@@ -643,24 +822,52 @@ mod tests {
     }
 
     #[test]
-    fn decrypt_rejects_a_message_with_a_different_header() {
+    fn increment_leaves_the_batch_unchanged_on_failure() {
         let mut session = session(Index::new_local(0));
+        session.receiving_key_counter.mark_did_receive(1).unwrap();
+
+        let mut batch = session.prepare_receive_packet_data(data(0, 0)).unwrap();
+
+        assert!(matches!(
+            batch.increment(data(1, 2)),
+            Err(Error::WrongIndex)
+        ));
+        assert!(matches!(
+            batch.increment(data(0, 1)),
+            Err(Error::DuplicateCounter)
+        ));
+        assert_eq!(batch.counters, [0]);
+    }
+
+    #[test]
+    fn decrypt_rejects_a_message_with_a_different_header() {
+        let session = session(Index::new_local(0));
         let mut message = [0; DATA_HEADER_SZ + 16 + AEAD_TAG_SZ];
-        session
-            .prepare_packet_data()
-            .encrypt_payload(b"hello", &mut message)
-            .unwrap();
+        encrypt_payload(
+            &session.sender.aead(),
+            session.sending_index,
+            0,
+            b"hello",
+            &mut message,
+        )
+        .unwrap();
         message[8] = 1;
 
-        let pending = session
-            .prepare_receive_packet_data(TransportData {
-                receiver_idx: 0,
-                counter: 0,
-            })
+        let pending = session.prepare_receive_packet_data(data(0, 0)).unwrap();
+        let decrypted = pending
+            .finish()
+            .decrypt([(message.as_slice(), [0; 32])])
+            .next()
             .unwrap();
-        let decrypted = pending.decrypt(&message, [0; 32]);
 
         assert!(matches!(decrypted.plaintext, Err(Error::InvalidAeadTag)));
+    }
+
+    fn data(receiver_idx: u32, counter: u64) -> TransportData {
+        TransportData {
+            receiver_idx,
+            counter,
+        }
     }
 
     fn session(receiving_index: Index) -> Session {
