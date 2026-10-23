@@ -2,8 +2,8 @@
 //! keepalives, tampering and validation of the decrypted payload.
 
 use crate::harness::{
-    DATA_OVERHEAD, KEEPALIVE_SIZE, Outcome as _, Peer::A, Peer::B, Sim, ipv4_packet, ipv6_packet,
-    secs,
+    DATA_OVERHEAD, KEEPALIVE_SIZE, Outcome as _, Peer::A, Peer::B, Sim, decrypt_one, ipv4_packet,
+    ipv6_packet, secs,
 };
 use sanstun::{Committed, Error, Event, ReceivedMessage};
 
@@ -34,7 +34,7 @@ fn data_messages_are_zero_padded_to_a_multiple_of_16_bytes() {
         let datagram = sim.encapsulate(A, &plaintext);
         let now = sim.now;
         let pending = sim.prepare_decrypt(B, &datagram).unwrap();
-        let decrypted = pending.decrypt(&datagram, vec![0u8; 4096]);
+        let decrypted = decrypt_one(pending, &datagram, vec![0u8; 4096]);
         let Ok(Committed::Data {
             buffer,
             len: decrypted_len,

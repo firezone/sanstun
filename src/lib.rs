@@ -7,6 +7,7 @@
 //! timers with [`Tunnel::poll_timeout`] and [`Tunnel::handle_timeout`].
 //!
 //! ```
+//! use std::num::NonZeroUsize;
 //! use std::time::{Instant, SystemTime, UNIX_EPOCH};
 //!
 //! use sanstun::{Committed, Interface, Received, ReceivedMessage, TunnelConfig};
@@ -41,19 +42,20 @@
 //!     received => unreachable!("expected a response, got {received:?}"),
 //! };
 //!
-//! // Alice encrypts a packet.
+//! // Alice encrypts a packet. A batch reserves consecutive counters for several packets.
 //! let packet = b"an IP packet";
 //! let mut buf = [0; 64];
-//! let data = alice_to_bob.begin_encapsulate(now)?.encrypt(packet, &mut buf)?;
+//! let pending = alice_to_bob.begin_encapsulate(now)?.finish(NonZeroUsize::MIN)?;
+//! let data = pending.encrypt([(packet.as_slice(), buf.as_mut_slice())]).next().unwrap()?;
 //!
-//! // Bob decrypts and accepts it.
-//! let decrypted = match bob.receive(alice_addr, &data, now)? {
+//! // Bob decrypts and accepts it. A batch holds all messages of one session in a datagram.
+//! let mut decrypted = match bob.receive(alice_addr, &data, now)? {
 //!     Received::Message(ReceivedMessage::TransportData(message)) => {
-//!         bob_to_alice.begin_decapsulate(message, now)?.decrypt(&data, [0; 64])
+//!         bob_to_alice.begin_decapsulate(message, now)?.finish().decrypt([(&*data, [0; 64])])
 //!     }
 //!     received => unreachable!("expected data, got {received:?}"),
 //! };
-//! match bob_to_alice.commit_decapsulate(decrypted, now)? {
+//! match bob_to_alice.commit_decapsulate(decrypted.next().unwrap(), now)? {
 //!     // The plaintext is zero-padded to a multiple of 16 bytes.
 //!     Committed::Data { buffer, len } => assert_eq!(&buffer[..len], b"an IP packet\0\0\0\0"),
 //!     // A keepalive carries no packet to forward.
@@ -110,5 +112,8 @@ pub use message::{
     CookieReply, DataMessage, Datagram, HandshakeInitiation, HandshakeResponse, ReceivedMessage,
     TransportData,
 };
-pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
+pub use session::{
+    DecapsulateBatch, Decrypted, DecryptedBatch, EncapsulateBatch, PendingDecapsulate,
+    PendingEncapsulate,
+};
 pub use tunnel::{Committed, Event, Tunnel, TunnelConfig};
