@@ -6,9 +6,7 @@ use crate::message::{
     CookieReply, DATA_OVERHEAD_SZ, Datagram, HandshakeInitiation, HandshakeResponse, TransportData,
 };
 use crate::ring_buffer::RingBuffer;
-use crate::session::{
-    self, Decrypted, PendingDecapsulate, PendingEncapsulate, Plaintext, Role, Sessions,
-};
+use crate::session::{DecapsulateBatch, Decrypted, EncapsulateBatch, Plaintext, Role, Sessions};
 use crate::tai64n::TimeStamper;
 use crate::timers::{MAX_JITTER, TimerName, Timers};
 
@@ -194,46 +192,33 @@ impl Tunnel {
         self.timers.set_rekey_timeout(rekey_timeout);
     }
 
-    /// Reserves a data message's counter for encryption with [`PendingEncapsulate::encrypt`].
-    pub fn begin_encapsulate(&mut self, now: Instant) -> Result<PendingEncapsulate, Error> {
+    /// Starts a batch of data messages to encrypt on the current sending session.
+    ///
+    /// The batch borrows the tunnel until [`EncapsulateBatch::finish`] reserves its counters,
+    /// so the counters of one batch are consecutive.
+    pub fn begin_encapsulate(&mut self, now: Instant) -> Result<EncapsulateBatch<'_>, Error> {
         self.ensure_not_expired()?;
 
-        let pending = self
-            .sending_session(now)
-            .ok_or(Error::NoCurrentSession)?
-            .prepare_packet_data();
+        let session = self
+            .sessions
+            .sending_session(self.timers.keepalive_timeout, now)
+            .ok_or(Error::NoCurrentSession)?;
         self.timers.tick(TimerName::TimeLastPacketSent, now);
         self.timers.tick(TimerName::TimeLastDataPacketSent, now);
 
-        Ok(pending)
+        Ok(session.prepare_packet_data())
     }
 
     /// Encrypts a keepalive using the current sending session.
     fn encrypt_keepalive(&mut self, now: Instant) -> Result<Datagram, Error> {
         let mut message = [0u8; DATA_OVERHEAD_SZ];
-        self.sending_session(now)
+        self.sessions
+            .sending_session(self.timers.keepalive_timeout, now)
             .ok_or(Error::NoCurrentSession)?
-            .prepare_keepalive()
-            .encrypt_payload(&[], &mut message)?;
+            .encrypt_keepalive(&mut message)?;
         self.timers.tick(TimerName::TimeLastPacketSent, now);
 
         Ok(Datagram::new(message))
-    }
-
-    /// Returns a usable session for sending data, if one exists.
-    fn sending_session(&mut self, now: Instant) -> Option<&mut session::Session> {
-        let session = self.sessions.current_mut()?;
-
-        if session.sending_counter_exhausted() || session.expired_at(now) {
-            return None;
-        }
-        if !session.should_use_at(now, self.timers.keepalive_timeout)
-            && session.role() == Role::Initiator
-        {
-            return None;
-        }
-
-        Some(session)
     }
 
     /// Accepts a decrypted data message after checking its session and replay counter.
@@ -371,16 +356,17 @@ impl Tunnel {
         Ok(())
     }
 
-    /// Prepares a data message for decryption.
+    /// Starts a batch of data messages received for one of our sessions.
     ///
-    /// Decrypt the returned [`PendingDecapsulate`] and pass the result to
-    /// [`Tunnel::commit_decapsulate`] to accept the plaintext. The tunnel only
-    /// changes once the message is authenticated, in `commit_decapsulate`.
+    /// Add further messages of the same session with [`DecapsulateBatch::increment`], for
+    /// example the segments of one GRO datagram, then finish the batch, decrypt it and pass each
+    /// result to [`Tunnel::commit_decapsulate`] to accept its plaintext. The tunnel only
+    /// changes once a message is authenticated, in `commit_decapsulate`.
     pub fn begin_decapsulate(
         &self,
         packet: TransportData,
         now: Instant,
-    ) -> Result<PendingDecapsulate, Error> {
+    ) -> Result<DecapsulateBatch<'_>, Error> {
         self.ensure_not_expired()?;
 
         let remote_idx = Index::from_peer(packet.receiver_idx);
