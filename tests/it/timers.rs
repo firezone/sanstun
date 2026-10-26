@@ -356,6 +356,27 @@ fn tunnel_expires_when_a_used_session_expires() {
     );
 }
 
+/// A peer that lost its state re-initiates; the tunnel keeps the newer session even if the
+/// response is lost and the used session expires before the peer retries.
+#[test]
+fn tunnel_survives_a_used_session_expiring_after_the_peer_reinitiated() {
+    let mut sim = Sim::connected();
+    sim.advance(secs(1));
+    sim.send_ip(B, &ipv4_packet(b"on the first session"));
+    sim.send_ip(A, &ipv4_packet(b"reply on the first session"));
+    sim.replace_tunnel(A);
+    sim.cut_link();
+    sim.advance(REJECT_AFTER_TIME - secs(2));
+    sim.heal_link();
+
+    let init = sim.initiate_handshake(A);
+    let _lost_response = sim.deliver(B, &init).expect_one_net();
+    sim.advance(REKEY_TIMEOUT + secs(5));
+
+    assert_eq!(sim.expirations(B), 0);
+    sim.assert_connectivity();
+}
+
 /// An unused session never triggers an age-based rekey, so its expiry alone
 /// does not mean the peer is unreachable.
 #[test]
