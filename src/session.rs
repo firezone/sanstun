@@ -320,6 +320,11 @@ impl Sessions {
         expired_current
     }
 
+    /// Returns whether no session is stored, current or not.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.slots.iter().all(Option::is_none)
+    }
+
     /// Returns the earliest session expiry deadline.
     pub(crate) fn next_expiry(&self) -> Option<Instant> {
         self.slots.iter().flatten().map(Session::expires_at).min()

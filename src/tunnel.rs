@@ -481,9 +481,10 @@ impl Tunnel {
         let mut handshake_initiation_required = false;
         let mut keepalive_required = false;
 
-        // A session that sent data should have rekeyed before expiry; otherwise presume it lost.
+        // A session that sent data should have rekeyed before expiry; otherwise presume it lost,
+        // unless the peer already started a newer one.
         if let Some(expired_current) = self.sessions.expire(now) {
-            if expired_current.sent_data() {
+            if expired_current.sent_data() && self.sessions.is_empty() {
                 tracing::debug!("Connection expired (REJECT_AFTER_TIME)");
                 self.expire(now);
                 return;
