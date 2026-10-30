@@ -74,7 +74,7 @@ Use it at your own risk.
 
 ## License
 
-Firezone's changes are licensed under the [Apache License, Version 2.0](LICENSE-APACHE).
-sanstun started as a fork of [boringtun](https://github.com/cloudflare/boringtun), and the code it inherited from there remains under the [3-Clause BSD License](LICENSE-BSD.md).
+The project is licensed under the [Apache License, Version 2.0](LICENSE).
+sanstun started as a fork of [boringtun](https://github.com/cloudflare/boringtun); see [NOTICE.txt](NOTICE.txt) for its license.
 
 <sub>WireGuard is a registered trademark of Jason A. Donenfeld. sanstun is not sponsored or endorsed by Jason A. Donenfeld.</sub>
