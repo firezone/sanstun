@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 use std::hint::black_box;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
 
 use criterion::{BatchSize, Criterion};
@@ -28,13 +29,13 @@ fn bench_data_path(c: &mut Criterion) {
         let mut buf = vec![0; size + 64];
 
         group.bench_function("begin_encapsulate", |b| {
-            b.iter(|| black_box(sender.begin_encapsulate(now).unwrap()))
+            b.iter(|| black_box(begin_encapsulate(&mut sender, now)))
         });
 
         group.bench_function("encrypt", |b| {
             b.iter_batched(
-                || sender.begin_encapsulate(now).unwrap(),
-                |pending| black_box(pending.encrypt(&payload, &mut buf).unwrap().len()),
+                || begin_encapsulate(&mut sender, now),
+                |pending| black_box(encrypt(pending, &payload, &mut buf)),
                 BatchSize::SmallInput,
             )
         });
@@ -70,7 +71,7 @@ fn bench_data_path(c: &mut Criterion) {
                     )
                 },
                 |pending| {
-                    let _ = black_box(pending.decrypt(&message, &mut buf));
+                    let _ = black_box(pending.decrypt([(message.as_slice(), &mut buf)]));
                 },
                 BatchSize::SmallInput,
             )
@@ -89,7 +90,9 @@ fn bench_data_path(c: &mut Criterion) {
                         &message,
                         now,
                     )
-                    .decrypt(&message, vec![0; size + 64])
+                    .decrypt([(message.as_slice(), vec![0; size + 64])])
+                    .next()
+                    .unwrap()
                 },
                 |decrypted| {
                     black_box(
@@ -113,15 +116,28 @@ fn bench_data_path(c: &mut Criterion) {
 
 fn data_message(tunnel: &mut Tunnel, payload: &[u8], now: Instant) -> Vec<u8> {
     let mut message = vec![0; payload.len() + 64];
-    let len = tunnel
-        .begin_encapsulate(now)
-        .unwrap()
-        .encrypt(payload, &mut message)
-        .unwrap()
-        .len();
+    let len = encrypt(begin_encapsulate(tunnel, now), payload, &mut message);
     message.truncate(len);
 
     message
+}
+
+fn begin_encapsulate(tunnel: &mut Tunnel, now: Instant) -> sanstun::PendingEncapsulate {
+    tunnel
+        .begin_encapsulate(now)
+        .unwrap()
+        .finish(NonZeroUsize::MIN)
+        .unwrap()
+}
+
+/// Encrypts `payload` into `buf` and returns the message length.
+fn encrypt(pending: sanstun::PendingEncapsulate, payload: &[u8], buf: &mut [u8]) -> usize {
+    pending
+        .encrypt([(payload, buf)])
+        .next()
+        .unwrap()
+        .unwrap()
+        .len()
 }
 
 fn begin_decapsulate(
@@ -137,7 +153,7 @@ fn begin_decapsulate(
         unreachable!()
     };
 
-    tunnel.begin_decapsulate(message, now).unwrap()
+    tunnel.begin_decapsulate(message, now).unwrap().finish()
 }
 
 /// Establishes two tunnels and returns the initiator, the responder's interface and the responder.

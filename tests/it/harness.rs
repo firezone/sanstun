@@ -5,10 +5,14 @@
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::time::{Duration, Instant};
 
 use sanstun::Error;
-use sanstun::{Committed, Decrypted, PendingDecapsulate, ReceivedMessage, Tunnel, TunnelConfig};
+use sanstun::{
+    Committed, DataMessage, Decrypted, DecryptedBatch, PendingDecapsulate, PendingEncapsulate,
+    ReceivedMessage, TransportData, Tunnel, TunnelConfig,
+};
 use sanstun::{Interface, Received};
 use sanstun::{PresharedKey, PublicKey, StaticSecret};
 use zeroize::Zeroizing;
@@ -102,6 +106,30 @@ pub fn counter(datagram: &[u8]) -> u64 {
     assert!(matches!(classify(datagram), Kind::Data | Kind::Keepalive));
 
     u64::from_le_bytes(datagram[8..16].try_into().unwrap())
+}
+
+/// Encrypts the only message of a batch.
+pub fn encrypt_one<'a>(
+    pending: PendingEncapsulate,
+    plaintext: &'a [u8],
+    dst: &'a mut [u8],
+) -> Result<DataMessage<'a>, Error> {
+    pending
+        .encrypt([(plaintext, dst)])
+        .next()
+        .expect("one counter to be reserved")
+}
+
+/// Decrypts the only message of a batch.
+pub fn decrypt_one<B: AsMut<[u8]>>(
+    pending: PendingDecapsulate,
+    datagram: &[u8],
+    dst: B,
+) -> Decrypted<B> {
+    pending
+        .decrypt([(datagram, dst)])
+        .next()
+        .expect("one message in the batch")
 }
 
 /// A datagram observed on the simulated wire.
@@ -565,8 +593,8 @@ impl Sim {
             }
             ReceivedMessage::TransportData(data) => match node.tunn.begin_decapsulate(data, now) {
                 Err(e) => outs.push(Out::Err(e)),
-                Ok(pending) => {
-                    let decrypted = pending.decrypt(datagram, vec![0u8; BUF]);
+                Ok(batch) => {
+                    let decrypted = decrypt_one(batch.finish(), datagram, vec![0u8; BUF]);
                     match self.commit(to, decrypted) {
                         Ok(None) => {}
                         Ok(Some(ip_packet)) => outs.push(Out::Ip(ip_packet)),
@@ -600,6 +628,27 @@ impl Sim {
         outgoing
     }
 
+    /// Reserves `len` counters on `from` for encryption.
+    #[track_caller]
+    pub fn begin_encrypt(&mut self, from: Peer, len: usize) -> PendingEncapsulate {
+        let now = self.now;
+        self.tunn_mut(from)
+            .begin_encapsulate(now)
+            .expect("an active session")
+            .finish(NonZeroUsize::new(len).unwrap())
+            .expect("enough counters")
+    }
+
+    /// Parses a data message on `to` without decrypting it.
+    #[track_caller]
+    pub fn receive_data(&mut self, to: Peer, datagram: &[u8]) -> TransportData {
+        let ReceivedMessage::TransportData(data) = self.receive(to, datagram) else {
+            panic!("expected a data message");
+        };
+
+        data
+    }
+
     /// Prepares a data message for decryption on `to`.
     #[track_caller]
     pub fn prepare_decrypt(
@@ -608,11 +657,34 @@ impl Sim {
         datagram: &[u8],
     ) -> Result<PendingDecapsulate, Error> {
         let now = self.now;
-        let ReceivedMessage::TransportData(data) = self.receive(to, datagram) else {
-            panic!("expected a data message");
-        };
+        let data = self.receive_data(to, datagram);
 
-        self.tunn_mut(to).begin_decapsulate(data, now)
+        Ok(self.tunn_mut(to).begin_decapsulate(data, now)?.finish())
+    }
+
+    /// Decrypts `datagrams`, which belong to one session, as one batch on `to`.
+    #[track_caller]
+    pub fn decrypt_batch(&mut self, to: Peer, datagrams: &[Vec<u8>]) -> DecryptedBatch<Vec<u8>> {
+        let messages = datagrams
+            .iter()
+            .map(|datagram| self.receive_data(to, datagram))
+            .collect::<Vec<_>>();
+        let now = self.now;
+        let tunn = self.tunn_mut(to);
+
+        let mut messages = messages.into_iter();
+        let mut batch = tunn
+            .begin_decapsulate(messages.next().expect("at least one datagram"), now)
+            .unwrap();
+        for message in messages {
+            batch.increment(message).unwrap();
+        }
+
+        batch.finish().decrypt(
+            datagrams
+                .iter()
+                .map(|datagram| (datagram.as_slice(), vec![0u8; BUF])),
+        )
     }
 
     /// Commits a decryption on `to`, returning an IP packet or `None` for a keepalive.
@@ -680,11 +752,12 @@ impl Sim {
     pub fn try_encapsulate(&mut self, from: Peer, ip_packet: &[u8]) -> Result<Vec<u8>, Error> {
         let now = self.now;
         let mut buf = vec![0u8; BUF];
-        let packet = self
+        let pending = self
             .node_mut(from)
             .tunn
             .begin_encapsulate(now)?
-            .encrypt(ip_packet, &mut buf)?;
+            .finish(NonZeroUsize::MIN)?;
+        let packet = encrypt_one(pending, ip_packet, &mut buf)?;
         Ok(packet.to_vec())
     }
 
