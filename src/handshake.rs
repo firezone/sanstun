@@ -328,22 +328,40 @@ impl Handshake {
         Ok((response, session))
     }
 
+    /// Completes the handshake with a response to either of the two latest initiations.
+    ///
+    /// Each retry, after `REKEY_TIMEOUT` and a random jitter, replaces the in-flight initiation.
+    /// Accepting only the latest one, as wireguard-go does, means a handshake can never complete
+    /// when the round trip is longer than that retry interval, because every response answers a
+    /// superseded initiation. Keeping the previous one allows round trips of about twice
+    /// `REKEY_TIMEOUT`.
+    ///
+    /// A response to either initiation ends the handshake, so this clears both. Clearing only the
+    /// matched initiation was a bug: the handshake stayed in progress after the session was
+    /// established, so the tunnel kept retrying it.
+    ///
+    /// - [`Tunnel::handle_timeout`](crate::Tunnel::handle_timeout) sent another initiation at
+    ///   `REKEY_TIMEOUT`, and its response completed another, unneeded handshake. With a round
+    ///   trip longer than `REKEY_TIMEOUT`, that response matched the previous initiation again, so
+    ///   the tunnel started a new handshake every `REKEY_TIMEOUT`.
+    /// - A retry does not restart `REKEY_ATTEMPT_TIME`, so the established tunnel expired
+    ///   `REKEY_ATTEMPT_TIME` after the first initiation, even when every handshake completed.
+    /// - A late response to the other initiation completed a second handshake and replaced the
+    ///   current session.
+    ///
+    /// A response that fails to authenticate leaves both initiations in place, so a forged or
+    /// corrupted response cannot cancel the handshake.
     pub(super) fn receive_handshake_response(
         &mut self,
         packet: HandshakeResponse,
         now: Instant,
     ) -> Result<Session, Error> {
         // A delayed response may belong to the previous initiation.
-        let (state, is_previous) = match (&self.state, &self.previous) {
-            (HandshakeState::InitSent(s), _)
+        let state = match (&self.state, &self.previous) {
+            (HandshakeState::InitSent(s), _) | (_, HandshakeState::InitSent(s))
                 if s.local_index == Index::from_peer(packet.receiver_idx) =>
             {
-                (s, false)
-            }
-            (_, HandshakeState::InitSent(s))
-                if s.local_index == Index::from_peer(packet.receiver_idx) =>
-            {
-                (s, true)
+                s
             }
             _ => return Err(Error::UnexpectedPacket),
         };
@@ -384,11 +402,9 @@ impl Handshake {
 
         let (temp2, temp3) = derive_transport_keys(&chaining_key);
 
-        if is_previous {
-            self.previous = HandshakeState::None;
-        } else {
-            self.state = HandshakeState::None;
-        }
+        // Completing either initiation ends the handshake, so neither is retried or accepted again.
+        self.previous = HandshakeState::None;
+        self.state = HandshakeState::None;
         Ok(Session::new(
             local_index,
             Index::from_peer(peer_index),

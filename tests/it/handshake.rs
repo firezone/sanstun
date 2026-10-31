@@ -3,7 +3,7 @@
 
 use crate::harness::{
     HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, MAX_JITTER, Outcome as _, Peer::A, Peer::B,
-    REJECT_AFTER_TIME, REKEY_TIMEOUT, Sim, classify, ipv4_packet, secs,
+    REJECT_AFTER_TIME, REKEY_ATTEMPT_TIME, REKEY_TIMEOUT, Sim, classify, ipv4_packet, secs,
 };
 use sanstun::{Error, Interface, PublicKey, ReceivedMessage, TunnelConfig};
 use std::time::{Duration, Instant};
@@ -181,6 +181,75 @@ fn delayed_response_to_a_superseded_initiation_is_accepted() {
 
     assert!(sim.is_established(A));
     assert!(sim.is_established(B));
+    sim.assert_connectivity();
+}
+
+/// Completes A's handshake over a 6s round trip: B answers A's first initiation, and the response
+/// arrives after A has retried at `REKEY_TIMEOUT`.
+fn establish_with_round_trip_longer_than_rekey_timeout(sim: &mut Sim) {
+    sim.cut_link();
+    let first_init = sim.initiate_handshake(A);
+    sim.advance(secs(3));
+    let response = sim.deliver(B, &first_init).expect_one_net();
+    sim.advance(secs(3));
+    assert_eq!(sim.count(A, Kind::Init), 1, "A retries before the response");
+
+    sim.heal_link();
+    sim.route(B, response);
+    assert!(sim.is_established(A));
+}
+
+// Regression test: when a response completed the previous initiation, the newer one stayed in
+// flight, and A retried it at `REKEY_TIMEOUT` after the handshake had completed. While the round
+// trip stayed longer than `REKEY_TIMEOUT`, this repeated with every handshake. Completing either
+// initiation ends the handshake, as in wireguard-go, which keeps one handshake per peer.
+#[test]
+fn no_initiation_is_sent_after_a_delayed_response_completes_the_handshake() {
+    let mut sim = Sim::new();
+    establish_with_round_trip_longer_than_rekey_timeout(&mut sim);
+
+    sim.clear_log();
+    sim.advance(REKEY_TIMEOUT + MAX_JITTER + secs(1));
+
+    assert_eq!(sim.sent_at(A, Kind::Init), []);
+}
+
+// Regression test: the newer initiation left in flight (see above) kept the retry loop running,
+// and `REKEY_ATTEMPT_TIME` is measured from the first initiation, so A expired the established
+// tunnel whether or not the retries were answered. This test leaves them unanswered. §6.4 retries
+// only while no response has been received.
+#[test]
+fn delayed_response_stops_the_rekey_attempt_timer() {
+    let mut sim = Sim::new();
+    establish_with_round_trip_longer_than_rekey_timeout(&mut sim);
+
+    sim.clear_log();
+    sim.cut_link();
+    sim.advance(REKEY_ATTEMPT_TIME + secs(1));
+
+    assert_eq!(sim.expirations(A), 0);
+    assert_eq!(sim.sent_at(A, Kind::Init), []);
+}
+
+// Regression test: when a response completed the newest initiation, the previous one was kept,
+// so a late response to it completed a second handshake and replaced the current session.
+// wireguard-go drops such responses because a new initiation deletes the old index.
+#[test]
+fn late_response_to_the_other_initiation_is_rejected() {
+    let mut sim = Sim::new();
+
+    let first_init = sim.initiate_handshake(A);
+    sim.advance(secs(1));
+    let second_init = sim.force_handshake_initiation(A);
+
+    let first_response = sim.deliver(B, &first_init).expect_one_net();
+    let second_response = sim.deliver(B, &second_init).expect_one_net();
+    sim.route(B, second_response);
+    assert!(sim.is_established(A));
+
+    let error = sim.deliver(A, &first_response).expect_err();
+
+    assert!(matches!(error, Error::UnexpectedPacket));
     sim.assert_connectivity();
 }
 
