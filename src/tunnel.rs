@@ -338,6 +338,8 @@ impl Tunnel {
 
         self.timers.tick(TimerName::TimeLastPacketReceived, now);
         self.timers.tick(TimerName::TimeLastHandshakeCompleted, now);
+        // A retry scheduled within its jitter, or any other scheduled rekey, is no longer needed.
+        self.timers.cancel_scheduled_handshake();
         self.sessions.set_current(local_idx);
         self.confirm_first_session(self.first_initiation_at.unwrap_or(now), now);
 

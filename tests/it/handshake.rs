@@ -231,6 +231,29 @@ fn delayed_response_stops_the_rekey_attempt_timer() {
     assert_eq!(sim.sent_at(A, Kind::Init), []);
 }
 
+// Regression test: a retry is scheduled with jitter after `REKEY_TIMEOUT`, and a response that
+// arrived within the jitter did not cancel it. A sent another initiation after the handshake
+// completed, and while the round trip stayed within the jitter, every later handshake did too.
+#[test]
+fn response_within_the_retry_jitter_cancels_the_retry() {
+    let mut sim = Sim::new();
+    sim.cut_link();
+    let init = sim.initiate_handshake(A);
+    sim.advance(REKEY_TIMEOUT);
+    let retry_at = sim.tunn(A).poll_timeout().expect("a scheduled retry");
+    assert!(retry_at > sim.now, "the retry waits for its jitter");
+    assert_eq!(sim.count(A, Kind::Init), 0);
+
+    sim.heal_link();
+    let response = sim.deliver(B, &init).expect_one_net();
+    sim.route(B, response);
+    assert!(sim.is_established(A));
+
+    sim.advance(REKEY_TIMEOUT + MAX_JITTER + secs(1));
+
+    assert_eq!(sim.sent_at(A, Kind::Init), []);
+}
+
 // Regression test: when a response completed the newest initiation, the previous one was kept,
 // so a late response to it completed a second handshake and replaced the current session.
 // wireguard-go drops such responses because a new initiation deletes the old index.
