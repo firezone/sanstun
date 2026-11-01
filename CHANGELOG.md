@@ -9,6 +9,10 @@ Releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `Tunnel::rekey_attempt_time` returns the configured `REKEY_ATTEMPT_TIME`.
 
+### Fixed
+
+- Fixes repeated handshakes and tunnel expiry when the round-trip time exceeds `REKEY_TIMEOUT` (#142).
+
 ## [0.1.0] - 2026-10-30
 
 Initial release.

@@ -141,6 +141,11 @@ impl Timers {
         debug_assert!(existing.is_none(), "a handshake is already scheduled");
     }
 
+    /// Cancels a scheduled handshake.
+    pub(crate) fn cancel_scheduled_handshake(&mut self) {
+        self.send_handshake_at = None;
+    }
+
     /// Clears the scheduled handshake if it is due at `now`.
     pub(crate) fn take_due_handshake(&mut self, now: Instant) -> Option<Instant> {
         self.send_handshake_at.take_if(|at| now >= *at)

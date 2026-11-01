@@ -184,6 +184,68 @@ fn delayed_response_to_a_superseded_initiation_is_accepted() {
     sim.assert_connectivity();
 }
 
+// A response to the previous initiation also ends the newer one, so it is not retried.
+#[test]
+fn no_initiation_is_sent_after_a_delayed_response_completes_the_handshake() {
+    let mut sim = Sim::new();
+    sim.cut_link();
+    let first_init = sim.initiate_handshake(A);
+    sim.advance(secs(3));
+    let response = sim.deliver(B, &first_init).expect_one_net();
+    sim.advance(secs(3));
+    assert_eq!(sim.count(A, Kind::Init), 1, "A retries before the response");
+    sim.heal_link();
+    sim.route(B, response);
+    assert!(sim.is_established(A));
+
+    sim.clear_log();
+    sim.advance(REKEY_TIMEOUT + MAX_JITTER + secs(1));
+
+    assert_eq!(sim.sent_at(A, Kind::Init), []);
+}
+
+// The retry after `REKEY_TIMEOUT` waits for its jitter, and a response within it cancels the retry.
+#[test]
+fn response_within_the_retry_jitter_cancels_the_retry() {
+    let mut sim = Sim::new();
+    sim.cut_link();
+    let init = sim.initiate_handshake(A);
+    sim.advance(REKEY_TIMEOUT);
+    let retry_at = sim.tunn(A).poll_timeout().expect("a scheduled retry");
+    assert!(retry_at > sim.now, "the retry waits for its jitter");
+    assert_eq!(sim.count(A, Kind::Init), 0);
+
+    sim.heal_link();
+    let response = sim.deliver(B, &init).expect_one_net();
+    sim.route(B, response);
+    assert!(sim.is_established(A));
+
+    sim.advance(REKEY_TIMEOUT + MAX_JITTER + secs(1));
+
+    assert_eq!(sim.sent_at(A, Kind::Init), []);
+}
+
+// A response to the newest initiation also ends the previous one, so a late response to it
+// cannot replace the session.
+#[test]
+fn late_response_to_the_other_initiation_is_rejected() {
+    let mut sim = Sim::new();
+
+    let first_init = sim.initiate_handshake(A);
+    sim.advance(secs(1));
+    let second_init = sim.force_handshake_initiation(A);
+
+    let first_response = sim.deliver(B, &first_init).expect_one_net();
+    let second_response = sim.deliver(B, &second_init).expect_one_net();
+    sim.route(B, second_response);
+    assert!(sim.is_established(A));
+
+    let error = sim.deliver(A, &first_response).expect_err();
+
+    assert!(matches!(error, Error::UnexpectedPacket));
+    sim.assert_connectivity();
+}
+
 #[test]
 fn simultaneous_handshake_initiations_converge() {
     let mut sim = Sim::new();

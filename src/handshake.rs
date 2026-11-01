@@ -328,22 +328,24 @@ impl Handshake {
         Ok((response, session))
     }
 
+    /// Completes the handshake with a response to either of the two latest initiations.
+    ///
+    /// Accepting the previous initiation too lets a handshake complete over a round trip longer
+    /// than the retry interval, where every response answers a superseded initiation.
+    ///
+    /// A response that fails to authenticate leaves both initiations in place, so a forged
+    /// response cannot cancel the handshake.
     pub(super) fn receive_handshake_response(
         &mut self,
         packet: HandshakeResponse,
         now: Instant,
     ) -> Result<Session, Error> {
         // A delayed response may belong to the previous initiation.
-        let (state, is_previous) = match (&self.state, &self.previous) {
-            (HandshakeState::InitSent(s), _)
+        let state = match (&self.state, &self.previous) {
+            (HandshakeState::InitSent(s), _) | (_, HandshakeState::InitSent(s))
                 if s.local_index == Index::from_peer(packet.receiver_idx) =>
             {
-                (s, false)
-            }
-            (_, HandshakeState::InitSent(s))
-                if s.local_index == Index::from_peer(packet.receiver_idx) =>
-            {
-                (s, true)
+                s
             }
             _ => return Err(Error::UnexpectedPacket),
         };
@@ -384,11 +386,9 @@ impl Handshake {
 
         let (temp2, temp3) = derive_transport_keys(&chaining_key);
 
-        if is_previous {
-            self.previous = HandshakeState::None;
-        } else {
-            self.state = HandshakeState::None;
-        }
+        // Completing either initiation ends the handshake, so neither is retried or accepted again.
+        self.previous = HandshakeState::None;
+        self.state = HandshakeState::None;
         Ok(Session::new(
             local_index,
             Index::from_peer(peer_index),

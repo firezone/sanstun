@@ -343,6 +343,7 @@ impl Tunnel {
 
         self.timers.tick(TimerName::TimeLastPacketReceived, now);
         self.timers.tick(TimerName::TimeLastHandshakeCompleted, now);
+        self.timers.cancel_scheduled_handshake();
         self.sessions.set_current(local_idx);
         self.confirm_first_session(self.first_initiation_at.unwrap_or(now), now);
 
