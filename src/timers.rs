@@ -73,8 +73,12 @@ impl Timers {
     }
 
     /// Returns the deadline for giving up on unanswered handshake attempts.
-    pub(crate) fn rekey_attempt_time(&self) -> Instant {
+    pub(crate) fn rekey_attempt_deadline(&self) -> Instant {
         self[TimeLastHandshakeStarted] + self.rekey_attempt_time
+    }
+
+    pub(crate) fn rekey_attempt_time(&self) -> Duration {
+        self.rekey_attempt_time
     }
 
     /// Returns the new-handshake deadline for data sent without a reply.
