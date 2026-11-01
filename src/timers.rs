@@ -137,7 +137,7 @@ impl Timers {
         debug_assert!(existing.is_none(), "a handshake is already scheduled");
     }
 
-    /// Cancels a scheduled handshake, for when another one has just completed.
+    /// Cancels a scheduled handshake.
     pub(crate) fn cancel_scheduled_handshake(&mut self) {
         self.send_handshake_at = None;
     }
