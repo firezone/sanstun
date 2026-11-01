@@ -11,7 +11,7 @@ Releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- The initiator no longer sends handshake initiations after its handshake has completed. A response to either in-flight initiation now ends the handshake, and cancels a retry that is waiting for its jitter.
+- Allows handshakes to complete on the first successful response, even if the total RTT exceeds `REKEY_TIMEOUT`.
 
 ## [0.1.0] - 2026-10-30
 
