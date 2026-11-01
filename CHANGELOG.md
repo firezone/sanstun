@@ -11,7 +11,7 @@ Releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- Allows handshakes to complete on the first successful response, even if the total RTT exceeds `REKEY_TIMEOUT` (#142).
+- Fixes repeated handshakes and tunnel expiry when the round-trip time exceeds `REKEY_TIMEOUT` (#142).
 
 ## [0.1.0] - 2026-10-30
 
