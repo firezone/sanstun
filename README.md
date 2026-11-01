@@ -1,6 +1,6 @@
 # sanstun
 
-A sans-IO, performance-oriented user-space implementation of the WireGuard® protocol.
+A parallel-friendly sans-IO implementation of the WireGuard® protocol.
 
 ## History
 

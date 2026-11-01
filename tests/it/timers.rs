@@ -101,6 +101,7 @@ fn rekey_timeout_is_configurable() {
 fn rekey_attempt_time_is_configurable() {
     let mut sim = Sim::new();
     sim.tunn_mut(A).set_rekey_attempt_time(secs(10));
+    assert_eq!(sim.tunn(A).rekey_attempt_time(), secs(10));
     sim.cut_link();
 
     let init = sim.initiate_handshake(A);

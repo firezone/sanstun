@@ -178,6 +178,11 @@ impl Tunnel {
         self.timers.set_rekey_attempt_time(rekey_attempt_time);
     }
 
+    /// Returns how long unanswered handshake initiations are retried (`REKEY_ATTEMPT_TIME`).
+    pub fn rekey_attempt_time(&self) -> Duration {
+        self.timers.rekey_attempt_time()
+    }
+
     /// Sets how long to wait before replying to data with a keepalive (`KEEPALIVE_TIMEOUT`).
     ///
     /// Defaults to 10 seconds. The sum of this and `REKEY_TIMEOUT` must not exceed
@@ -513,7 +518,7 @@ impl Tunnel {
         }
 
         if let Some((rekey_timeout, local_idx)) = self.handshake_rekey_timeout() {
-            if now >= self.timers.rekey_attempt_time() {
+            if now >= self.timers.rekey_attempt_deadline() {
                 tracing::debug!(%local_idx, "Connection expired (REKEY_ATTEMPT_TIME)");
                 self.expire(now);
                 return;
@@ -649,7 +654,7 @@ impl Tunnel {
         if let Some((rekey_timeout, _)) = self.handshake_rekey_timeout() {
             common_timers
                 .chain(iter::once(rekey_timeout))
-                .chain(iter::once(self.timers.rekey_attempt_time()))
+                .chain(iter::once(self.timers.rekey_attempt_deadline()))
                 .min()
         } else {
             let persistent_keepalive = self
