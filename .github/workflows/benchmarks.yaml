@@ -80,7 +80,7 @@ jobs:
           fi
 
           # Bare Metal jobs can queue behind others, so only submit the job and start its GitHub Check.
-          # Once the job has run, Bencher dispatches `bencher_run` to `bencher-attach.yaml`, which posts the results.
+          # Once the job has run, Bencher dispatches `bencher_run` to `bencher-results.yaml`, which posts the results.
           bencher run "${args[@]}" \
             --testbed "bare-metal-$BENCHER_SPEC" \
             --spec "$BENCHER_SPEC" \
