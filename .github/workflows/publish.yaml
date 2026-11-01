@@ -10,6 +10,7 @@ permissions:
 jobs:
   crates-io:
     runs-on: ubuntu-latest
+    environment: crates-io
     permissions:
       contents: read
       id-token: write
