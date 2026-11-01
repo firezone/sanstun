@@ -184,26 +184,19 @@ fn delayed_response_to_a_superseded_initiation_is_accepted() {
     sim.assert_connectivity();
 }
 
-/// Completes A's handshake over a 6s round trip: B answers A's first initiation, and the response
-/// arrives after A has retried at `REKEY_TIMEOUT`.
-fn establish_with_round_trip_longer_than_rekey_timeout(sim: &mut Sim) {
+// A response to the previous initiation also ends the newer one, so it is not retried.
+#[test]
+fn no_initiation_is_sent_after_a_delayed_response_completes_the_handshake() {
+    let mut sim = Sim::new();
     sim.cut_link();
     let first_init = sim.initiate_handshake(A);
     sim.advance(secs(3));
     let response = sim.deliver(B, &first_init).expect_one_net();
     sim.advance(secs(3));
     assert_eq!(sim.count(A, Kind::Init), 1, "A retries before the response");
-
     sim.heal_link();
     sim.route(B, response);
     assert!(sim.is_established(A));
-}
-
-// A response to the previous initiation also ends the newer one, so it is not retried.
-#[test]
-fn no_initiation_is_sent_after_a_delayed_response_completes_the_handshake() {
-    let mut sim = Sim::new();
-    establish_with_round_trip_longer_than_rekey_timeout(&mut sim);
 
     sim.clear_log();
     sim.advance(REKEY_TIMEOUT + MAX_JITTER + secs(1));
