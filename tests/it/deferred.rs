@@ -434,7 +434,7 @@ fn extracted_messages_commit_separately_from_the_rest_of_their_batch() {
         .to_vec();
 
     let mut decrypted = sim.decrypt_batch(B, &datagrams);
-    let probes = decrypted.extract_if(|buffer| buffer.starts_with(&probe));
+    let probes = decrypted.extract_map(|buffer| buffer.starts_with(&probe).then(|| buffer.clone()));
     let probes = sim.commit_batch(B, probes).unwrap();
     let rest = sim.commit_batch(B, decrypted).unwrap();
 
@@ -457,7 +457,7 @@ fn replayed_extracted_message_is_rejected_at_commit() {
     let datagrams = [&probe, &data].map(|ip_packet| sim.encapsulate(A, ip_packet));
 
     let mut decrypted = sim.decrypt_batch(B, &datagrams);
-    let probes = decrypted.extract_if(|buffer| buffer.starts_with(&probe));
+    let probes = decrypted.extract_map(|buffer| buffer.starts_with(&probe).then(|| buffer.clone()));
     sim.deliver(B, &datagrams[0]).expect_one_ip();
 
     let [result] = sim.commit_batch(B, probes).unwrap().try_into().unwrap();

@@ -718,21 +718,37 @@ impl<B> DecryptedBatch<B> {
         }
     }
 
-    /// Moves the messages whose plaintext matches `f` into a batch of their own.
+    /// Moves the data messages that `f` maps to `Some` into a batch of their own, with the
+    /// mapped value as their plaintext.
     ///
     /// Both batches keep the counters of their messages for the replay check and commit
     /// independently of each other. Keepalives and messages that failed to decrypt stay in
     /// `self`. Both batches keep the order of their messages.
-    pub fn extract_if(&mut self, mut f: impl FnMut(&B) -> bool) -> DecryptedBatch<B> {
+    pub fn extract_map<C>(&mut self, mut f: impl FnMut(&B) -> Option<C>) -> DecryptedBatch<C> {
+        let mut extracted = Vec::new();
+        let originals = self.messages.extract_if(.., |(counter, plaintext)| {
+            let Ok(Plaintext::Data { buffer, len }) = plaintext else {
+                return false;
+            };
+            let Some(mapped) = f(buffer) else {
+                return false;
+            };
+
+            extracted.push((
+                *counter,
+                Ok(Plaintext::Data {
+                    buffer: mapped,
+                    len: *len,
+                }),
+            ));
+            true
+        });
+        for _ in originals {}
+
         DecryptedBatch {
             receiving_index: self.receiving_index,
             session: self.session,
-            messages: self
-                .messages
-                .extract_if(.., |(_, plaintext)| {
-                    matches!(plaintext, Ok(Plaintext::Data { buffer, .. }) if f(buffer))
-                })
-                .collect(),
+            messages: extracted,
         }
     }
 
