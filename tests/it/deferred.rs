@@ -300,7 +300,7 @@ fn decrypting_more_messages_than_the_batch_holds_is_a_bug() {
 }
 
 #[test]
-fn increment_rejects_another_session_and_replays_without_changing_the_batch() {
+fn push_rejects_another_session_and_replays_without_changing_the_batch() {
     let mut sim = Sim::connected();
     let ip_packet = ipv4_packet(b"batched");
     let old_session = sim.encapsulate(A, &ip_packet);
@@ -317,14 +317,8 @@ fn increment_rejects_another_session_and_replays_without_changing_the_batch() {
     let now = sim.now;
     let mut batch = sim.tunn_mut(B).begin_decapsulate(fresh, now).unwrap();
 
-    assert!(matches!(
-        batch.increment(old_session),
-        Err(Error::WrongIndex)
-    ));
-    assert!(matches!(
-        batch.increment(seen),
-        Err(Error::DuplicateCounter)
-    ));
+    assert!(matches!(batch.push(old_session), Err(Error::WrongIndex)));
+    assert!(matches!(batch.push(seen), Err(Error::DuplicateCounter)));
     assert_eq!(batch.finish().len(), 1);
 }
 

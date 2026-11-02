@@ -174,7 +174,7 @@ impl Session {
             session: self,
             counters: Vec::new(),
         };
-        batch.increment(packet)?;
+        batch.push(packet)?;
 
         Ok(batch)
     }
@@ -528,7 +528,7 @@ impl DecapsulateBatch<'_> {
     /// Fails with [`Error::WrongIndex`] for a message of another session; begin a new batch for
     /// it. Fails with [`Error::DuplicateCounter`] or [`Error::InvalidCounter`] if the replay
     /// window already rejects the message's counter. The batch is unchanged on failure.
-    pub fn increment(&mut self, message: TransportData) -> Result<(), Error> {
+    pub fn push(&mut self, message: TransportData) -> Result<(), Error> {
         self.session.will_receive(&message)?;
         self.counters.push(message.counter);
 
@@ -837,18 +837,15 @@ mod tests {
     }
 
     #[test]
-    fn increment_leaves_the_batch_unchanged_on_failure() {
+    fn push_leaves_the_batch_unchanged_on_failure() {
         let mut session = session(Index::new_local(0));
         session.receiving_key_counter.mark_did_receive(1).unwrap();
 
         let mut batch = session.prepare_receive_packet_data(data(0, 0)).unwrap();
 
+        assert!(matches!(batch.push(data(1, 2)), Err(Error::WrongIndex)));
         assert!(matches!(
-            batch.increment(data(1, 2)),
-            Err(Error::WrongIndex)
-        ));
-        assert!(matches!(
-            batch.increment(data(0, 1)),
+            batch.push(data(0, 1)),
             Err(Error::DuplicateCounter)
         ));
         assert_eq!(batch.counters, [0]);

@@ -677,7 +677,7 @@ impl Sim {
             .begin_decapsulate(messages.next().expect("at least one datagram"), now)
             .unwrap();
         for message in messages {
-            batch.increment(message).unwrap();
+            batch.push(message).unwrap();
         }
 
         batch.finish().decrypt(

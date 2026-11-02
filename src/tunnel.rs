@@ -364,7 +364,7 @@ impl Tunnel {
 
     /// Starts a batch of data messages received for one of our sessions.
     ///
-    /// Add further messages of the same session with [`DecapsulateBatch::increment`], for
+    /// Add further messages of the same session with [`DecapsulateBatch::push`], for
     /// example the segments of one GRO datagram, then finish the batch, decrypt it and pass each
     /// result to [`Tunnel::commit_decapsulate`] to accept its plaintext. The tunnel only
     /// changes once a message is authenticated, in `commit_decapsulate`.
