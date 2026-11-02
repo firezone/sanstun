@@ -1,0 +1,59 @@
+name: Bump version
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - run: rustup toolchain install
+      - name: Bump the patch version
+        id: version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+
+          if [[ ! "$TAG" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "Unexpected tag format: $TAG" >&2
+            exit 1
+          fi
+          released="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+          next="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
+
+          current=$(grep -m1 -oP '^version = "\K[^"]+' Cargo.toml)
+          if [ "$current" != "$released" ]; then
+            echo "main is at $current, not the released $released; leaving it alone."
+            exit 0
+          fi
+
+          sed -i "0,/^version = \".*\"$/s//version = \"$next\"/" Cargo.toml
+          cargo update --workspace
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app-token
+        if: steps.version.outputs.next
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          repositories: ${{ github.repository }}
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: firezone/actions/create-pull-request@9330ff2651240b57aa6c300a3ab86bb210c4c5b5 # main
+        if: steps.version.outputs.next
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          branch: chore/bump-version-${{ steps.version.outputs.next }}
+          title: "chore: bump version to ${{ steps.version.outputs.next }}"
+          paths: |
+            Cargo.toml
+            Cargo.lock
