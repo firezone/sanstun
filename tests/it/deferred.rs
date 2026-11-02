@@ -240,7 +240,6 @@ fn batch_reserves_consecutive_counters() {
                 .map(Vec::as_slice)
                 .zip(bufs.iter_mut().map(Vec::as_mut_slice)),
         )
-        .unwrap()
         .map(|message| message.unwrap().to_vec())
         .collect::<Vec<_>>();
 
@@ -265,7 +264,6 @@ fn unused_counters_of_a_batch_are_tolerated_by_the_peer() {
                 .into_iter()
                 .zip(bufs.iter_mut().map(Vec::as_mut_slice)),
         )
-        .unwrap()
         .next()
         .unwrap()
         .unwrap()
@@ -278,42 +276,27 @@ fn unused_counters_of_a_batch_are_tolerated_by_the_peer() {
 }
 
 #[test]
-fn encrypt_rejects_a_batch_of_the_wrong_size() {
+#[should_panic(expected = "fewer messages than reserved counters")]
+fn encrypting_fewer_messages_than_reserved_is_a_bug() {
     let mut sim = Sim::connected();
     let ip_packet = ipv4_packet(b"one of two");
     let mut buf = vec![0u8; BUF];
 
-    let result = sim
-        .begin_encrypt(A, 2)
-        .encrypt([(ip_packet.as_slice(), buf.as_mut_slice())]);
-
-    assert!(matches!(
-        result,
-        Err(Error::BatchSizeMismatch {
-            expected: 2,
-            actual: 1
-        })
-    ));
+    let pending = sim.begin_encrypt(A, 2);
+    for _ in pending.encrypt([(ip_packet.as_slice(), buf.as_mut_slice())]) {}
 }
 
 #[test]
-fn decrypt_rejects_a_batch_of_the_wrong_size() {
+#[should_panic(expected = "more messages than the batch holds")]
+fn decrypting_more_messages_than_the_batch_holds_is_a_bug() {
     let mut sim = Sim::connected();
     let datagram = sim.encapsulate(A, &ipv4_packet(b"one"));
     let pending = sim.prepare_decrypt(B, &datagram).unwrap();
 
-    let result = pending.decrypt([
+    let _ = pending.decrypt([
         (datagram.as_slice(), vec![0u8; BUF]),
         (datagram.as_slice(), vec![0u8; BUF]),
     ]);
-
-    assert!(matches!(
-        result,
-        Err(Error::BatchSizeMismatch {
-            expected: 1,
-            actual: 2
-        })
-    ));
 }
 
 #[test]

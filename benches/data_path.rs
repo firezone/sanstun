@@ -91,7 +91,6 @@ fn bench_data_path(c: &mut Criterion) {
                         now,
                     )
                     .decrypt([(message.as_slice(), vec![0; size + 64])])
-                    .unwrap()
                     .next()
                     .unwrap()
                 },
@@ -135,7 +134,6 @@ fn begin_encapsulate(tunnel: &mut Tunnel, now: Instant) -> sanstun::PendingEncap
 fn encrypt(pending: sanstun::PendingEncapsulate, payload: &[u8], buf: &mut [u8]) -> usize {
     pending
         .encrypt([(payload, buf)])
-        .unwrap()
         .next()
         .unwrap()
         .unwrap()

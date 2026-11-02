@@ -115,7 +115,7 @@ pub fn encrypt_one<'a>(
     dst: &'a mut [u8],
 ) -> Result<DataMessage<'a>, Error> {
     pending
-        .encrypt([(plaintext, dst)])?
+        .encrypt([(plaintext, dst)])
         .next()
         .expect("one counter to be reserved")
 }
@@ -128,7 +128,6 @@ pub fn decrypt_one<B: AsMut<[u8]>>(
 ) -> Decrypted<B> {
     pending
         .decrypt([(datagram, dst)])
-        .expect("one message for a batch of one")
         .next()
         .expect("one message in the batch")
 }
@@ -681,14 +680,11 @@ impl Sim {
             batch.increment(message).unwrap();
         }
 
-        batch
-            .finish()
-            .decrypt(
-                datagrams
-                    .iter()
-                    .map(|datagram| (datagram.as_slice(), vec![0u8; BUF])),
-            )
-            .unwrap()
+        batch.finish().decrypt(
+            datagrams
+                .iter()
+                .map(|datagram| (datagram.as_slice(), vec![0u8; BUF])),
+        )
     }
 
     /// Commits a decryption on `to`, returning an IP packet or `None` for a keepalive.

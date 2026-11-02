@@ -429,52 +429,48 @@ impl PendingEncapsulate {
     /// Encrypts each plaintext into a data message at the start of its buffer, as the iterator
     /// is pulled.
     ///
-    /// The messages take the reserved counters in order. Fails with
-    /// [`Error::BatchSizeMismatch`] unless there are exactly as many messages as reserved
-    /// counters. Counters of messages that are never pulled stay unused, which the receiver
-    /// tolerates.
+    /// The messages take the reserved counters in order. Pass exactly as many messages as
+    /// reserved counters; anything else is a bug that debug builds panic on. The iterator never
+    /// encrypts more messages than reserved. Counters of messages that are never pulled stay
+    /// unused, which the receiver tolerates.
     ///
     /// Zero-padding rounds each payload up to a multiple of 16 bytes. Including the header and
     /// tag, a buffer must hold at least `plaintext.len().next_multiple_of(16) + 32` bytes.
     ///
     /// An empty plaintext fails with [`Error::EmptyPlaintext`]. The [`Tunnel`](crate::Tunnel)
     /// sends keepalives itself, as [`Event::SendKeepalive`](crate::Event::SendKeepalive).
-    pub fn encrypt<'a, I>(
-        self,
-        messages: I,
-    ) -> Result<impl ExactSizeIterator<Item = Result<DataMessage<'a>, Error>>, Error>
+    pub fn encrypt<'a, I>(self, messages: I) -> impl Iterator<Item = Result<DataMessage<'a>, Error>>
     where
         I: IntoIterator<Item = (&'a [u8], &'a mut [u8])>,
-        I::IntoIter: ExactSizeIterator,
     {
-        let messages = messages.into_iter();
-        let len = self.len.get();
-        if messages.len() != len {
-            return Err(Error::BatchSizeMismatch {
-                expected: len,
-                actual: messages.len(),
-            });
-        }
-
         let aead = self.key.aead();
+        let mut messages = messages.into_iter();
+        let mut remaining = self.len.get();
+        let mut counter = self.first_counter;
 
-        // `ExactSizeIterator::len` is not trusted to bound the counters: each must be used once.
-        Ok(messages
-            .take(len)
-            .enumerate()
-            .map(move |(i, (plaintext, dst))| {
-                if plaintext.is_empty() {
-                    return Err(Error::EmptyPlaintext);
-                }
+        std::iter::from_fn(move || {
+            if remaining == 0 {
+                debug_assert!(
+                    messages.next().is_none(),
+                    "more messages than reserved counters"
+                );
+                return None;
+            }
+            let Some((plaintext, dst)) = messages.next() else {
+                debug_assert!(false, "fewer messages than reserved counters");
+                return None;
+            };
+            remaining -= 1;
 
-                encrypt_payload(
-                    &aead,
-                    self.receiver_index,
-                    self.first_counter + i as u64,
-                    plaintext,
-                    dst,
-                )
-            }))
+            let message = if plaintext.is_empty() {
+                Err(Error::EmptyPlaintext)
+            } else {
+                encrypt_payload(&aead, self.receiver_index, counter, plaintext, dst)
+            };
+            counter += 1;
+
+            Some(message)
+        })
     }
 }
 
@@ -572,45 +568,44 @@ impl PendingDecapsulate {
 
     /// Copies the ciphertext of each message to the start of its buffer and decrypts it in place.
     ///
-    /// Pass the original data messages in the order they were added to the batch. Fails with
-    /// [`Error::BatchSizeMismatch`] unless there are exactly as many messages as the batch holds.
-    /// The results own their buffers; commit each with
+    /// Pass the original data messages in the order they were added to the batch. The results
+    /// own their buffers; commit each with
     /// [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate) to obtain its
     /// plaintext. A message that fails to decrypt does not affect the others.
-    pub fn decrypt<'a, B, I>(self, messages: I) -> Result<DecryptedBatch<B>, Error>
+    ///
+    /// Pass exactly as many messages as the batch holds; anything else is a bug that debug
+    /// builds panic on. Release builds decrypt as many as both have.
+    pub fn decrypt<'a, B, I>(self, messages: I) -> DecryptedBatch<B>
     where
         B: AsMut<[u8]>,
         I: IntoIterator<Item = (&'a [u8], B)>,
-        I::IntoIter: ExactSizeIterator,
     {
-        let messages = messages.into_iter();
-        if messages.len() != self.counters.len() {
-            return Err(Error::BatchSizeMismatch {
-                expected: self.counters.len(),
-                actual: messages.len(),
+        let aead = self.key.aead();
+        let mut messages = messages.into_iter();
+        let mut decrypted = Vec::with_capacity(self.counters.len());
+
+        for &counter in &self.counters {
+            let Some((message, mut dst)) = messages.next() else {
+                debug_assert!(false, "fewer messages than the batch holds");
+                break;
+            };
+            let plaintext =
+                decrypt_in_place(&aead, self.receiving_index, counter, message, dst.as_mut())
+                    .map(|len| Plaintext::new(dst, len));
+
+            decrypted.push(Decrypted {
+                receiving_index: self.receiving_index,
+                session: self.session,
+                counter,
+                plaintext,
             });
         }
+        debug_assert!(
+            messages.next().is_none(),
+            "more messages than the batch holds"
+        );
 
-        let aead = self.key.aead();
-        let decrypted = self
-            .counters
-            .iter()
-            .zip(messages)
-            .map(|(&counter, (message, mut dst))| {
-                let plaintext =
-                    decrypt_in_place(&aead, self.receiving_index, counter, message, dst.as_mut())
-                        .map(|len| Plaintext::new(dst, len));
-
-                Decrypted {
-                    receiving_index: self.receiving_index,
-                    session: self.session,
-                    counter,
-                    plaintext,
-                }
-            })
-            .collect::<Vec<_>>();
-
-        Ok(DecryptedBatch(decrypted.into_iter()))
+        DecryptedBatch(decrypted.into_iter())
     }
 }
 
@@ -877,7 +872,6 @@ mod tests {
         let decrypted = pending
             .finish()
             .decrypt([(message.as_slice(), [0; 32])])
-            .unwrap()
             .next()
             .unwrap();
 

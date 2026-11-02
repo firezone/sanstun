@@ -46,12 +46,12 @@
 //! let packet = b"an IP packet";
 //! let mut buf = [0; 64];
 //! let pending = alice_to_bob.begin_encapsulate(now)?.finish(NonZeroUsize::MIN)?;
-//! let data = pending.encrypt([(packet.as_slice(), buf.as_mut_slice())])?.next().unwrap()?;
+//! let data = pending.encrypt([(packet.as_slice(), buf.as_mut_slice())]).next().unwrap()?;
 //!
 //! // Bob decrypts and accepts it. A batch holds all messages of one session in a datagram.
 //! let mut decrypted = match bob.receive(alice_addr, &data, now)? {
 //!     Received::Message(ReceivedMessage::TransportData(message)) => {
-//!         bob_to_alice.begin_decapsulate(message, now)?.finish().decrypt([(&*data, [0; 64])])?
+//!         bob_to_alice.begin_decapsulate(message, now)?.finish().decrypt([(&*data, [0; 64])])
 //!     }
 //!     received => unreachable!("expected data, got {received:?}"),
 //! };

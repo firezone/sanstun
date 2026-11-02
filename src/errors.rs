@@ -19,11 +19,6 @@ pub enum Error {
     NoCurrentSession,
     ConnectionExpired,
     EmptyPlaintext,
-    /// A batch was given a different number of messages than it holds.
-    BatchSizeMismatch {
-        expected: usize,
-        actual: usize,
-    },
     LowOrderPoint,
     RateLimited,
 }
@@ -66,9 +61,6 @@ impl Display for Error {
                 f,
                 "an empty data message is a keepalive; the tunnel sends those itself"
             ),
-            Error::BatchSizeMismatch { expected, actual } => {
-                write!(f, "batch holds {expected} messages, got {actual}")
-            }
             Error::LowOrderPoint => write!(
                 f,
                 "low-order public key produces an all-zero X25519 shared secret"
