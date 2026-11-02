@@ -188,19 +188,23 @@ impl Session {
         self.receiving_key_counter.will_accept(packet.counter)
     }
 
-    /// Commits an authenticated message's counter and returns its plaintext length.
+    /// Commits an authenticated message's counter, or fails `plaintext` if it is a replay.
     pub(super) fn finish_receive_packet_data<B>(
         &mut self,
         counter: u64,
-        plaintext: Result<Plaintext<B>, Error>,
-    ) -> Result<Plaintext<B>, Error> {
-        let plaintext = plaintext?;
+        plaintext: &mut Result<Plaintext<B>, Error>,
+    ) {
+        let Ok(decrypted) = plaintext else {
+            return;
+        };
+        let is_data = matches!(decrypted, Plaintext::Data { .. });
 
         // Recheck after authentication: another copy may have been accepted during decryption.
-        self.receiving_key_counter.mark_did_receive(counter)?;
-        self.received_data |= matches!(plaintext, Plaintext::Data { .. });
-
-        Ok(plaintext)
+        if let Err(e) = self.receiving_key_counter.mark_did_receive(counter) {
+            *plaintext = Err(e);
+            return;
+        }
+        self.received_data |= is_data;
     }
 }
 
@@ -548,7 +552,7 @@ impl DecapsulateBatch<'_> {
 
 /// Data messages ready for decryption after an initial replay check.
 ///
-/// A counter is only marked as received when its [`Decrypted`] result is committed to the
+/// A counter is only marked as received when the [`DecryptedBatch`] is committed to the
 /// [`Tunnel`](crate::Tunnel). Failed authentication never advances the replay window.
 #[derive(Debug)]
 #[must_use = "the data messages are not decrypted until `decrypt` is called"]
@@ -568,10 +572,10 @@ impl PendingDecapsulate {
 
     /// Copies the ciphertext of each message to the start of its buffer and decrypts it in place.
     ///
-    /// Pass the original data messages in the order they were added to the batch. The results
-    /// own their buffers; commit each with
-    /// [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate) to obtain its
-    /// plaintext. A message that fails to decrypt does not affect the others.
+    /// Pass the original data messages in the order they were added to the batch. The result
+    /// owns their buffers; commit it with
+    /// [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate) to obtain the
+    /// plaintexts. A message that fails to decrypt does not affect the others.
     ///
     /// Pass exactly as many messages as the batch holds; anything else is a bug that debug
     /// builds panic on. Release builds decrypt as many as both have.
@@ -593,19 +597,18 @@ impl PendingDecapsulate {
                 decrypt_in_place(&aead, self.receiving_index, counter, message, dst.as_mut())
                     .map(|len| Plaintext::new(dst, len));
 
-            decrypted.push(Decrypted {
-                receiving_index: self.receiving_index,
-                session: self.session,
-                counter,
-                plaintext,
-            });
+            decrypted.push((counter, plaintext));
         }
         debug_assert!(
             messages.next().is_none(),
             "more messages than the batch holds"
         );
 
-        DecryptedBatch(decrypted.into_iter())
+        DecryptedBatch {
+            receiving_index: self.receiving_index,
+            session: self.session,
+            messages: decrypted,
+        }
     }
 }
 
@@ -654,87 +657,67 @@ fn data_header(receiver_index: [u8; 4], counter: u64) -> [u8; DATA_HEADER_SZ] {
     header
 }
 
-/// The results of decrypting one batch, in the order its messages were added.
+/// The results of decrypting one batch, awaiting
+/// [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate).
 #[must_use = "the data messages are not accepted until they are committed to the `Tunnel`"]
-pub struct DecryptedBatch<B>(std::vec::IntoIter<Decrypted<B>>);
-
-impl<B> Iterator for DecryptedBatch<B> {
-    type Item = Decrypted<B>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.next()
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.0.size_hint()
-    }
-}
-
-impl<B> ExactSizeIterator for DecryptedBatch<B> {}
-
-impl<B> std::fmt::Debug for DecryptedBatch<B> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("DecryptedBatch")
-            .field(&self.0.as_slice())
-            .finish()
-    }
-}
-
-/// A decryption result awaiting [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate).
-#[must_use = "the data message is not accepted until it is committed to the `Tunnel`"]
-pub struct Decrypted<B> {
+pub struct DecryptedBatch<B> {
     pub(crate) receiving_index: Index,
-    /// Identifies the session the message was decrypted with, even after its index was reused.
+    /// Identifies the session the batch was decrypted with, even after its index was reused.
     pub(crate) session: SessionId,
-    pub(crate) counter: u64,
-    pub(crate) plaintext: Result<Plaintext<B>, Error>,
+    /// The counter and decryption result of each message, in the order they were added.
+    pub(crate) messages: Vec<(u64, Result<Plaintext<B>, Error>)>,
 }
 
-impl<B> Decrypted<B> {
-    /// The plaintext of a data message that decrypted.
+impl<B> DecryptedBatch<B> {
+    /// The plaintexts of the data messages that decrypted, in order.
     ///
-    /// Decryption proves the message came from the peer with this session's key, but only
+    /// Decryption proves a message came from the peer with this session's key, but only
     /// [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate) checks it against the
     /// replay window and against the session still being current. Until then it may be a replay,
     /// so use it only for work without side effects, such as parsing or prefetching, and act on it
     /// only once it has been committed.
-    pub fn plaintext(&self) -> Option<&B> {
-        match &self.plaintext {
-            Ok(Plaintext::Data { buffer, .. }) => Some(buffer),
-            Ok(Plaintext::Keepalive) | Err(_) => None,
-        }
+    pub fn plaintexts(&self) -> impl Iterator<Item = &B> {
+        self.messages
+            .iter()
+            .filter_map(|(_, plaintext)| match plaintext {
+                Ok(Plaintext::Data { buffer, .. }) => Some(buffer),
+                Ok(Plaintext::Keepalive) | Err(_) => None,
+            })
     }
 
-    /// Maps the plaintext of a data message before it is committed.
+    /// Maps the plaintext of each data message before the batch is committed.
     ///
     /// Work that needs only the plaintext, such as parsing it, can thus happen on the thread that
-    /// decrypted the message. The same caveat as for [`Decrypted::plaintext`] applies: the message
-    /// has not been committed yet, so `f` must have no side effects.
-    pub fn map<C>(self, f: impl FnOnce(B, usize) -> C) -> Decrypted<C> {
-        Decrypted {
+    /// decrypted the batch. The same caveat as for [`DecryptedBatch::plaintexts`] applies: the
+    /// batch has not been committed yet, so `f` must have no side effects.
+    pub fn map<C>(self, mut f: impl FnMut(B, usize) -> C) -> DecryptedBatch<C> {
+        DecryptedBatch {
             receiving_index: self.receiving_index,
             session: self.session,
-            counter: self.counter,
-            plaintext: self.plaintext.map(|plaintext| match plaintext {
-                Plaintext::Keepalive => Plaintext::Keepalive,
-                Plaintext::Data { buffer, len } => Plaintext::Data {
-                    buffer: f(buffer, len),
-                    len,
-                },
-            }),
+            messages: self
+                .messages
+                .into_iter()
+                .map(|(counter, plaintext)| {
+                    let plaintext = plaintext.map(|plaintext| match plaintext {
+                        Plaintext::Keepalive => Plaintext::Keepalive,
+                        Plaintext::Data { buffer, len } => Plaintext::Data {
+                            buffer: f(buffer, len),
+                            len,
+                        },
+                    });
+
+                    (counter, plaintext)
+                })
+                .collect(),
         }
     }
 }
 
-impl<B> std::fmt::Debug for Decrypted<B> {
+impl<B> std::fmt::Debug for DecryptedBatch<B> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Decrypted")
+        f.debug_struct("DecryptedBatch")
             .field("receiving_index", &self.receiving_index)
-            .field("counter", &self.counter)
-            .field(
-                "plaintext_len",
-                &self.plaintext.as_ref().map(|plaintext| plaintext.len()),
-            )
+            .field("messages", &self.messages)
             .finish_non_exhaustive()
     }
 }
@@ -757,11 +740,16 @@ impl<B> Plaintext<B> {
 
         Self::Data { buffer, len }
     }
+}
 
-    fn len(&self) -> usize {
+impl<B> std::fmt::Debug for Plaintext<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Keepalive => 0,
-            Self::Data { len, .. } => *len,
+            Self::Keepalive => f.write_str("Keepalive"),
+            Self::Data { len, .. } => f
+                .debug_struct("Data")
+                .field("len", len)
+                .finish_non_exhaustive(),
         }
     }
 }
@@ -866,13 +854,12 @@ mod tests {
         message[8] = 1;
 
         let pending = session.prepare_receive_packet_data(data(0, 0)).unwrap();
-        let decrypted = pending
-            .finish()
-            .decrypt([(message.as_slice(), [0; 32])])
-            .next()
-            .unwrap();
+        let decrypted = pending.finish().decrypt([(message.as_slice(), [0; 32])]);
 
-        assert!(matches!(decrypted.plaintext, Err(Error::InvalidAeadTag)));
+        assert!(matches!(
+            decrypted.messages[..],
+            [(0, Err(Error::InvalidAeadTag))]
+        ));
     }
 
     fn data(receiver_idx: u32, counter: u64) -> TransportData {

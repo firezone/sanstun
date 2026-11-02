@@ -6,7 +6,7 @@ use crate::harness::{
     counter, decrypt_one, encrypt_one, ip_packet_len, ipv4_packet, receiver_index,
 };
 use sanstun::{
-    Committed, Decrypted, DecryptedBatch, Error, PendingDecapsulate, PendingEncapsulate,
+    Committed, CommittedBatch, DecryptedBatch, Error, PendingDecapsulate, PendingEncapsulate,
 };
 use std::time::Duration;
 
@@ -212,9 +212,8 @@ fn decrypted_message_owns_its_buffer() {
     let buf: Box<[u8]> = vec![0u8; BUF].into_boxed_slice();
     let pending = sim.prepare_decrypt(B, &datagram).unwrap();
     let decrypted = decrypt_one(pending, &datagram, buf);
-    let Committed::Data { buffer, len } =
-        sim.tunn_mut(B).commit_decapsulate(decrypted, now).unwrap()
-    else {
+    let mut committed = sim.tunn_mut(B).commit_decapsulate(decrypted, now).unwrap();
+    let Some(Ok(Committed::Data { buffer, len })) = committed.next() else {
         panic!("expected a data payload");
     };
 
@@ -342,12 +341,10 @@ fn decrypted_batch_is_not_committed_to_a_later_session_with_the_same_index() {
     let fresh = sim.encapsulate(A, &ip_packet);
     assert_eq!(receiver_index(&fresh), receiver_index(&datagrams[0]));
 
-    for decrypted in decrypted {
-        assert!(matches!(
-            sim.commit(B, decrypted),
-            Err(Error::NoCurrentSession)
-        ));
-    }
+    assert!(matches!(
+        sim.commit_batch(B, decrypted),
+        Err(Error::NoCurrentSession)
+    ));
     assert_eq!(sim.deliver(B, &fresh).expect_one_ip(), ip_packet);
 }
 
@@ -360,14 +357,28 @@ fn tampered_message_does_not_affect_the_rest_of_its_batch() {
         .collect::<Vec<_>>();
     *datagrams[1].last_mut().unwrap() ^= 1;
 
-    let results = sim
-        .decrypt_batch(B, &datagrams)
-        .map(|decrypted| sim.commit(B, decrypted))
-        .collect::<Vec<_>>();
+    let decrypted = sim.decrypt_batch(B, &datagrams);
+    let results = sim.commit_batch(B, decrypted).unwrap();
 
     assert_eq!(results.len(), 3);
     assert_eq!(results[0].as_ref().unwrap(), &Some(ip_packet.clone()));
     assert!(matches!(results[1], Err(Error::InvalidAeadTag)));
+    assert_eq!(results[2].as_ref().unwrap(), &Some(ip_packet));
+}
+
+#[test]
+fn replay_within_a_batch_does_not_affect_the_rest_of_it() {
+    let mut sim = Sim::connected();
+    let ip_packet = ipv4_packet(b"batched");
+    let first = sim.encapsulate(A, &ip_packet);
+    let second = sim.encapsulate(A, &ip_packet);
+
+    let decrypted = sim.decrypt_batch(B, &[first.clone(), first, second]);
+    let results = sim.commit_batch(B, decrypted).unwrap();
+
+    assert_eq!(results.len(), 3);
+    assert_eq!(results[0].as_ref().unwrap(), &Some(ip_packet.clone()));
+    assert!(matches!(results[1], Err(Error::DuplicateCounter)));
     assert_eq!(results[2].as_ref().unwrap(), &Some(ip_packet));
 }
 
@@ -378,5 +389,5 @@ fn deferred_work_can_move_to_another_thread() {
     assert_send::<PendingEncapsulate>();
     assert_send::<PendingDecapsulate>();
     assert_send::<DecryptedBatch<Vec<u8>>>();
-    assert_send::<Decrypted<Vec<u8>>>();
+    assert_send::<CommittedBatch<Vec<u8>>>();
 }

@@ -35,10 +35,11 @@ fn data_messages_are_zero_padded_to_a_multiple_of_16_bytes() {
         let now = sim.now;
         let pending = sim.prepare_decrypt(B, &datagram).unwrap();
         let decrypted = decrypt_one(pending, &datagram, vec![0u8; 4096]);
-        let Ok(Committed::Data {
+        let mut committed = sim.tunn_mut(B).commit_decapsulate(decrypted, now).unwrap();
+        let Some(Ok(Committed::Data {
             buffer,
             len: decrypted_len,
-        }) = sim.tunn_mut(B).commit_decapsulate(decrypted, now)
+        })) = committed.next()
         else {
             panic!("expected a data payload");
         };

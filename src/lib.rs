@@ -49,17 +49,19 @@
 //! let data = pending.encrypt([(packet.as_slice(), buf.as_mut_slice())]).next().unwrap()?;
 //!
 //! // Bob decrypts and accepts it. A batch holds all messages of one session in a datagram.
-//! let mut decrypted = match bob.receive(alice_addr, &data, now)? {
+//! let decrypted = match bob.receive(alice_addr, &data, now)? {
 //!     Received::Message(ReceivedMessage::TransportData(message)) => {
 //!         bob_to_alice.begin_decapsulate(message, now)?.finish().decrypt([(&*data, [0; 64])])
 //!     }
 //!     received => unreachable!("expected data, got {received:?}"),
 //! };
-//! match bob_to_alice.commit_decapsulate(decrypted.next().unwrap(), now)? {
-//!     // The plaintext is zero-padded to a multiple of 16 bytes.
-//!     Committed::Data { buffer, len } => assert_eq!(&buffer[..len], b"an IP packet\0\0\0\0"),
-//!     // A keepalive carries no packet to forward.
-//!     Committed::Keepalive => unreachable!("Alice sent a packet"),
+//! for committed in bob_to_alice.commit_decapsulate(decrypted, now)? {
+//!     match committed? {
+//!         // The plaintext is zero-padded to a multiple of 16 bytes.
+//!         Committed::Data { buffer, len } => assert_eq!(&buffer[..len], b"an IP packet\0\0\0\0"),
+//!         // A keepalive carries no packet to forward.
+//!         Committed::Keepalive => unreachable!("Alice sent a packet"),
+//!     }
 //! }
 //! # Ok::<(), sanstun::Error>(())
 //! ```
@@ -113,7 +115,6 @@ pub use message::{
     TransportData,
 };
 pub use session::{
-    DecapsulateBatch, Decrypted, DecryptedBatch, EncapsulateBatch, PendingDecapsulate,
-    PendingEncapsulate,
+    DecapsulateBatch, DecryptedBatch, EncapsulateBatch, PendingDecapsulate, PendingEncapsulate,
 };
-pub use tunnel::{Committed, Event, Tunnel, TunnelConfig};
+pub use tunnel::{Committed, CommittedBatch, Event, Tunnel, TunnelConfig};

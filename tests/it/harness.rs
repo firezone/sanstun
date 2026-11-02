@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use sanstun::Error;
 use sanstun::{
-    Committed, DataMessage, Decrypted, DecryptedBatch, PendingDecapsulate, PendingEncapsulate,
+    Committed, DataMessage, DecryptedBatch, PendingDecapsulate, PendingEncapsulate,
     ReceivedMessage, TransportData, Tunnel, TunnelConfig,
 };
 use sanstun::{Interface, Received};
@@ -125,12 +125,12 @@ pub fn decrypt_one<B: AsMut<[u8]>>(
     pending: PendingDecapsulate,
     datagram: &[u8],
     dst: B,
-) -> Decrypted<B> {
-    pending
-        .decrypt([(datagram, dst)])
-        .next()
-        .expect("one message in the batch")
+) -> DecryptedBatch<B> {
+    pending.decrypt([(datagram, dst)])
 }
+
+/// A committed IP packet, or `None` for a keepalive.
+pub type CommittedPacket = Result<Option<Vec<u8>>, Error>;
 
 /// A datagram observed on the simulated wire.
 #[derive(Debug)]
@@ -687,21 +687,39 @@ impl Sim {
         )
     }
 
-    /// Commits a decryption on `to`, returning an IP packet or `None` for a keepalive.
+    /// Commits a batch of one message on `to`.
     pub fn commit<B: AsRef<[u8]>>(
         &mut self,
         to: Peer,
-        decrypted: Decrypted<B>,
-    ) -> Result<Option<Vec<u8>>, Error> {
-        let now = self.now;
-        match self.tunn_mut(to).commit_decapsulate(decrypted, now)? {
-            Committed::Data { buffer, len } => {
-                let payload = &buffer.as_ref()[..len];
+        decrypted: DecryptedBatch<B>,
+    ) -> CommittedPacket {
+        let [result] = self
+            .commit_batch(to, decrypted)?
+            .try_into()
+            .expect("one message in the batch");
 
-                Ok(Some(payload[..ip_packet_len(payload)].to_vec()))
-            }
-            Committed::Keepalive => Ok(None),
-        }
+        result
+    }
+
+    /// Commits a batch on `to`, returning the result of each message.
+    pub fn commit_batch<B: AsRef<[u8]>>(
+        &mut self,
+        to: Peer,
+        decrypted: DecryptedBatch<B>,
+    ) -> Result<Vec<CommittedPacket>, Error> {
+        let now = self.now;
+        let committed = self.tunn_mut(to).commit_decapsulate(decrypted, now)?;
+
+        Ok(committed
+            .map(|committed| match committed? {
+                Committed::Data { buffer, len } => {
+                    let payload = &buffer.as_ref()[..len];
+
+                    Ok(Some(payload[..ip_packet_len(payload)].to_vec()))
+                }
+                Committed::Keepalive => Ok(None),
+            })
+            .collect())
     }
 
     /// Creates a handshake initiation from `peer` without delivering it.

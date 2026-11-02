@@ -91,8 +91,6 @@ fn bench_data_path(c: &mut Criterion) {
                         now,
                     )
                     .decrypt([(message.as_slice(), vec![0; size + 64])])
-                    .next()
-                    .unwrap()
                 },
                 |decrypted| {
                     black_box(
