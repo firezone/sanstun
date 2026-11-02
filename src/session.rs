@@ -434,6 +434,22 @@ impl PendingEncapsulate {
         self.len.get()
     }
 
+    /// Splits off the counters from `at` onwards into a new pending encapsulation.
+    ///
+    /// Keeps the first `at` counters. Returns [`None`] and keeps all counters if `at` is not
+    /// less than [`len`](Self::len).
+    pub fn split_off(&mut self, at: NonZeroUsize) -> Option<PendingEncapsulate> {
+        let rest = NonZeroUsize::new(self.len.get().checked_sub(at.get())?)?;
+        self.len = at;
+
+        Some(PendingEncapsulate {
+            key: self.key.clone(),
+            receiver_index: self.receiver_index,
+            first_counter: self.first_counter + at.get() as u64,
+            len: rest,
+        })
+    }
+
     /// Encrypts each plaintext into a data message at the start of its buffer, as the iterator
     /// is pulled.
     ///

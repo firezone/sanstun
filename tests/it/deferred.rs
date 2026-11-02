@@ -8,6 +8,7 @@ use crate::harness::{
 use sanstun::{
     Committed, CommittedBatch, DecryptedBatch, Error, PendingDecapsulate, PendingEncapsulate,
 };
+use std::num::NonZeroUsize;
 use std::time::Duration;
 
 #[test]
@@ -248,6 +249,47 @@ fn batch_reserves_consecutive_counters() {
     for (datagram, ip_packet) in datagrams.iter().zip(&ip_packets) {
         assert_eq!(&sim.deliver(B, datagram).expect_one_ip(), ip_packet);
     }
+}
+
+#[test]
+fn split_batch_keeps_consecutive_counters() {
+    let mut sim = Sim::connected();
+    let ip_packets = (0..3).map(|i| ipv4_packet(&[i])).collect::<Vec<_>>();
+    let mut bufs = vec![vec![0u8; BUF]; 3];
+
+    let mut first = sim.begin_encrypt(A, 3);
+    let second = first.split_off(NonZeroUsize::new(2).unwrap()).unwrap();
+    assert_eq!((first.len(), second.len()), (2, 1));
+    let (first_bufs, second_bufs) = bufs.split_at_mut(2);
+    let datagrams = second
+        .encrypt(std::iter::zip(
+            ip_packets[2..].iter().map(Vec::as_slice),
+            second_bufs.iter_mut().map(Vec::as_mut_slice),
+        ))
+        .chain(first.encrypt(std::iter::zip(
+            ip_packets[..2].iter().map(Vec::as_slice),
+            first_bufs.iter_mut().map(Vec::as_mut_slice),
+        )))
+        .map(|message| message.unwrap().to_vec())
+        .collect::<Vec<_>>();
+
+    let first = counter(&datagrams[1]);
+    let counters = datagrams.iter().map(|d| counter(d)).collect::<Vec<_>>();
+    assert_eq!(counters, [first + 2, first, first + 1]);
+    for (datagram, ip_packet) in datagrams.iter().zip([2, 0, 1].map(|i| &ip_packets[i])) {
+        assert_eq!(&sim.deliver(B, datagram).expect_one_ip(), ip_packet);
+    }
+}
+
+#[test]
+fn split_at_or_beyond_the_batch_keeps_it_whole() {
+    let mut sim = Sim::connected();
+
+    let mut pending = sim.begin_encrypt(A, 2);
+
+    assert!(pending.split_off(NonZeroUsize::new(2).unwrap()).is_none());
+    assert!(pending.split_off(NonZeroUsize::new(3).unwrap()).is_none());
+    assert_eq!(pending.len(), 2);
 }
 
 #[test]
