@@ -467,6 +467,23 @@ fn replayed_extracted_message_is_rejected_at_commit() {
 }
 
 #[test]
+fn committed_batch_lists_its_accepted_data() {
+    let mut sim = Sim::connected();
+    let ip_packet = ipv4_packet(b"accepted");
+    let first = sim.encapsulate(A, &ip_packet);
+    let mut tampered = sim.encapsulate(A, &ip_packet);
+    *tampered.last_mut().unwrap() ^= 1;
+
+    let decrypted = sim.decrypt_batch(B, &[first.clone(), first, tampered]);
+    let now = sim.now;
+    let mut committed = sim.tunn_mut(B).commit_decapsulate(decrypted, now).unwrap();
+
+    assert_eq!(committed.data().count(), 1);
+    committed.next();
+    assert_eq!(committed.data().count(), 0);
+}
+
+#[test]
 fn deferred_work_can_move_to_another_thread() {
     fn assert_send<T: Send>() {}
 

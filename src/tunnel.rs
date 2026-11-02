@@ -70,6 +70,19 @@ impl<B> std::fmt::Debug for Committed<B> {
 /// added to the batch.
 pub struct CommittedBatch<B>(std::vec::IntoIter<(u64, Result<Plaintext<B>, Error>)>);
 
+impl<B> CommittedBatch<B> {
+    /// Returns the plaintexts of the accepted data messages the batch has yet to yield.
+    pub fn data(&self) -> impl Iterator<Item = &B> {
+        self.0
+            .as_slice()
+            .iter()
+            .filter_map(|(_, plaintext)| match plaintext {
+                Ok(Plaintext::Data { buffer, .. }) => Some(buffer),
+                Ok(Plaintext::Keepalive) | Err(_) => None,
+            })
+    }
+}
+
 impl<B> Iterator for CommittedBatch<B> {
     type Item = Result<Committed<B>, Error>;
 
