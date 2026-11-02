@@ -172,7 +172,7 @@ impl Session {
     ) -> Result<DecapsulateBatch<'_>, Error> {
         let mut batch = DecapsulateBatch {
             session: self,
-            counters: Vec::new(),
+            counters: Vec::with_capacity(TYPICAL_BATCH_LEN),
         };
         batch.push(packet)?;
 
@@ -207,6 +207,9 @@ impl Session {
         self.received_data |= is_data;
     }
 }
+
+/// The most segments Linux coalesces into one GRO datagram; other platforms bound only its size.
+const TYPICAL_BATCH_LEN: usize = 64;
 
 const N_SESSIONS: u8 = 8;
 
