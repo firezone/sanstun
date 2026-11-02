@@ -83,6 +83,12 @@ impl<B> CommittedBatch<B> {
     }
 }
 
+impl<B> Default for CommittedBatch<B> {
+    fn default() -> Self {
+        Self(Vec::new().into_iter())
+    }
+}
+
 impl<B> Iterator for CommittedBatch<B> {
     type Item = Result<Committed<B>, Error>;
 
