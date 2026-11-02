@@ -208,7 +208,8 @@ impl Session {
     }
 }
 
-/// The most segments Linux coalesces into one GRO datagram; other platforms bound only its size.
+/// Most tunnels run at an MTU of about 1280 bytes, so a GRO datagram of up to 64 KiB holds
+/// around 64 of their data messages.
 const TYPICAL_BATCH_LEN: usize = 64;
 
 const N_SESSIONS: u8 = 8;
