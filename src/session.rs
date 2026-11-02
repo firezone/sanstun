@@ -669,27 +669,13 @@ pub struct DecryptedBatch<B> {
 }
 
 impl<B> DecryptedBatch<B> {
-    /// The plaintexts of the data messages that decrypted, in order.
-    ///
-    /// Decryption proves a message came from the peer with this session's key, but only
-    /// [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate) checks it against the
-    /// replay window and against the session still being current. Until then it may be a replay,
-    /// so use it only for work without side effects, such as parsing or prefetching, and act on it
-    /// only once it has been committed.
-    pub fn plaintexts(&self) -> impl Iterator<Item = &B> {
-        self.messages
-            .iter()
-            .filter_map(|(_, plaintext)| match plaintext {
-                Ok(Plaintext::Data { buffer, .. }) => Some(buffer),
-                Ok(Plaintext::Keepalive) | Err(_) => None,
-            })
-    }
-
     /// Maps the plaintext of each data message before the batch is committed.
     ///
     /// Work that needs only the plaintext, such as parsing it, can thus happen on the thread that
-    /// decrypted the batch. The same caveat as for [`DecryptedBatch::plaintexts`] applies: the
-    /// batch has not been committed yet, so `f` must have no side effects.
+    /// decrypted the batch. Decryption proves a message came from the peer with this session's
+    /// key, but only [`Tunnel::commit_decapsulate`](crate::Tunnel::commit_decapsulate) checks it
+    /// against the replay window and against the session still being current. Until then it may
+    /// be a replay, so `f` must have no side effects.
     pub fn map<C>(self, mut f: impl FnMut(B, usize) -> C) -> DecryptedBatch<C> {
         DecryptedBatch {
             receiving_index: self.receiving_index,
