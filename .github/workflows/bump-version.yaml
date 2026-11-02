@@ -48,7 +48,7 @@ jobs:
           repositories: ${{ github.repository }}
           permission-contents: write
           permission-pull-requests: write
-      - uses: firezone/actions/create-pull-request@9330ff2651240b57aa6c300a3ab86bb210c4c5b5 # main
+      - uses: firezone/actions/create-pull-request@e55cd3726765e5dddda81e13875223310fda80fc # main
         if: steps.version.outputs.next
         with:
           token: ${{ steps.app-token.outputs.token }}
