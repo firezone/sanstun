@@ -425,6 +425,48 @@ fn replay_within_a_batch_does_not_affect_the_rest_of_it() {
 }
 
 #[test]
+fn extracted_messages_commit_separately_from_the_rest_of_their_batch() {
+    let mut sim = Sim::connected();
+    let probe = ipv4_packet(b"probe");
+    let data = ipv4_packet(b"data");
+    let datagrams = [&data, &probe, &data, &probe]
+        .map(|ip_packet| sim.encapsulate(A, ip_packet))
+        .to_vec();
+
+    let mut decrypted = sim.decrypt_batch(B, &datagrams);
+    let probes = decrypted.extract_if(|buffer| buffer.starts_with(&probe));
+    let probes = sim.commit_batch(B, probes).unwrap();
+    let rest = sim.commit_batch(B, decrypted).unwrap();
+
+    let ip_packets = |results: Vec<_>| results.into_iter().map(Result::unwrap).collect::<Vec<_>>();
+    assert_eq!(ip_packets(probes), [Some(probe.clone()), Some(probe)]);
+    assert_eq!(ip_packets(rest), [Some(data.clone()), Some(data)]);
+    for datagram in &datagrams {
+        assert!(matches!(
+            sim.deliver(B, datagram).expect_err(),
+            Error::DuplicateCounter
+        ));
+    }
+}
+
+#[test]
+fn replayed_extracted_message_is_rejected_at_commit() {
+    let mut sim = Sim::connected();
+    let probe = ipv4_packet(b"probe");
+    let data = ipv4_packet(b"data");
+    let datagrams = [&probe, &data].map(|ip_packet| sim.encapsulate(A, ip_packet));
+
+    let mut decrypted = sim.decrypt_batch(B, &datagrams);
+    let probes = decrypted.extract_if(|buffer| buffer.starts_with(&probe));
+    sim.deliver(B, &datagrams[0]).expect_one_ip();
+
+    let [result] = sim.commit_batch(B, probes).unwrap().try_into().unwrap();
+    assert!(matches!(result, Err(Error::DuplicateCounter)));
+    let [result] = sim.commit_batch(B, decrypted).unwrap().try_into().unwrap();
+    assert_eq!(result.unwrap(), Some(data));
+}
+
+#[test]
 fn deferred_work_can_move_to_another_thread() {
     fn assert_send<T: Send>() {}
 

@@ -717,6 +717,29 @@ impl<B> DecryptedBatch<B> {
                 .collect(),
         }
     }
+
+    /// Moves the messages whose plaintext matches `f` into a batch of their own.
+    ///
+    /// Both batches keep the counters of their messages for the replay check and commit
+    /// independently of each other. Keepalives and messages that failed to decrypt stay in
+    /// `self`. Both batches keep the order of their messages.
+    pub fn extract_if(&mut self, mut f: impl FnMut(&B) -> bool) -> DecryptedBatch<B> {
+        DecryptedBatch {
+            receiving_index: self.receiving_index,
+            session: self.session,
+            messages: self
+                .messages
+                .extract_if(.., |(_, plaintext)| {
+                    matches!(plaintext, Ok(Plaintext::Data { buffer, .. }) if f(buffer))
+                })
+                .collect(),
+        }
+    }
+
+    /// Returns whether the batch holds no messages.
+    pub fn is_empty(&self) -> bool {
+        self.messages.is_empty()
+    }
 }
 
 impl<B> std::fmt::Debug for DecryptedBatch<B> {
