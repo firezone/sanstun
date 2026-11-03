@@ -7,7 +7,7 @@ use crate::message::{
 };
 use crate::ring_buffer::RingBuffer;
 use crate::session::{
-    self, Decrypted, PendingDecapsulate, PendingEncapsulate, Plaintext, Role, Sessions,
+    DecapsulateBatch, DecryptedBatch, EncapsulateBatch, Plaintext, Role, Sessions,
 };
 use crate::tai64n::TimeStamper;
 use crate::timers::{MAX_JITTER, TimerName, Timers};
@@ -46,7 +46,7 @@ pub enum Event {
     ConnectionExpired,
 }
 
-/// The result of committing a decrypted packet.
+/// The result of committing one message of a [`DecryptedBatch`].
 pub enum Committed<B> {
     /// The first `len` bytes of `buffer` contain the decrypted payload, including any padding.
     Data { buffer: B, len: usize },
@@ -63,6 +63,56 @@ impl<B> std::fmt::Debug for Committed<B> {
                 .finish_non_exhaustive(),
             Committed::Keepalive => f.write_str("Keepalive"),
         }
+    }
+}
+
+/// The result of each message of a committed [`DecryptedBatch`], in the order the messages were
+/// added to the batch.
+pub struct CommittedBatch<B>(std::vec::IntoIter<(u64, Result<Plaintext<B>, Error>)>);
+
+impl<B> CommittedBatch<B> {
+    /// Returns the plaintexts of the accepted data messages the batch has yet to yield.
+    pub fn data(&self) -> impl Iterator<Item = &B> {
+        self.0
+            .as_slice()
+            .iter()
+            .filter_map(|(_, plaintext)| match plaintext {
+                Ok(Plaintext::Data { buffer, .. }) => Some(buffer),
+                Ok(Plaintext::Keepalive) | Err(_) => None,
+            })
+    }
+}
+
+impl<B> Default for CommittedBatch<B> {
+    fn default() -> Self {
+        Self(Vec::new().into_iter())
+    }
+}
+
+impl<B> Iterator for CommittedBatch<B> {
+    type Item = Result<Committed<B>, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (_, plaintext) = self.0.next()?;
+
+        Some(plaintext.map(|plaintext| match plaintext {
+            Plaintext::Keepalive => Committed::Keepalive,
+            Plaintext::Data { buffer, len } => Committed::Data { buffer, len },
+        }))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<B> ExactSizeIterator for CommittedBatch<B> {}
+
+impl<B> std::fmt::Debug for CommittedBatch<B> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("CommittedBatch")
+            .field(&self.0.as_slice())
+            .finish()
     }
 }
 
@@ -199,62 +249,53 @@ impl Tunnel {
         self.timers.set_rekey_timeout(rekey_timeout);
     }
 
-    /// Reserves a data message's counter for encryption with [`PendingEncapsulate::encrypt`].
-    pub fn begin_encapsulate(&mut self, now: Instant) -> Result<PendingEncapsulate, Error> {
+    /// Starts a batch of data messages to encrypt on the current sending session.
+    ///
+    /// The batch borrows the tunnel until [`EncapsulateBatch::finish`] reserves its counters,
+    /// so the counters of one batch are consecutive.
+    pub fn begin_encapsulate(&mut self, now: Instant) -> Result<EncapsulateBatch<'_>, Error> {
         self.ensure_not_expired()?;
 
-        let pending = self
-            .sending_session(now)
-            .ok_or(Error::NoCurrentSession)?
-            .prepare_packet_data();
+        let session = self
+            .sessions
+            .sending_session(self.timers.keepalive_timeout, now)
+            .ok_or(Error::NoCurrentSession)?;
         self.timers.tick(TimerName::TimeLastPacketSent, now);
         self.timers.tick(TimerName::TimeLastDataPacketSent, now);
 
-        Ok(pending)
+        Ok(session.prepare_packet_data())
     }
 
     /// Encrypts a keepalive using the current sending session.
     fn encrypt_keepalive(&mut self, now: Instant) -> Result<Datagram, Error> {
         let mut message = [0u8; DATA_OVERHEAD_SZ];
-        self.sending_session(now)
+        self.sessions
+            .sending_session(self.timers.keepalive_timeout, now)
             .ok_or(Error::NoCurrentSession)?
-            .prepare_keepalive()
-            .encrypt_payload(&[], &mut message)?;
+            .encrypt_keepalive(&mut message)?;
         self.timers.tick(TimerName::TimeLastPacketSent, now);
 
         Ok(Datagram::new(message))
     }
 
-    /// Returns a usable session for sending data, if one exists.
-    fn sending_session(&mut self, now: Instant) -> Option<&mut session::Session> {
-        let session = self.sessions.current_mut()?;
-
-        if session.sending_counter_exhausted() || session.expired_at(now) {
-            return None;
-        }
-        if !session.should_use_at(now, self.timers.keepalive_timeout)
-            && session.role() == Role::Initiator
-        {
-            return None;
-        }
-
-        Some(session)
-    }
-
-    /// Accepts a decrypted data message after checking its session and replay counter.
+    /// Accepts the messages of a decrypted batch after checking its session and their replay
+    /// counters.
+    ///
+    /// Fails as a whole if the tunnel expired, or the batch's session expired or was replaced
+    /// during decryption. Otherwise, a message that failed to decrypt or turns out to be a replay
+    /// fails on its own, without affecting the others.
     pub fn commit_decapsulate<B>(
         &mut self,
-        decrypted: Decrypted<B>,
+        batch: DecryptedBatch<B>,
         now: Instant,
-    ) -> Result<Committed<B>, Error> {
+    ) -> Result<CommittedBatch<B>, Error> {
         self.ensure_not_expired()?;
 
-        let Decrypted {
+        let DecryptedBatch {
             receiving_index: remote_idx,
             session: session_id,
-            counter,
-            plaintext,
-        } = decrypted;
+            mut messages,
+        } = batch;
 
         let Some(session) = self
             .sessions
@@ -268,19 +309,27 @@ impl Tunnel {
             tracing::trace!(%remote_idx, "Session expired during decryption");
             return Err(Error::NoCurrentSession);
         }
-        let plaintext = session.finish_receive_packet_data(counter, plaintext)?;
+        for (counter, plaintext) in &mut messages {
+            session.finish_receive_packet_data(*counter, plaintext);
+        }
         let accepted_at = session.established_at();
 
-        self.sessions.set_current(remote_idx);
-        self.timers.tick(TimerName::TimeLastPacketReceived, now);
-        self.confirm_first_session(accepted_at, now);
+        let mut accepted = messages
+            .iter()
+            .filter_map(|(_, plaintext)| plaintext.as_ref().ok())
+            .peekable();
 
-        let Plaintext::Data { buffer, len } = plaintext else {
-            return Ok(Committed::Keepalive);
-        };
-        self.timers.tick(TimerName::TimeLastDataPacketReceived, now);
+        if accepted.peek().is_some() {
+            self.sessions.set_current(remote_idx);
+            self.timers.tick(TimerName::TimeLastPacketReceived, now);
+            self.confirm_first_session(accepted_at, now);
 
-        Ok(Committed::Data { buffer, len })
+            if accepted.any(|plaintext| matches!(plaintext, Plaintext::Data { .. })) {
+                self.timers.tick(TimerName::TimeLastDataPacketReceived, now);
+            }
+        }
+
+        Ok(CommittedBatch(messages.into_iter()))
     }
 
     /// Answers a handshake initiation.
@@ -377,16 +426,17 @@ impl Tunnel {
         Ok(())
     }
 
-    /// Prepares a data message for decryption.
+    /// Starts a batch of data messages received for one of our sessions.
     ///
-    /// Decrypt the returned [`PendingDecapsulate`] and pass the result to
-    /// [`Tunnel::commit_decapsulate`] to accept the plaintext. The tunnel only
-    /// changes once the message is authenticated, in `commit_decapsulate`.
+    /// Add further messages of the same session with [`DecapsulateBatch::push`], for
+    /// example the segments of one GRO datagram, then finish the batch, decrypt it and pass the
+    /// result to [`Tunnel::commit_decapsulate`] to accept its plaintexts. The tunnel only
+    /// changes once a message is authenticated, in `commit_decapsulate`.
     pub fn begin_decapsulate(
         &self,
         packet: TransportData,
         now: Instant,
-    ) -> Result<PendingDecapsulate, Error> {
+    ) -> Result<DecapsulateBatch<'_>, Error> {
         self.ensure_not_expired()?;
 
         let remote_idx = Index::from_peer(packet.receiver_idx);

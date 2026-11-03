@@ -5,6 +5,10 @@ Releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **Breaking:** Data messages are encrypted, decrypted and committed in batches, which sets up the session and AEAD key once per batch instead of once per message (#129).
+
 ### Added
 
 - `Tunnel::rekey_attempt_time` returns the configured `REKEY_ATTEMPT_TIME`.

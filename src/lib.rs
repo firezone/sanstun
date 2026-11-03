@@ -7,6 +7,7 @@
 //! timers with [`Tunnel::poll_timeout`] and [`Tunnel::handle_timeout`].
 //!
 //! ```
+//! use std::num::NonZeroUsize;
 //! use std::time::{Instant, SystemTime, UNIX_EPOCH};
 //!
 //! use sanstun::{Committed, Interface, Received, ReceivedMessage, TunnelConfig};
@@ -41,23 +42,26 @@
 //!     received => unreachable!("expected a response, got {received:?}"),
 //! };
 //!
-//! // Alice encrypts a packet.
+//! // Alice encrypts a packet. A batch reserves consecutive counters for several packets.
 //! let packet = b"an IP packet";
 //! let mut buf = [0; 64];
-//! let data = alice_to_bob.begin_encapsulate(now)?.encrypt(packet, &mut buf)?;
+//! let pending = alice_to_bob.begin_encapsulate(now)?.finish(NonZeroUsize::MIN)?;
+//! let data = pending.encrypt([(packet.as_slice(), buf.as_mut_slice())]).next().unwrap()?;
 //!
-//! // Bob decrypts and accepts it.
+//! // Bob decrypts and accepts it. A batch holds all messages of one session in a datagram.
 //! let decrypted = match bob.receive(alice_addr, &data, now)? {
 //!     Received::Message(ReceivedMessage::TransportData(message)) => {
-//!         bob_to_alice.begin_decapsulate(message, now)?.decrypt(&data, [0; 64])
+//!         bob_to_alice.begin_decapsulate(message, now)?.finish().decrypt([(&*data, [0; 64])])
 //!     }
 //!     received => unreachable!("expected data, got {received:?}"),
 //! };
-//! match bob_to_alice.commit_decapsulate(decrypted, now)? {
-//!     // The plaintext is zero-padded to a multiple of 16 bytes.
-//!     Committed::Data { buffer, len } => assert_eq!(&buffer[..len], b"an IP packet\0\0\0\0"),
-//!     // A keepalive carries no packet to forward.
-//!     Committed::Keepalive => unreachable!("Alice sent a packet"),
+//! for committed in bob_to_alice.commit_decapsulate(decrypted, now)? {
+//!     match committed? {
+//!         // The plaintext is zero-padded to a multiple of 16 bytes.
+//!         Committed::Data { buffer, len } => assert_eq!(&buffer[..len], b"an IP packet\0\0\0\0"),
+//!         // A keepalive carries no packet to forward.
+//!         Committed::Keepalive => unreachable!("Alice sent a packet"),
+//!     }
 //! }
 //! # Ok::<(), sanstun::Error>(())
 //! ```
@@ -110,5 +114,7 @@ pub use message::{
     CookieReply, DataMessage, Datagram, HandshakeInitiation, HandshakeResponse, ReceivedMessage,
     TransportData,
 };
-pub use session::{Decrypted, PendingDecapsulate, PendingEncapsulate};
-pub use tunnel::{Committed, Event, Tunnel, TunnelConfig};
+pub use session::{
+    DecapsulateBatch, DecryptedBatch, EncapsulateBatch, PendingDecapsulate, PendingEncapsulate,
+};
+pub use tunnel::{Committed, CommittedBatch, Event, Tunnel, TunnelConfig};
