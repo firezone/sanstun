@@ -7,7 +7,7 @@ Releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Breaking:** Data messages are encrypted and decrypted in batches (#129). `Tunnel::begin_encapsulate` returns an `EncapsulateBatch` that reserves consecutive counters for a whole batch, and `Tunnel::begin_decapsulate` returns a `DecapsulateBatch` that collects the data messages of one session, e.g. the segments of a GRO datagram. `PendingEncapsulate::encrypt` and `PendingDecapsulate::decrypt` take all messages of a batch, and `Tunnel::commit_decapsulate` commits a `DecryptedBatch` at once and returns a `CommittedBatch`. The session key is copied and the AEAD key built once per batch instead of once per message.
+- **Breaking:** Data messages are encrypted, decrypted and committed in batches, which sets up the session and AEAD key once per batch instead of once per message (#129).
 
 ### Added
 
