@@ -12,9 +12,6 @@ Releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - `Tunnel::rekey_attempt_time` returns the configured `REKEY_ATTEMPT_TIME`.
-- `PendingEncapsulate::split_off` splits a pending batch, e.g. when it does not fit into one GSO train.
-- `DecryptedBatch::map` and `DecryptedBatch::extract_map` transform or remove decrypted messages before they are committed.
-- `CommittedBatch::data` lists the accepted data messages a committed batch has yet to yield.
 
 ### Fixed
 
