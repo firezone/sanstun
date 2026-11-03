@@ -1,7 +1,7 @@
-//! Measures the handshake and timer handlers.
+//! Measures the handshake handlers.
 //!
-//! These run on the thread that owns the tunnel, so their cost bounds how many handshakes and
-//! timeouts a single tunnel can handle.
+//! These run on the thread that owns the tunnel, so their cost bounds how many handshakes a single
+//! tunnel can handle.
 
 use std::hint::black_box;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use criterion::{BatchSize, Criterion};
 use sanstun::{
-    Event, HandshakeInitiation, HandshakeResponse, Interface, Received, ReceivedMessage, Tunnel,
+    HandshakeInitiation, HandshakeResponse, Interface, Received, ReceivedMessage, Tunnel,
     TunnelConfig,
 };
 use zeroize::Zeroizing;
@@ -120,40 +120,6 @@ fn bench_handshake(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_timers(c: &mut Criterion) {
-    let mut now = Instant::now();
-    let mut group = c.benchmark_group("timers");
-
-    let mut idle = established(TunnelConfig::default(), now);
-    idle.handle_timeout(now);
-    assert!(idle.poll_event().is_none());
-    assert!(idle.poll_timeout().unwrap() > now);
-
-    group.bench_function("poll_timeout", |b| {
-        b.iter(|| black_box(idle.poll_timeout()))
-    });
-
-    group.bench_function("handle_timeout/idle", |b| {
-        b.iter(|| idle.handle_timeout(black_box(now)))
-    });
-
-    let mut keepalive = established(TunnelConfig::default().with_persistent_keepalive(STEP), now);
-
-    group.bench_function("handle_timeout/keepalive", |b| {
-        b.iter(|| {
-            now += STEP;
-            keepalive.handle_timeout(now);
-            let Some(Event::SendKeepalive(datagram)) = keepalive.poll_event() else {
-                panic!("a persistent keepalive is due")
-            };
-
-            black_box(datagram)
-        })
-    });
-
-    group.finish();
-}
-
 /// Creates an interface that never requires cookies.
 fn interface(now: Instant) -> Interface {
     Interface::new(
@@ -162,24 +128,6 @@ fn interface(now: Instant) -> Interface {
         Duration::from_secs(1_700_000_000),
     )
     .with_handshake_limit(u64::MAX)
-}
-
-/// Returns an initiator that completed a handshake at `now`, with its events drained.
-fn established(config: TunnelConfig, now: Instant) -> Tunnel {
-    let mut interface_a = interface(now);
-    let mut interface_b = interface(now);
-    let mut a = interface_a
-        .new_tunnel(interface_b.static_public(), config, now)
-        .unwrap();
-    let mut b = interface_b
-        .new_tunnel(interface_a.static_public(), TunnelConfig::default(), now)
-        .unwrap();
-
-    let response = handshake(&mut interface_a, &mut a, &mut interface_b, &mut b, now);
-    a.handle_handshake_response(response, now).unwrap();
-    assert!(matches!(a.poll_event(), Some(Event::Established { .. })));
-
-    a
 }
 
 /// Sends a new initiation from `a` to `b` and returns `b`'s response, received by `a`'s interface.
@@ -221,6 +169,6 @@ criterion::criterion_group! {
     config = Criterion::default()
         .warm_up_time(Duration::from_secs(1))
         .measurement_time(Duration::from_secs(3));
-    targets = bench_handshake, bench_timers
+    targets = bench_handshake
 }
 criterion::criterion_main!(benches);
