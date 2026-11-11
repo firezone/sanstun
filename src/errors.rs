@@ -11,6 +11,9 @@ pub enum Error {
     WrongKey,
     /// A handshake initiation was not newer than the last one accepted from its peer.
     ReplayedHandshakeInitiation,
+    /// A handshake initiation was received before a tunnel existed for its peer, so it was not
+    /// checked for replays.
+    UncheckedHandshakeInitiation,
     InvalidMac,
     InvalidAeadTag,
     InvalidCounter,
@@ -39,6 +42,10 @@ impl Display for Error {
             Error::ReplayedHandshakeInitiation => write!(
                 f,
                 "handshake initiation is not newer than the last one accepted from this peer"
+            ),
+            Error::UncheckedHandshakeInitiation => write!(
+                f,
+                "handshake initiation was received before a tunnel existed for this peer"
             ),
             Error::InvalidMac => {
                 write!(f, "invalid packet MAC")

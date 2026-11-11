@@ -75,8 +75,9 @@
 //! - **Handshake routing:** use [`HandshakeInitiation::peer_static_public`] to look up an authorized
 //!   peer. Anyone can generate a key pair, so an authenticated initiation is no reason to create a
 //!   tunnel for an unknown key. Replay checks only apply to keys you have created a tunnel for,
-//!   and only take effect in [`Tunnel::handle_handshake_initiation`]: do not act on an initiation
-//!   before its tunnel accepts it.
+//!   so a tunnel rejects initiations received before it was created. The checks only take effect
+//!   in [`Tunnel::handle_handshake_initiation`]: do not act on an initiation before its tunnel
+//!   accepts it.
 //! - **Endpoint updates:** only update a peer's endpoint after [`Tunnel::handle_handshake_initiation`]
 //!   or [`Tunnel::handle_handshake_response`] accepts its handshake or
 //!   [`Tunnel::commit_decapsulate`] accepts its data. A datagram's source address

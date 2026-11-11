@@ -5,7 +5,7 @@ use crate::harness::{
     HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, MAX_JITTER, Outcome as _, Peer::A, Peer::B,
     REJECT_AFTER_TIME, REKEY_TIMEOUT, Sim, classify, ipv4_packet, secs,
 };
-use sanstun::{Error, Interface, PublicKey, ReceivedMessage, TunnelConfig};
+use sanstun::{Error, Interface, PublicKey, Received, ReceivedMessage, TunnelConfig};
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
@@ -166,6 +166,30 @@ fn replayed_handshake_initiation_is_rejected_after_the_tunnel_is_replaced() {
     let error = sim.deliver(B, &init).expect_err();
 
     assert!(matches!(error, Error::ReplayedHandshakeInitiation));
+}
+
+// The interface only checks initiations for replays if a tunnel for their peer already exists.
+#[test]
+fn initiation_received_before_its_tunnel_exists_is_rejected() {
+    let now = Instant::now();
+    let mut a = Interface::new(Zeroizing::new([1; 32]), now, Duration::ZERO);
+    let mut b = Interface::new(Zeroizing::new([2; 32]), now, Duration::ZERO);
+    let mut a_to_b = a
+        .new_tunnel(b.static_public(), TunnelConfig::default(), now)
+        .unwrap();
+    let init = a_to_b.initiate_handshake(now).unwrap();
+
+    let Ok(Received::Message(ReceivedMessage::HandshakeInitiation(init))) =
+        b.receive("1.2.3.4:51820".parse().unwrap(), &init, now)
+    else {
+        panic!("expected a handshake initiation");
+    };
+    let mut b_to_a = b
+        .new_tunnel(init.peer_static_public(), TunnelConfig::default(), now)
+        .unwrap();
+    let error = b_to_a.handle_handshake_initiation(init, now).unwrap_err();
+
+    assert!(matches!(error, Error::UncheckedHandshakeInitiation));
 }
 
 // Keeping two outgoing handshakes allows a delayed response to complete either one.

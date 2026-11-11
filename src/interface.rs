@@ -4,7 +4,7 @@ use crate::index::TunnelIndices;
 use crate::message::{
     COOKIE_REPLY, COOKIE_REPLY_SZ, CookieReply, DATA, DATA_OVERHEAD_SZ, HANDSHAKE_INIT,
     HANDSHAKE_INIT_SZ, HANDSHAKE_RESP, HANDSHAKE_RESP_SZ, HandshakeResponse, Macs, ReceivedMessage,
-    TransportData,
+    ReplayCheck, TransportData,
 };
 use crate::ratelimiter::RateLimiter;
 use crate::tai64n::{Tai64N, TimeStamper};
@@ -148,7 +148,9 @@ impl Interface {
     ///
     /// For peers you have created a tunnel for, handshake initiations that are not newer than the
     /// last accepted one are marked as replays: their [`Tunnel`] fails them with
-    /// [`Error::ReplayedHandshakeInitiation`].
+    /// [`Error::ReplayedHandshakeInitiation`]. Initiations from other peers cannot be checked:
+    /// a tunnel created for them afterwards fails them with
+    /// [`Error::UncheckedHandshakeInitiation`].
     ///
     /// Cookies are bound to `src_addr`, the datagram's source address and port.
     pub fn receive(
@@ -183,8 +185,9 @@ impl Interface {
                 {
                     if init.0.timestamp.after(last) {
                         *last = init.0.timestamp;
+                        init.0.replay_check = ReplayCheck::Fresh;
                     } else {
-                        init.0.replayed = true;
+                        init.0.replay_check = ReplayCheck::Replayed;
                     }
                 }
 
