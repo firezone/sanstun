@@ -200,32 +200,7 @@ impl Interface {
 
         let message = match (packet_type, datagram.len()) {
             (HANDSHAKE_INIT, HANDSHAKE_INIT_SZ) => {
-                let sender_idx = u32::from_le_bytes(datagram[4..8].try_into().unwrap());
-                if let Some(reply) = self.verify_macs(src_addr, sender_idx, datagram, now)? {
-                    return Ok(Received::SendCookieReply(reply));
-                }
-
-                let mut init = parse_handshake_init(
-                    &self.static_private,
-                    &self.static_public,
-                    datagram.try_into().expect("handshake length was checked"),
-                )?;
-
-                if let Some(peer) = self
-                    .last_handshake_timestamps
-                    .get_mut(&init.peer_static_public())
-                    .filter(|peer| peer.tunnels.strong_count() > 0)
-                {
-                    if init.0.timestamp.after(&peer.timestamp) {
-                        peer.timestamp = init.0.timestamp;
-                        peer.last_active = now;
-                        init.0.replay_check = ReplayCheck::Fresh;
-                    } else {
-                        init.0.replay_check = ReplayCheck::Replayed;
-                    }
-                }
-
-                ReceivedMessage::HandshakeInitiation(init)
+                return self.receive_handshake_initiation(src_addr, datagram, now);
             }
             (HANDSHAKE_RESP, HANDSHAKE_RESP_SZ) => {
                 let sender_idx = u32::from_le_bytes(datagram[4..8].try_into().unwrap());
@@ -279,6 +254,44 @@ impl Interface {
         };
 
         self.last_handshake_timestamps.remove(&key);
+    }
+
+    /// Not inlined, to keep the registers it needs out of [`Interface::receive`]'s data path.
+    #[inline(never)]
+    fn receive_handshake_initiation(
+        &mut self,
+        src_addr: SocketAddr,
+        datagram: &[u8],
+        now: Instant,
+    ) -> Result<Received, Error> {
+        let sender_idx = u32::from_le_bytes(datagram[4..8].try_into().unwrap());
+        if let Some(reply) = self.verify_macs(src_addr, sender_idx, datagram, now)? {
+            return Ok(Received::SendCookieReply(reply));
+        }
+
+        let mut init = parse_handshake_init(
+            &self.static_private,
+            &self.static_public,
+            datagram.try_into().expect("handshake length was checked"),
+        )?;
+
+        if let Some(peer) = self
+            .last_handshake_timestamps
+            .get_mut(&init.peer_static_public())
+            .filter(|peer| peer.tunnels.strong_count() > 0)
+        {
+            if init.0.timestamp.after(&peer.timestamp) {
+                peer.timestamp = init.0.timestamp;
+                peer.last_active = now;
+                init.0.replay_check = ReplayCheck::Fresh;
+            } else {
+                init.0.replay_check = ReplayCheck::Replayed;
+            }
+        }
+
+        Ok(Received::Message(ReceivedMessage::HandshakeInitiation(
+            init,
+        )))
     }
 
     /// Verifies the MACs of a handshake message and applies rate limiting.
