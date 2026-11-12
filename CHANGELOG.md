@@ -16,7 +16,6 @@ Releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - Fixes repeated handshakes and tunnel expiry when the round-trip time exceeds `REKEY_TIMEOUT` (#142).
-- Cookie replies draw their nonce in one call to the RNG instead of one call per byte, which makes them cheaper to send under load (#153).
 
 ## [0.1.0] - 2026-10-30
 
