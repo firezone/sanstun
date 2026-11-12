@@ -11,8 +11,8 @@ use crate::tai64n::{Tai64N, TimeStamper};
 use crate::{Datagram, Error, PublicKey, StaticSecret, Tunnel, TunnelConfig};
 
 use std::collections::HashMap;
-use std::collections::hash_map::Entry;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use crate::rng::ForwardSecureRng;
@@ -27,6 +27,13 @@ const COOKIE_SIZE: usize = 16;
 const COOKIE_NONCE_SIZE: usize = 24;
 
 type Cookie = [u8; COOKIE_SIZE];
+
+/// How many peers the interface remembers before it forgets those without a tunnel.
+///
+/// A later tunnel for a forgotten peer accepts replays of the peer's old handshake initiations
+/// until its next genuine one. Such a replay costs us a handshake response and an unconfirmed
+/// session but cannot carry data, so bounding memory is worth more than remembering every peer.
+const MAX_REMEMBERED_PEERS: usize = 10_000;
 
 /// A WireGuard interface whose tunnels share one static key.
 ///
@@ -45,8 +52,9 @@ pub struct Interface {
     stamper: TimeStamper,
     indices: TunnelIndices,
     rate_limiter: RateLimiter,
-    /// The latest accepted handshake timestamp for each peer we have created a tunnel for.
-    last_handshake_timestamps: HashMap<PublicKey, Tai64N>,
+    /// The latest accepted handshake timestamp of each peer, with a handle that is alive while
+    /// the peer has a tunnel.
+    last_handshake_timestamps: HashMap<PublicKey, (Tai64N, Weak<()>)>,
 }
 
 impl Interface {
@@ -112,8 +120,9 @@ impl Interface {
     ///
     /// Fails with [`Error::LowOrderPoint`] if `peer_static_public` is a low-order point.
     ///
-    /// Enables handshake replay checks for `peer_static_public`. These remain in effect even
-    /// if the tunnel is dropped or replaced, so a replay is rejected by every later tunnel too.
+    /// Enables handshake replay checks for `peer_static_public`. These carry over to later
+    /// tunnels for the same peer, so they reject replays too. Only once the interface remembers
+    /// more than 10000 peers does it forget those without a tunnel.
     pub fn new_tunnel(
         &mut self,
         peer_static_public: PublicKey,
@@ -121,6 +130,12 @@ impl Interface {
         now: Instant,
     ) -> Result<Tunnel, Error> {
         let (index, index_lease) = self.indices.next();
+        let (last_timestamp, peer_lease) =
+            match self.last_handshake_timestamps.get(&peer_static_public) {
+                Some((last, tunnels)) => (*last, tunnels.upgrade().unwrap_or_default()),
+                None => (Tai64N::zero(), Arc::default()),
+            };
+        let tunnels = Arc::downgrade(&peer_lease);
 
         let tunnel = Tunnel::new(
             self.static_private.clone(),
@@ -128,13 +143,19 @@ impl Interface {
             config,
             index,
             index_lease,
+            peer_lease,
             &mut self.rng,
             now,
             self.stamper.clone(),
         )?;
 
-        if let Entry::Vacant(entry) = self.last_handshake_timestamps.entry(peer_static_public) {
-            entry.insert(Tai64N::zero());
+        self.last_handshake_timestamps
+            .insert(peer_static_public, (last_timestamp, tunnels));
+        if self.last_handshake_timestamps.len() > MAX_REMEMBERED_PEERS {
+            for _ in self
+                .last_handshake_timestamps
+                .extract_if(|_, (_, tunnels)| tunnels.strong_count() == 0)
+            {}
         }
 
         Ok(tunnel)
@@ -146,8 +167,8 @@ impl Interface {
     /// per IPv4 address or IPv6 /64.
     /// Messages beyond this budget fail with [`Error::RateLimited`].
     ///
-    /// For peers you have created a tunnel for, handshake initiations that are not newer than the
-    /// last accepted one are marked as replays: their [`Tunnel`] fails them with
+    /// For peers with a tunnel, handshake initiations that are not newer than the last accepted
+    /// one are marked as replays: their [`Tunnel`] fails them with
     /// [`Error::ReplayedHandshakeInitiation`]. Initiations from other peers cannot be checked:
     /// a tunnel created for them afterwards fails them with
     /// [`Error::InitiationPredatesTunnel`].
@@ -179,9 +200,10 @@ impl Interface {
                     datagram.try_into().expect("handshake length was checked"),
                 )?;
 
-                if let Some(last) = self
+                if let Some((last, _)) = self
                     .last_handshake_timestamps
                     .get_mut(&init.peer_static_public())
+                    .filter(|(_, tunnels)| tunnels.strong_count() > 0)
                 {
                     if init.0.timestamp.after(last) {
                         *last = init.0.timestamp;

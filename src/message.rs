@@ -77,9 +77,9 @@ impl HandshakeInitiation {
     /// Returns the initiator's static public key for routing to its [`Tunnel`](crate::Tunnel).
     ///
     /// [`Interface::receive`](crate::Interface::receive) verifies that the initiator holds the
-    /// matching private key. For peers you have created a tunnel for, it also detects replays,
-    /// which their [`Tunnel`](crate::Tunnel) then rejects. A tunnel created after the initiation
-    /// was received rejects it too.
+    /// matching private key. For peers with a tunnel, it also detects replays, which their
+    /// [`Tunnel`](crate::Tunnel) then rejects. A tunnel created after the initiation was received
+    /// rejects it too.
     ///
     /// Anyone can generate a key pair. Do not authorize an unknown peer or create a tunnel for it
     /// based on this key.

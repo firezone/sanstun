@@ -154,6 +154,9 @@ pub struct Tunnel {
 
     /// Reserves this tunnel's index in its [`Interface`](crate::Interface) while the tunnel is alive.
     _index_lease: Arc<()>,
+    /// Keeps the replay state of this tunnel's peer in its [`Interface`](crate::Interface) while
+    /// the tunnel is alive.
+    _peer_lease: Arc<()>,
 }
 
 impl Tunnel {
@@ -183,6 +186,7 @@ impl Tunnel {
         config: TunnelConfig,
         index: Index,
         index_lease: Arc<()>,
+        peer_lease: Arc<()>,
         rng: &mut impl CryptoRng,
         now: Instant,
         stamper: TimeStamper,
@@ -205,6 +209,7 @@ impl Tunnel {
             first_initiation_at: None,
             established: false,
             _index_lease: index_lease,
+            _peer_lease: peer_lease,
         })
     }
 
