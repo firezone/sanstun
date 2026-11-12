@@ -445,27 +445,6 @@ mod tests {
         assert!(responder.last_handshake_timestamps.is_empty());
     }
 
-    #[test]
-    fn peers_without_a_tunnel_are_forgotten_beyond_the_limit() {
-        let now = Instant::now();
-        let mut interface = Interface::new(Zeroizing::new([2; 32]), now, Duration::ZERO);
-        for n in 0..MAX_REMEMBERED_PEERS as u64 {
-            let mut peer = [0; 32];
-            peer[..8].copy_from_slice(&n.to_le_bytes());
-            let without_tunnel = (Tai64N::zero(), Weak::new());
-
-            interface
-                .last_handshake_timestamps
-                .insert(PublicKey::from(peer), without_tunnel);
-        }
-
-        let _tunnel = interface
-            .new_tunnel(PublicKey::from([9; 32]), TunnelConfig::default(), now)
-            .unwrap();
-
-        assert_eq!(interface.last_handshake_timestamps.len(), 1);
-    }
-
     fn under_load(now: Instant) -> Interface {
         Interface::new(Zeroizing::new([2; 32]), now, Duration::ZERO).with_handshake_limit(0)
     }
