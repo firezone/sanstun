@@ -294,7 +294,10 @@ impl Interface {
     }
 
     fn nonce(&mut self) -> [u8; COOKIE_NONCE_SIZE] {
-        self.rng.random()
+        let mut nonce = [0; COOKIE_NONCE_SIZE];
+        self.rng.fill(&mut nonce);
+
+        nonce
     }
 
     fn format_cookie_reply(
