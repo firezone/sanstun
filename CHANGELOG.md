@@ -17,6 +17,7 @@ Releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - Fixes repeated handshakes and tunnel expiry when the round-trip time exceeds `REKEY_TIMEOUT` (#142).
+- Fixes unbounded memory growth from keeping the handshake timestamp of every peer ever passed to `Interface::new_tunnel`. Peers without a tunnel are limited to 10 000, configurable with `Interface::with_max_peers_without_tunnel` (#154).
 
 ## [0.1.0] - 2026-10-30
 

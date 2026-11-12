@@ -192,6 +192,30 @@ fn initiation_received_before_its_tunnel_exists_is_rejected() {
     assert!(matches!(error, Error::InitiationPredatesTunnel));
 }
 
+#[test]
+fn initiation_received_after_its_tunnels_were_dropped_is_rejected() {
+    let now = Instant::now();
+    let mut a = Interface::new(Zeroizing::new([1; 32]), now, Duration::ZERO);
+    let mut b = Interface::new(Zeroizing::new([2; 32]), now, Duration::ZERO);
+    let mut a_to_b = a
+        .new_tunnel(b.static_public(), TunnelConfig::default(), now)
+        .unwrap();
+    drop(b.new_tunnel(a.static_public(), TunnelConfig::default(), now));
+    let init = a_to_b.initiate_handshake(now).unwrap();
+
+    let Ok(Received::Message(ReceivedMessage::HandshakeInitiation(init))) =
+        b.receive("1.2.3.4:51820".parse().unwrap(), &init, now)
+    else {
+        panic!("expected a handshake initiation");
+    };
+    let mut b_to_a = b
+        .new_tunnel(init.peer_static_public(), TunnelConfig::default(), now)
+        .unwrap();
+    let error = b_to_a.handle_handshake_initiation(init, now).unwrap_err();
+
+    assert!(matches!(error, Error::InitiationPredatesTunnel));
+}
+
 // Keeping two outgoing handshakes allows a delayed response to complete either one.
 #[test]
 fn delayed_response_to_a_superseded_initiation_is_accepted() {
