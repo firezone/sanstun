@@ -28,6 +28,13 @@ const COOKIE_NONCE_SIZE: usize = 24;
 
 type Cookie = [u8; COOKIE_SIZE];
 
+/// How many peers the interface remembers before it forgets those without a tunnel.
+///
+/// A later tunnel for a forgotten peer accepts replays of the peer's old handshake initiations
+/// until its next genuine one. Such a replay costs us a handshake response and an unconfirmed
+/// session but cannot carry data, so bounding memory is worth more than remembering every peer.
+const MAX_REMEMBERED_PEERS: usize = 10_000;
+
 /// A WireGuard interface whose tunnels share one static key.
 ///
 /// Create a [`Tunnel`] for each peer with [`Interface::new_tunnel`]. Pass incoming datagrams to
@@ -113,9 +120,9 @@ impl Interface {
     ///
     /// Fails with [`Error::LowOrderPoint`] if `peer_static_public` is a low-order point.
     ///
-    /// Enables handshake replay checks for `peer_static_public`. These carry over to a tunnel
-    /// that replaces this one, so it rejects replays too. A peer without a tunnel is forgotten
-    /// the next time a tunnel for another peer is created.
+    /// Enables handshake replay checks for `peer_static_public`. These carry over to later
+    /// tunnels for the same peer, so they reject replays too. Only once the interface remembers
+    /// more than 10000 peers does it forget those without a tunnel.
     pub fn new_tunnel(
         &mut self,
         peer_static_public: PublicKey,
@@ -144,10 +151,12 @@ impl Interface {
 
         self.last_handshake_timestamps
             .insert(peer_static_public, (last_timestamp, tunnels));
-        for _ in self
-            .last_handshake_timestamps
-            .extract_if(|_, (_, tunnels)| tunnels.strong_count() == 0)
-        {}
+        if self.last_handshake_timestamps.len() > MAX_REMEMBERED_PEERS {
+            for _ in self
+                .last_handshake_timestamps
+                .extract_if(|_, (_, tunnels)| tunnels.strong_count() == 0)
+            {}
+        }
 
         Ok(tunnel)
     }
@@ -434,6 +443,27 @@ mod tests {
             Ok(Received::Message(ReceivedMessage::HandshakeInitiation(_)))
         ));
         assert!(responder.last_handshake_timestamps.is_empty());
+    }
+
+    #[test]
+    fn peers_without_a_tunnel_are_forgotten_beyond_the_limit() {
+        let now = Instant::now();
+        let mut interface = Interface::new(Zeroizing::new([2; 32]), now, Duration::ZERO);
+        for n in 0..MAX_REMEMBERED_PEERS as u64 {
+            let mut peer = [0; 32];
+            peer[..8].copy_from_slice(&n.to_le_bytes());
+            let without_tunnel = (Tai64N::zero(), Weak::new());
+
+            interface
+                .last_handshake_timestamps
+                .insert(PublicKey::from(peer), without_tunnel);
+        }
+
+        let _tunnel = interface
+            .new_tunnel(PublicKey::from([9; 32]), TunnelConfig::default(), now)
+            .unwrap();
+
+        assert_eq!(interface.last_handshake_timestamps.len(), 1);
     }
 
     fn under_load(now: Instant) -> Interface {

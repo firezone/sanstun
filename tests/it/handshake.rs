@@ -218,24 +218,9 @@ fn initiation_received_after_its_tunnels_were_dropped_is_rejected() {
     assert!(matches!(error, Error::InitiationPredatesTunnel));
 }
 
+// A peer keeps its replay protection while it has no tunnel, even if tunnels for others come and go.
 #[test]
-fn replayed_handshake_initiation_is_rejected_by_a_tunnel_replacing_a_dropped_one() {
-    let now = Instant::now();
-    let (mut b, b_to_a, init) = accepted_initiation(now);
-    let a_public = b_to_a.remote_static_public();
-    drop(b_to_a);
-
-    let mut b_to_a = b
-        .new_tunnel(a_public, TunnelConfig::default(), now)
-        .unwrap();
-    let error = handle_initiation(&mut b, &mut b_to_a, &init, now).unwrap_err();
-
-    assert!(matches!(error, Error::ReplayedHandshakeInitiation));
-}
-
-// Forgetting peers without a tunnel keeps the interface from growing with every peer it has seen.
-#[test]
-fn peer_without_a_tunnel_is_forgotten_when_a_tunnel_for_another_peer_is_created() {
+fn replayed_handshake_initiation_is_rejected_by_a_later_tunnel_for_the_same_peer() {
     let now = Instant::now();
     let (mut b, b_to_a, init) = accepted_initiation(now);
     let a_public = b_to_a.remote_static_public();
@@ -245,9 +230,9 @@ fn peer_without_a_tunnel_is_forgotten_when_a_tunnel_for_another_peer_is_created(
     let mut b_to_a = b
         .new_tunnel(a_public, TunnelConfig::default(), now)
         .unwrap();
-    let replayed = handle_initiation(&mut b, &mut b_to_a, &init, now);
+    let error = handle_initiation(&mut b, &mut b_to_a, &init, now).unwrap_err();
 
-    assert!(replayed.is_ok());
+    assert!(matches!(error, Error::ReplayedHandshakeInitiation));
 }
 
 /// Returns a responder, its tunnel and the handshake initiation which that tunnel accepted.
