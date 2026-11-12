@@ -28,6 +28,11 @@ const COOKIE_NONCE_SIZE: usize = 24;
 
 type Cookie = [u8; COOKIE_SIZE];
 
+/// How much memory the handshake timestamps of peers without a tunnel may use.
+const PEERS_WITHOUT_TUNNEL_MAX_BYTES: usize = 1024 * 1024;
+const MAX_PEERS_WITHOUT_TUNNEL: usize =
+    PEERS_WITHOUT_TUNNEL_MAX_BYTES / size_of::<(PublicKey, PeerTimestamp)>();
+
 /// A WireGuard interface whose tunnels share one static key.
 ///
 /// Create a [`Tunnel`] for each peer with [`Interface::new_tunnel`]. Pass incoming datagrams to
@@ -46,7 +51,6 @@ pub struct Interface {
     indices: TunnelIndices,
     rate_limiter: RateLimiter,
     last_handshake_timestamps: HashMap<PublicKey, PeerTimestamp>,
-    max_peers_without_tunnel: usize,
 }
 
 /// The latest accepted handshake timestamp of a peer.
@@ -87,7 +91,6 @@ impl Interface {
             indices,
             rate_limiter: RateLimiter::new(now),
             last_handshake_timestamps: HashMap::new(),
-            max_peers_without_tunnel: 10_000,
         }
     }
 
@@ -112,21 +115,6 @@ impl Interface {
         self
     }
 
-    /// Sets how many peers without a tunnel the interface keeps handshake timestamps for.
-    ///
-    /// A peer's timestamp outlives its tunnels, so a replacement tunnel still rejects replayed
-    /// handshake initiations. Once more peers than this have no tunnel,
-    /// [`Interface::new_tunnel`] forgets the timestamp of the one that was active least recently.
-    /// A tunnel created later for a forgotten peer accepts replays of its older handshake
-    /// initiations until it accepts a newer one.
-    ///
-    /// Defaults to 10 000.
-    pub fn with_max_peers_without_tunnel(mut self, max: usize) -> Self {
-        self.max_peers_without_tunnel = max;
-
-        self
-    }
-
     /// Returns the interface's static public key.
     pub fn static_public(&self) -> PublicKey {
         self.static_public
@@ -137,8 +125,11 @@ impl Interface {
     /// Fails with [`Error::LowOrderPoint`] if `peer_static_public` is a low-order point.
     ///
     /// Enables handshake replay checks for `peer_static_public` while it has a tunnel. Replacing
-    /// the tunnel keeps them in effect, so a replay is rejected by later tunnels too, unless the
-    /// peer is forgotten as described in [`Interface::with_max_peers_without_tunnel`].
+    /// the tunnel keeps them in effect, so a replay is rejected by later tunnels too.
+    ///
+    /// Peers without a tunnel are remembered within a fixed memory budget. Beyond it, the one
+    /// that was active least recently is forgotten: a tunnel created for it later accepts replays
+    /// of its older handshake initiations until it accepts a newer one.
     pub fn new_tunnel(
         &mut self,
         peer_static_public: PublicKey,
@@ -271,7 +262,7 @@ impl Interface {
     }
 
     fn forget_least_recently_active_peer_without_tunnel(&mut self) {
-        if self.last_handshake_timestamps.len() <= self.max_peers_without_tunnel {
+        if self.last_handshake_timestamps.len() <= MAX_PEERS_WITHOUT_TUNNEL {
             return;
         }
 
@@ -280,7 +271,7 @@ impl Interface {
                 .iter()
                 .filter(|(_, peer)| peer.tunnels.strong_count() == 0)
         };
-        if without_tunnel().count() <= self.max_peers_without_tunnel {
+        if without_tunnel().count() <= MAX_PEERS_WITHOUT_TUNNEL {
             return;
         }
         let Some((&key, _)) = without_tunnel().min_by_key(|(_, peer)| peer.last_active) else {
@@ -489,34 +480,34 @@ mod tests {
     #[test]
     fn peers_with_a_tunnel_are_never_forgotten() {
         let now = Instant::now();
-        let mut interface = Interface::new(Zeroizing::new([2; 32]), now, Duration::ZERO)
-            .with_max_peers_without_tunnel(0);
+        let mut interface = Interface::new(Zeroizing::new([2; 32]), now, Duration::ZERO);
+        let lease = Arc::new(());
+        remember_peers(&mut interface, Arc::downgrade(&lease), now);
 
-        let _tunnels = [1, 2, 3].map(|n| {
-            interface
-                .new_tunnel(peer(n), TunnelConfig::default(), now)
-                .unwrap()
-        });
+        let _tunnel = interface
+            .new_tunnel(peer(1), TunnelConfig::default(), now)
+            .unwrap();
 
-        assert_eq!(interface.last_handshake_timestamps.len(), 3);
+        assert_eq!(
+            interface.last_handshake_timestamps.len(),
+            MAX_PEERS_WITHOUT_TUNNEL + 2
+        );
     }
 
     #[test]
     fn least_recently_active_peer_without_a_tunnel_is_forgotten() {
         let start = Instant::now();
-        let mut interface = Interface::new(Zeroizing::new([2; 32]), start, Duration::ZERO)
-            .with_max_peers_without_tunnel(1);
-        drop(interface.new_tunnel(peer(1), TunnelConfig::default(), start));
-        drop(interface.new_tunnel(peer(2), TunnelConfig::default(), start + secs(1)));
+        let mut interface = Interface::new(Zeroizing::new([2; 32]), start, Duration::ZERO);
+        remember_peers(&mut interface, Weak::new(), start);
 
         let _tunnel = interface
-            .new_tunnel(peer(3), TunnelConfig::default(), start + secs(2))
+            .new_tunnel(peer(1), TunnelConfig::default(), start)
             .unwrap();
 
         let remembered = &interface.last_handshake_timestamps;
-        assert!(!remembered.contains_key(&peer(1)));
-        assert!(remembered.contains_key(&peer(2)));
-        assert!(remembered.contains_key(&peer(3)));
+        assert!(!remembered.contains_key(&remembered_peer(0)));
+        assert!(remembered.contains_key(&remembered_peer(1)));
+        assert!(remembered.contains_key(&peer(1)));
     }
 
     fn under_load(now: Instant) -> Interface {
@@ -540,6 +531,28 @@ mod tests {
 
     fn peer(n: u8) -> PublicKey {
         PublicKey::from(&StaticSecret::from(Zeroizing::new([n; 32])))
+    }
+
+    /// Remembers one peer more than fit without a tunnel, each active a second after the
+    /// previous one.
+    fn remember_peers(interface: &mut Interface, tunnels: Weak<()>, start: Instant) {
+        for n in 0..=MAX_PEERS_WITHOUT_TUNNEL {
+            interface.last_handshake_timestamps.insert(
+                remembered_peer(n),
+                PeerTimestamp {
+                    timestamp: Tai64N::zero(),
+                    tunnels: tunnels.clone(),
+                    last_active: start + secs(n as u64),
+                },
+            );
+        }
+    }
+
+    fn remembered_peer(n: usize) -> PublicKey {
+        let mut key = [0; 32];
+        key[..8].copy_from_slice(&(n as u64).to_le_bytes());
+
+        PublicKey::from(key)
     }
 
     fn secs(n: u64) -> Duration {
