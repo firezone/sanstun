@@ -10,6 +10,7 @@ use crate::ratelimiter::RateLimiter;
 use crate::tai64n::{Tai64N, TimeStamper};
 use crate::{Datagram, Error, PublicKey, StaticSecret, Tunnel, TunnelConfig};
 
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Weak};
@@ -127,9 +128,9 @@ impl Interface {
     /// Enables handshake replay checks for `peer_static_public` while it has a tunnel. Replacing
     /// the tunnel keeps them in effect, so a replay is rejected by later tunnels too.
     ///
-    /// Peers without a tunnel are remembered within a fixed memory budget. Beyond it, the one
-    /// that was active least recently is forgotten: a tunnel created for it later accepts replays
-    /// of its older handshake initiations until it accepts a newer one.
+    /// Peers without a tunnel are remembered within a fixed memory budget. Beyond it, the least
+    /// recently active half of them is forgotten: a tunnel created later for a forgotten peer
+    /// accepts replays of its older handshake initiations until it accepts a newer one.
     pub fn new_tunnel(
         &mut self,
         peer_static_public: PublicKey,
@@ -167,7 +168,7 @@ impl Interface {
         peer.tunnels = tunnels;
         peer.last_active = now;
 
-        self.forget_least_recently_active_peer_without_tunnel();
+        self.forget_peers_without_tunnel();
 
         Ok(tunnel)
     }
@@ -236,24 +237,26 @@ impl Interface {
         Ok(Received::Message(message))
     }
 
-    fn forget_least_recently_active_peer_without_tunnel(&mut self) {
-        if self.last_handshake_timestamps.len() <= MAX_PEERS_WITHOUT_TUNNEL {
+    /// Forgets the least recently active peers without a tunnel once there are more than
+    /// [`MAX_PEERS_WITHOUT_TUNNEL`].
+    ///
+    /// Half of them are forgotten at once, so that most calls return after counting.
+    fn forget_peers_without_tunnel(&mut self) {
+        let peers = &mut self.last_handshake_timestamps;
+        let has_no_tunnel = |peer: &PeerTimestamp| peer.tunnels.strong_count() == 0;
+
+        if peers.len() <= MAX_PEERS_WITHOUT_TUNNEL
+            || peers.values().filter(|peer| has_no_tunnel(peer)).count() <= MAX_PEERS_WITHOUT_TUNNEL
+        {
             return;
         }
 
-        let without_tunnel = || {
-            self.last_handshake_timestamps
-                .iter()
-                .filter(|(_, peer)| peer.tunnels.strong_count() == 0)
-        };
-        if without_tunnel().count() <= MAX_PEERS_WITHOUT_TUNNEL {
-            return;
-        }
-        let Some((&key, _)) = without_tunnel().min_by_key(|(_, peer)| peer.last_active) else {
-            return;
-        };
-
-        self.last_handshake_timestamps.remove(&key);
+        let mut without_tunnel = peers
+            .extract_if(|_, peer| has_no_tunnel(peer))
+            .collect::<Vec<_>>();
+        without_tunnel.sort_unstable_by_key(|(_, peer)| Reverse(peer.last_active));
+        without_tunnel.truncate(MAX_PEERS_WITHOUT_TUNNEL / 2);
+        peers.extend(without_tunnel);
     }
 
     /// Not inlined, to keep the registers it needs out of [`Interface::receive`]'s data path.
@@ -491,36 +494,34 @@ mod tests {
     }
 
     #[test]
-    fn peers_with_a_tunnel_are_never_forgotten() {
+    fn replay_is_rejected_while_the_peer_has_a_tunnel() {
         let now = Instant::now();
-        let mut interface = Interface::new(Zeroizing::new([2; 32]), now, Duration::ZERO);
-        let lease = Arc::new(());
-        remember_peers(&mut interface, Arc::downgrade(&lease), now);
+        let (mut responder, tunnel, init) = accepted_initiation(now);
+        remember_peers(&mut responder, now);
 
-        let _tunnel = interface
-            .new_tunnel(peer(1), TunnelConfig::default(), now)
+        let mut replacement = responder
+            .new_tunnel(tunnel.remote_static_public(), TunnelConfig::default(), now)
             .unwrap();
+        let replayed = handle_initiation(&mut responder, &mut replacement, &init, now);
 
-        assert_eq!(
-            interface.last_handshake_timestamps.len(),
-            MAX_PEERS_WITHOUT_TUNNEL + 2
-        );
+        assert!(matches!(replayed, Err(Error::ReplayedHandshakeInitiation)));
     }
 
     #[test]
-    fn least_recently_active_peer_without_a_tunnel_is_forgotten() {
-        let start = Instant::now();
-        let mut interface = Interface::new(Zeroizing::new([2; 32]), start, Duration::ZERO);
-        remember_peers(&mut interface, Weak::new(), start);
+    fn replay_is_accepted_once_the_peer_was_forgotten() {
+        let now = Instant::now();
+        let (mut responder, tunnel, init) = accepted_initiation(now);
+        let initiator = tunnel.remote_static_public();
+        drop(tunnel);
+        remember_peers(&mut responder, now);
+        drop(responder.new_tunnel(peer(9), TunnelConfig::default(), now));
 
-        let _tunnel = interface
-            .new_tunnel(peer(1), TunnelConfig::default(), start)
+        let mut later = responder
+            .new_tunnel(initiator, TunnelConfig::default(), now)
             .unwrap();
+        let replayed = handle_initiation(&mut responder, &mut later, &init, now);
 
-        let remembered = &interface.last_handshake_timestamps;
-        assert!(!remembered.contains_key(&remembered_peer(0)));
-        assert!(remembered.contains_key(&remembered_peer(1)));
-        assert!(remembered.contains_key(&peer(1)));
+        assert!(replayed.is_ok());
     }
 
     fn under_load(now: Instant) -> Interface {
@@ -546,16 +547,49 @@ mod tests {
         PublicKey::from(&StaticSecret::from(Zeroizing::new([n; 32])))
     }
 
-    /// Remembers one peer more than fit without a tunnel, each active a second after the
-    /// previous one.
-    fn remember_peers(interface: &mut Interface, tunnels: Weak<()>, start: Instant) {
+    /// Returns a responder, its tunnel and the handshake initiation that tunnel accepted at `now`.
+    fn accepted_initiation(now: Instant) -> (Interface, Tunnel, Datagram) {
+        let mut initiator = Interface::new(Zeroizing::new([1; 32]), now, Duration::ZERO);
+        let mut responder = Interface::new(Zeroizing::new([2; 32]), now, Duration::ZERO);
+        let init = initiator
+            .new_tunnel(responder.static_public(), TunnelConfig::default(), now)
+            .unwrap()
+            .initiate_handshake(now)
+            .unwrap();
+        let mut tunnel = responder
+            .new_tunnel(initiator.static_public(), TunnelConfig::default(), now)
+            .unwrap();
+
+        handle_initiation(&mut responder, &mut tunnel, &init, now).unwrap();
+
+        (responder, tunnel, init)
+    }
+
+    fn handle_initiation(
+        responder: &mut Interface,
+        tunnel: &mut Tunnel,
+        init: &[u8],
+        now: Instant,
+    ) -> Result<Datagram, Error> {
+        let addr = "1.2.3.4:51820".parse().unwrap();
+        let Ok(Received::Message(ReceivedMessage::HandshakeInitiation(init))) =
+            responder.receive(addr, init, now)
+        else {
+            panic!("expected a handshake initiation");
+        };
+
+        tunnel.handle_handshake_initiation(init, now)
+    }
+
+    /// Remembers one peer without a tunnel more than fit, all of them active after `now`.
+    fn remember_peers(interface: &mut Interface, now: Instant) {
         for n in 0..=MAX_PEERS_WITHOUT_TUNNEL {
             interface.last_handshake_timestamps.insert(
                 remembered_peer(n),
                 PeerTimestamp {
                     timestamp: Tai64N::zero(),
-                    tunnels: tunnels.clone(),
-                    last_active: start + secs(n as u64),
+                    tunnels: Weak::new(),
+                    last_active: now + secs(1),
                 },
             );
         }
