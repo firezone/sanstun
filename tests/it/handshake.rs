@@ -5,7 +5,9 @@ use crate::harness::{
     HANDSHAKE_INIT_SIZE, HANDSHAKE_RESPONSE_SIZE, Kind, MAX_JITTER, Outcome as _, Peer::A, Peer::B,
     REJECT_AFTER_TIME, REKEY_TIMEOUT, Sim, classify, ipv4_packet, secs,
 };
-use sanstun::{Error, Interface, PublicKey, Received, ReceivedMessage, TunnelConfig};
+use sanstun::{
+    Datagram, Error, Interface, PublicKey, Received, ReceivedMessage, Tunnel, TunnelConfig,
+};
 use std::time::{Duration, Instant};
 use zeroize::Zeroizing;
 
@@ -214,6 +216,71 @@ fn initiation_received_after_its_tunnels_were_dropped_is_rejected() {
     let error = b_to_a.handle_handshake_initiation(init, now).unwrap_err();
 
     assert!(matches!(error, Error::InitiationPredatesTunnel));
+}
+
+#[test]
+fn replayed_handshake_initiation_is_rejected_by_a_tunnel_replacing_a_dropped_one() {
+    let now = Instant::now();
+    let (mut b, b_to_a, init) = accepted_initiation(now);
+    let a_public = b_to_a.remote_static_public();
+    drop(b_to_a);
+
+    let mut b_to_a = b
+        .new_tunnel(a_public, TunnelConfig::default(), now)
+        .unwrap();
+    let error = handle_initiation(&mut b, &mut b_to_a, &init, now).unwrap_err();
+
+    assert!(matches!(error, Error::ReplayedHandshakeInitiation));
+}
+
+// Forgetting peers without a tunnel keeps the interface from growing with every peer it has seen.
+#[test]
+fn peer_without_a_tunnel_is_forgotten_when_a_tunnel_for_another_peer_is_created() {
+    let now = Instant::now();
+    let (mut b, b_to_a, init) = accepted_initiation(now);
+    let a_public = b_to_a.remote_static_public();
+    drop(b_to_a);
+    drop(b.new_tunnel(PublicKey::from([3; 32]), TunnelConfig::default(), now));
+
+    let mut b_to_a = b
+        .new_tunnel(a_public, TunnelConfig::default(), now)
+        .unwrap();
+    let replayed = handle_initiation(&mut b, &mut b_to_a, &init, now);
+
+    assert!(replayed.is_ok());
+}
+
+/// Returns a responder, its tunnel and the handshake initiation which that tunnel accepted.
+fn accepted_initiation(now: Instant) -> (Interface, Tunnel, Datagram) {
+    let mut a = Interface::new(Zeroizing::new([1; 32]), now, Duration::ZERO);
+    let mut b = Interface::new(Zeroizing::new([2; 32]), now, Duration::ZERO);
+    let init = a
+        .new_tunnel(b.static_public(), TunnelConfig::default(), now)
+        .unwrap()
+        .initiate_handshake(now)
+        .unwrap();
+    let mut b_to_a = b
+        .new_tunnel(a.static_public(), TunnelConfig::default(), now)
+        .unwrap();
+
+    handle_initiation(&mut b, &mut b_to_a, &init, now).unwrap();
+
+    (b, b_to_a, init)
+}
+
+fn handle_initiation(
+    interface: &mut Interface,
+    tunnel: &mut Tunnel,
+    init: &[u8],
+    now: Instant,
+) -> Result<Datagram, Error> {
+    let Ok(Received::Message(ReceivedMessage::HandshakeInitiation(init))) =
+        interface.receive("1.2.3.4:51820".parse().unwrap(), init, now)
+    else {
+        panic!("expected a handshake initiation");
+    };
+
+    tunnel.handle_handshake_initiation(init, now)
 }
 
 // Keeping two outgoing handshakes allows a delayed response to complete either one.
