@@ -336,16 +336,13 @@ impl Tunnel {
     ///
     /// Returns the response to send back on the path the initiation arrived on. Fails with
     /// [`Error::ReplayedHandshakeInitiation`] if [`Interface::receive`](crate::Interface::receive)
-    /// marked it as a replay.
+    /// marked it as a replay, and with [`Error::InitiationPredatesTunnel`] if it was received
+    /// before this tunnel was created.
     pub fn handle_handshake_initiation(
         &mut self,
         p: HandshakeInitiation,
         now: Instant,
     ) -> Result<Datagram, Error> {
-        if p.0.replayed {
-            return Err(Error::ReplayedHandshakeInitiation);
-        }
-
         self.ensure_not_expired()?;
 
         let remote_idx = Index::from_peer(p.sender_index());

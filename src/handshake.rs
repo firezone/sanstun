@@ -8,7 +8,7 @@ use crate::errors::Error;
 use crate::keys::{PresharedKey, PublicKey, StaticSecret};
 use crate::message::{
     CookieReply, HANDSHAKE_INIT, HANDSHAKE_INIT_SZ, HANDSHAKE_RESP, HANDSHAKE_RESP_SZ,
-    HandshakeInitiation, HandshakeResponse, InnerHandshakeInitiation,
+    HandshakeInitiation, HandshakeResponse, InnerHandshakeInitiation, ReplayCheck,
 };
 use crate::session::{Role, Session};
 use crate::tai64n::{Tai64N, TimeStamper};
@@ -169,7 +169,7 @@ pub(crate) fn parse_handshake_init(
         chaining_key,
         hash,
         timestamp: Tai64N::parse(&timestamp),
-        replayed: false,
+        replay_check: ReplayCheck::Unchecked,
     })))
 }
 
@@ -302,7 +302,7 @@ impl Handshake {
             ref chaining_key,
             hash,
             timestamp: _,
-            replayed: _,
+            replay_check,
         } = *packet.0;
 
         if !bool::from(
@@ -312,6 +312,12 @@ impl Handshake {
                 .ct_eq(peer_static_public.as_bytes()),
         ) {
             return Err(Error::WrongKey);
+        }
+
+        match replay_check {
+            ReplayCheck::Fresh => {}
+            ReplayCheck::Replayed => return Err(Error::ReplayedHandshakeInitiation),
+            ReplayCheck::Unchecked => return Err(Error::InitiationPredatesTunnel),
         }
 
         let (mut response, session) = self.format_handshake_response(

@@ -50,9 +50,18 @@ pub(crate) struct InnerHandshakeInitiation {
     pub(crate) chaining_key: Zeroizing<[u8; 32]>,
     pub(crate) hash: [u8; 32],
     pub(crate) timestamp: Tai64N,
-    /// Set by the [`Interface`](crate::Interface) if the initiation is not newer than the last
-    /// one it accepted from this peer.
-    pub(crate) replayed: bool,
+    pub(crate) replay_check: ReplayCheck,
+}
+
+/// The [`Interface`](crate::Interface)'s replay check of a handshake initiation.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReplayCheck {
+    /// No tunnel existed for the peer when the initiation was received.
+    Unchecked,
+    /// Newer than the last initiation accepted from this peer.
+    Fresh,
+    /// Not newer than the last initiation accepted from this peer.
+    Replayed,
 }
 
 impl std::fmt::Debug for HandshakeInitiation {
@@ -69,10 +78,11 @@ impl HandshakeInitiation {
     ///
     /// [`Interface::receive`](crate::Interface::receive) verifies that the initiator holds the
     /// matching private key. For peers you have created a tunnel for, it also detects replays,
-    /// which their [`Tunnel`](crate::Tunnel) then rejects.
+    /// which their [`Tunnel`](crate::Tunnel) then rejects. A tunnel created after the initiation
+    /// was received rejects it too.
     ///
-    /// Anyone can generate a key pair, and unknown peers are not checked for replays.
-    /// Do not authorize an unknown peer or create a tunnel for it based on this key.
+    /// Anyone can generate a key pair. Do not authorize an unknown peer or create a tunnel for it
+    /// based on this key.
     pub fn peer_static_public(&self) -> PublicKey {
         self.0.peer_static_public
     }
