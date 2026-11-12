@@ -317,7 +317,7 @@ impl Handshake {
         match replay_check {
             ReplayCheck::Fresh => {}
             ReplayCheck::Replayed => return Err(Error::ReplayedHandshakeInitiation),
-            ReplayCheck::Unchecked => return Err(Error::NoTunnel),
+            ReplayCheck::Unchecked => return Err(Error::InitiationPredatesTunnel),
         }
 
         let (mut response, session) = self.format_handshake_response(

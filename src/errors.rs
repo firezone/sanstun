@@ -13,7 +13,7 @@ pub enum Error {
     ReplayedHandshakeInitiation,
     /// A handshake initiation was received before a tunnel existed for its peer, so it was not
     /// checked for replays.
-    NoTunnel,
+    InitiationPredatesTunnel,
     InvalidMac,
     InvalidAeadTag,
     InvalidCounter,
@@ -43,7 +43,7 @@ impl Display for Error {
                 f,
                 "handshake initiation is not newer than the last one accepted from this peer"
             ),
-            Error::NoTunnel => write!(
+            Error::InitiationPredatesTunnel => write!(
                 f,
                 "handshake initiation was received before a tunnel existed for this peer"
             ),
