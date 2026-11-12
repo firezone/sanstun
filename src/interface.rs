@@ -150,7 +150,7 @@ impl Interface {
     /// last accepted one are marked as replays: their [`Tunnel`] fails them with
     /// [`Error::ReplayedHandshakeInitiation`]. Initiations from other peers cannot be checked:
     /// a tunnel created for them afterwards fails them with
-    /// [`Error::UncheckedHandshakeInitiation`].
+    /// [`Error::NoTunnel`].
     ///
     /// Cookies are bound to `src_addr`, the datagram's source address and port.
     pub fn receive(

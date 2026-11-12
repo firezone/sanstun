@@ -336,7 +336,7 @@ impl Tunnel {
     ///
     /// Returns the response to send back on the path the initiation arrived on. Fails with
     /// [`Error::ReplayedHandshakeInitiation`] if [`Interface::receive`](crate::Interface::receive)
-    /// marked it as a replay, and with [`Error::UncheckedHandshakeInitiation`] if it was received
+    /// marked it as a replay, and with [`Error::NoTunnel`] if it was received
     /// before this tunnel was created.
     pub fn handle_handshake_initiation(
         &mut self,

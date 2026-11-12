@@ -189,7 +189,7 @@ fn initiation_received_before_its_tunnel_exists_is_rejected() {
         .unwrap();
     let error = b_to_a.handle_handshake_initiation(init, now).unwrap_err();
 
-    assert!(matches!(error, Error::UncheckedHandshakeInitiation));
+    assert!(matches!(error, Error::NoTunnel));
 }
 
 // Keeping two outgoing handshakes allows a delayed response to complete either one.
