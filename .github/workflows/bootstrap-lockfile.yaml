@@ -17,5 +17,6 @@ jobs:
         with:
           persist-credentials: false
       - run: gh extension install github/gh-actions-lock --pin v0.4.1
-      - run: gh actions-lock .github/workflows/*.yaml ':!.github/workflows/bootstrap-lockfile.yaml' || gh actions-lock
+      - run: git rm -q .github/workflows/bootstrap-lockfile.yaml
+      - run: gh actions-lock
       - run: git add -A && git diff --cached
