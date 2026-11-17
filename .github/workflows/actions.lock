@@ -31,8 +31,6 @@ workflows:
         - 'actions/checkout@v7.0.1'
         - 'swatinem/rust-cache@v2.9.3'
         - 'taiki-e/install-action@v2.90.0'
-    '.github/workflows/verify-lockfile.yaml':
-        - 'actions/checkout@v7.0.1'
 dependencies:
     'actions/checkout@v7.0.1':
         ref: 'v7.0.1'
