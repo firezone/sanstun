@@ -86,7 +86,7 @@ jobs:
           tool: cargo-deny
       - run: cargo deny --all-features check
 
-  actionlint:
+  workflows:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
