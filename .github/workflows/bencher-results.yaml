@@ -16,7 +16,7 @@ jobs:
       checks: write
       pull-requests: write
     steps:
-      - uses: bencherdev/bencher@7de3c69a85380826613050826b4bce062be2f07d # v0.6.16
+      - uses: bencherdev/bencher@v0.6.16
       - name: Post the results
         env:
           BENCHER_API_KEY: ${{ secrets.BENCHER_API_KEY }}
