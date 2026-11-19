@@ -1,6 +1,7 @@
-use std::collections::HashMap;
-use std::fmt;
-use std::sync::{Arc, Weak};
+use alloc::sync::{Arc, Weak};
+use core::fmt;
+
+use crate::Map;
 
 use rand::rngs::StdRng;
 use rand::{CryptoRng, RngExt, SeedableRng};
@@ -56,27 +57,32 @@ impl Index {
     }
 }
 
+/// The smallest map length at which dead tunnel entries are pruned.
+const MIN_PRUNE_AT: usize = 64;
+
 /// Allocates random tunnel indices without reusing those of live tunnels.
 pub(crate) struct TunnelIndices {
     rng: StdRng,
-    in_use: HashMap<u32, Weak<()>>,
+    in_use: Map<u32, Weak<()>>,
+    /// Prune dead entries when the map reaches this length.
+    prune_at: usize,
 }
 
 impl TunnelIndices {
     pub(crate) fn new(rng: &mut impl CryptoRng) -> Self {
         TunnelIndices {
             rng: StdRng::from_rng(rng),
-            in_use: HashMap::new(),
+            in_use: Map::new(),
+            prune_at: MIN_PRUNE_AT,
         }
     }
 
     /// Allocates a tunnel index, reserved until the returned lease is dropped.
     pub(crate) fn next(&mut self) -> (Index, Arc<()>) {
-        if self.in_use.len() == self.in_use.capacity() {
-            for _ in self
-                .in_use
-                .extract_if(|_, tunnel| tunnel.strong_count() == 0)
-            {}
+        // Doubling the threshold keeps pruning amortized constant time per tunnel.
+        if self.in_use.len() >= self.prune_at {
+            self.in_use.retain(|_, tunnel| tunnel.strong_count() > 0);
+            self.prune_at = (self.in_use.len() * 2).max(MIN_PRUNE_AT);
         }
 
         loop {
@@ -140,7 +146,7 @@ mod tests {
         use rand::SeedableRng as _;
 
         let mut indices = TunnelIndices::new(&mut StdRng::from_seed([1; 32]));
-        let [o0, o1, o2, o3] = std::array::from_fn(|_| indices.next().0.global());
+        let [o0, o1, o2, o3] = core::array::from_fn(|_| indices.next().0.global());
 
         let predictions = predict_next_global_index([o0, o1, o2]);
 
@@ -154,11 +160,11 @@ mod tests {
     /// Predicts the next index from three observed indices if they follow a masked LFSR.
     ///
     /// Each index is `(state - 1) ^ mask`. Only mask guesses consistent with the LFSR survive.
-    fn predict_next_global_index(observed: [u32; 3]) -> Vec<u32> {
+    fn predict_next_global_index(observed: [u32; 3]) -> alloc::vec::Vec<u32> {
         const POLY: u32 = 0xd80000;
         let step = |s: u32| (s >> 1) ^ (0u32.wrapping_sub(s & 1) & POLY);
 
-        let mut predictions = Vec::new();
+        let mut predictions = alloc::vec::Vec::new();
 
         for mask in 0..1 << 24 {
             let [s0, s1, s2] = observed.map(|o| (o ^ mask) + 1);

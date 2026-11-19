@@ -1,5 +1,6 @@
 use super::index::Index;
 use super::timers::COOKIE_EXPIRATION_TIME;
+use crate::Instant;
 use crate::crypto::{
     SharedKey, aead_chacha20_open, aead_chacha20_seal, b2s_hash, b2s_hmac, b2s_hmac2,
     b2s_keyed_mac_16, dh, xaead_open,
@@ -12,9 +13,9 @@ use crate::message::{
 };
 use crate::session::{Role, Session};
 use crate::tai64n::{Tai64N, TimeStamper};
+use alloc::boxed::Box;
+use core::fmt::Debug;
 use rand::CryptoRng;
-use std::fmt::Debug;
-use std::time::Instant;
 use subtle::ConstantTimeEq as _;
 use zeroize::Zeroizing;
 
@@ -48,8 +49,8 @@ struct NoiseParams {
     preshared_key: PresharedKey,
 }
 
-impl std::fmt::Debug for NoiseParams {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for NoiseParams {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("NoiseParams")
             .field("static_public", &self.static_public)
             .field("peer_static_public", &self.peer_static_public)
@@ -66,8 +67,8 @@ struct HandshakeInitSentState {
     time_sent: Instant,
 }
 
-impl std::fmt::Debug for HandshakeInitSentState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for HandshakeInitSentState {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("HandshakeInitSentState")
             .field("local_index", &self.local_index)
             .field("hash", &self.hash)
@@ -280,7 +281,7 @@ impl Handshake {
     ) -> [u8; HANDSHAKE_INIT_SZ] {
         let (mut initiation, state) = self.format_handshake_initiation(local_index, rng, now);
 
-        self.previous = std::mem::replace(&mut self.state, HandshakeState::InitSent(state));
+        self.previous = core::mem::replace(&mut self.state, HandshakeState::InitSent(state));
         self.append_mac1_and_mac2(local_index, &mut initiation);
 
         initiation

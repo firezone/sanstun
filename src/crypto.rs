@@ -1,9 +1,10 @@
+use alloc::borrow::ToOwned;
+
 use crate::PublicKey;
 use crate::errors::Error;
 use blake2::digest::consts::U16;
 use blake2::digest::{FixedOutput, KeyInit};
 use blake2::{Blake2s256, Blake2sMac, Digest};
-use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
 use x25519_dalek::SharedSecret;
 use zeroize::Zeroizing;
 
@@ -75,19 +76,13 @@ fn aead_chacha20_seal_inner(
     data: &[u8],
     aad: &[u8],
 ) {
-    let key = LessSafeKey::new(UnboundKey::new(&CHACHA20_POLY1305, key).unwrap());
+    let key = AeadKey::new(key);
 
     ciphertext[..data.len()].copy_from_slice(data);
 
-    let tag = key
-        .seal_in_place_separate_tag(
-            Nonce::assume_unique_for_key(nonce),
-            Aad::from(aad),
-            &mut ciphertext[..data.len()],
-        )
-        .unwrap();
+    let tag = key.seal_in_place_separate_tag(nonce, aad, &mut ciphertext[..data.len()]);
 
-    ciphertext[data.len()..].copy_from_slice(tag.as_ref());
+    ciphertext[data.len()..].copy_from_slice(&tag);
 }
 
 #[inline]
@@ -100,8 +95,6 @@ pub(crate) fn aead_chacha20_open(
     aad: &[u8],
 ) -> Result<(), Error> {
     aead_chacha20_open_inner(buffer, key, nonce(counter), data, aad)
-        .map_err(|_| Error::InvalidAeadTag)?;
-    Ok(())
 }
 
 #[inline]
@@ -111,20 +104,124 @@ fn aead_chacha20_open_inner(
     nonce: [u8; 12],
     data: &[u8],
     aad: &[u8],
-) -> Result<(), ring::error::Unspecified> {
-    let key = LessSafeKey::new(UnboundKey::new(&CHACHA20_POLY1305, key).unwrap());
+) -> Result<(), Error> {
+    let key = AeadKey::new(key);
 
     let mut inner_buffer = data.to_owned();
 
-    let plaintext = key.open_in_place(
-        Nonce::assume_unique_for_key(nonce),
-        Aad::from(aad),
-        &mut inner_buffer,
-    )?;
+    let plaintext = key.open_in_place(nonce, aad, &mut inner_buffer)?;
 
     buffer.copy_from_slice(plaintext);
 
     Ok(())
+}
+
+/// A ChaCha20-Poly1305 key: `ring` with the `std` feature, `chacha20poly1305` without it.
+pub(crate) struct AeadKey(
+    #[cfg(feature = "std")] ring::aead::LessSafeKey,
+    #[cfg(not(feature = "std"))] chacha20poly1305::ChaCha20Poly1305,
+);
+
+#[cfg(feature = "std")]
+impl AeadKey {
+    #[inline]
+    pub(crate) fn new(key: &[u8; 32]) -> Self {
+        use ring::aead::{CHACHA20_POLY1305, LessSafeKey, UnboundKey};
+
+        Self(LessSafeKey::new(
+            UnboundKey::new(&CHACHA20_POLY1305, key).expect("key has 32 bytes"),
+        ))
+    }
+
+    /// Encrypts `in_out` in place and returns the authentication tag.
+    ///
+    /// Panics if `in_out` exceeds the AEAD's length limit of about 256 GiB, which WireGuard
+    /// messages never approach.
+    #[inline]
+    pub(crate) fn seal_in_place_separate_tag(
+        &self,
+        nonce: [u8; 12],
+        aad: &[u8],
+        in_out: &mut [u8],
+    ) -> [u8; 16] {
+        use ring::aead::{Aad, Nonce};
+
+        let tag = self
+            .0
+            .seal_in_place_separate_tag(Nonce::assume_unique_for_key(nonce), Aad::from(aad), in_out)
+            .expect("messages are always within the AEAD's length limit");
+
+        tag.as_ref().try_into().expect("tag has 16 bytes")
+    }
+
+    /// Authenticates and decrypts `in_out`, the ciphertext followed by its tag, and returns the
+    /// plaintext at its start.
+    #[inline]
+    pub(crate) fn open_in_place<'a>(
+        &self,
+        nonce: [u8; 12],
+        aad: &[u8],
+        in_out: &'a mut [u8],
+    ) -> Result<&'a mut [u8], Error> {
+        use ring::aead::{Aad, Nonce};
+
+        self.0
+            .open_in_place(Nonce::assume_unique_for_key(nonce), Aad::from(aad), in_out)
+            .map_err(|_| Error::InvalidAeadTag)
+    }
+}
+
+#[cfg(not(feature = "std"))]
+impl AeadKey {
+    #[inline]
+    pub(crate) fn new(key: &[u8; 32]) -> Self {
+        use chacha20poly1305::{ChaCha20Poly1305, Key, KeyInit};
+
+        Self(ChaCha20Poly1305::new(&Key::from(*key)))
+    }
+
+    /// Encrypts `in_out` in place and returns the authentication tag.
+    ///
+    /// Panics if `in_out` exceeds the AEAD's length limit of about 256 GiB, which WireGuard
+    /// messages never approach.
+    #[inline]
+    pub(crate) fn seal_in_place_separate_tag(
+        &self,
+        nonce: [u8; 12],
+        aad: &[u8],
+        in_out: &mut [u8],
+    ) -> [u8; 16] {
+        use chacha20poly1305::Nonce;
+        use chacha20poly1305::aead::AeadInOut;
+
+        self.0
+            .encrypt_inout_detached(&Nonce::from(nonce), aad, in_out.into())
+            .expect("messages are always within the AEAD's length limit")
+            .into()
+    }
+
+    /// Authenticates and decrypts `in_out`, the ciphertext followed by its tag, and returns the
+    /// plaintext at its start.
+    #[inline]
+    pub(crate) fn open_in_place<'a>(
+        &self,
+        nonce: [u8; 12],
+        aad: &[u8],
+        in_out: &'a mut [u8],
+    ) -> Result<&'a mut [u8], Error> {
+        use chacha20poly1305::aead::AeadInOut;
+        use chacha20poly1305::{Nonce, Tag};
+
+        let plaintext_len = in_out.len().checked_sub(16).ok_or(Error::InvalidAeadTag)?;
+        let (plaintext, tag) = in_out.split_at_mut(plaintext_len);
+        let tag = Tag::from(<[u8; 16]>::try_from(&*tag).expect("tag has 16 bytes"));
+
+        self.0
+            .decrypt_inout_detached(&Nonce::from(nonce), aad, (&mut *plaintext).into(), &tag)
+            .map_err(|_| Error::InvalidAeadTag)?;
+
+        Ok(plaintext)
+    }
 }
 
 /// Encrypts `data` with XChaCha20-Poly1305 and appends the 16-byte authentication tag.
@@ -151,8 +248,6 @@ pub(crate) fn xaead_open(
     let (subkey, nonce) = xchacha20_subkey_and_nonce(key, nonce);
 
     aead_chacha20_open_inner(buffer, &subkey, nonce, data, aad)
-        .map_err(|_| Error::InvalidAeadTag)?;
-    Ok(())
 }
 
 /// Derives the ChaCha20-Poly1305 key and nonce for XChaCha20-Poly1305.
@@ -229,6 +324,8 @@ mod x25519 {
 mod tests {
     use super::*;
     use crate::StaticSecret;
+    use alloc::vec;
+    use std::eprintln;
 
     #[test]
     fn dh_rejects_low_order_points() {
@@ -338,8 +435,8 @@ mod tests {
         let aad = [
             0x50, 0x51, 0x52, 0x53, 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7,
         ];
-        let key = std::array::from_fn(|i| 0x80 + i as u8);
-        let nonce = std::array::from_fn(|i| 0x40 + i as u8);
+        let key = core::array::from_fn(|i| 0x80 + i as u8);
+        let nonce = core::array::from_fn(|i| 0x40 + i as u8);
         let mut sealed = vec![0; plaintext.len() + 16];
 
         xaead_seal(&mut sealed, &key, &nonce, plaintext, &aad);

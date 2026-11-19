@@ -14,11 +14,21 @@ The fork at [firezone/boringtun](https://github.com/firezone/boringtun) is now d
 The `sanstun` project combines our experience of operating WireGuard in production in a sans-IO setting.
 It features a re-designed API and internals that are tuned for maximizing throughput whilst making it easy and safe to use.
 
+- `#![no_std]`, requiring only `alloc` (so your binary must provide a global allocator) and atomic pointers
 - Fully sans-IO, including time and RNG seeds
 - No internal buffering
 - No locks or atomic counters in the protocol state
 - Multi-core friendly API: Encapsulating and decapsulating packets performs only the minimal book-keeping necessary.
   The actual crypto operations can be deferred to other threads and thus parallelized when processing packets in batches.
+
+## Features
+
+- `std` (default): encrypts data with [`ring`](https://crates.io/crates/ring), uses `HashMap` internally and provides `Instant::now()`.
+- Without `std`, `sanstun` encrypts with the pure-Rust [`chacha20poly1305`](https://crates.io/crates/chacha20poly1305) crate and builds for bare-metal targets.
+  Encrypting and decrypting data is slower than with `ring`: we measured 2–4× on x86_64, and about 108 cycles per byte (roughly 17 Mbit/s per core) on a 240 MHz ESP32.
+  Everything else performs the same.
+  The handshake rate limiter tracks at most 128 sources by default, about 12 KB in the worst case; see `Interface::with_rate_limit_sources`.
+- `embassy-time`: converts between `sanstun::Instant` and `embassy_time::Instant`.
 
 ## Out-of-scope
 
@@ -52,7 +62,7 @@ With great power comes great responsibility.
 
 ### Time
 
-The time passed in needs to be monotonically increasing, otherwise other peers might reject handshakes as replays.
+`sanstun` does not read a clock. Pass the elapsed time of your monotonic clock as a `sanstun::Instant`: `Instant::now()` with the `std` feature, a conversion from `embassy_time::Instant` with the `embassy-time` feature, or `Instant::from_duration_since_epoch` otherwise. The time passed in needs to be monotonically increasing, otherwise other peers might reject handshakes as replays.
 
 ## Security
 

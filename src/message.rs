@@ -2,7 +2,8 @@ use crate::PublicKey;
 use crate::index::{Index, TunnelId};
 use crate::tai64n::Tai64N;
 
-use std::ops::Deref;
+use alloc::boxed::Box;
+use core::ops::Deref;
 
 use zeroize::Zeroizing;
 
@@ -64,8 +65,8 @@ pub(crate) enum ReplayCheck {
     Replayed,
 }
 
-impl std::fmt::Debug for HandshakeInitiation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for HandshakeInitiation {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("HandshakeInitiation")
             .field("sender_index", &self.sender_index())
             .field("peer_static_public", &self.peer_static_public())
@@ -184,8 +185,8 @@ impl Deref for Datagram {
     }
 }
 
-impl std::fmt::Debug for Datagram {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Datagram {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("Datagram").field(&&**self).finish()
     }
 }

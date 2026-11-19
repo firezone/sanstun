@@ -8,7 +8,7 @@ pub(crate) struct RingBuffer<T, const N: usize> {
 impl<T, const N: usize> RingBuffer<T, N> {
     pub(crate) fn new() -> Self {
         Self {
-            slots: std::array::from_fn(|_| None),
+            slots: core::array::from_fn(|_| None),
             head: 0,
             len: 0,
         }
@@ -82,13 +82,13 @@ mod tests {
         assert_eq!(drain(&mut buffer), [4, 5, 6, 7]);
     }
 
-    fn push_all(buffer: &mut RingBuffer<u8, 4>, items: std::ops::Range<u8>) {
+    fn push_all(buffer: &mut RingBuffer<u8, 4>, items: core::ops::Range<u8>) {
         for item in items {
             buffer.push_back(item);
         }
     }
 
-    fn drain(buffer: &mut RingBuffer<u8, 4>) -> Vec<u8> {
-        std::iter::from_fn(|| buffer.pop_front()).collect()
+    fn drain(buffer: &mut RingBuffer<u8, 4>) -> alloc::vec::Vec<u8> {
+        core::iter::from_fn(|| buffer.pop_front()).collect()
     }
 }

@@ -6,9 +6,9 @@ use crate::harness::{
     REJECT_AFTER_TIME, REKEY_TIMEOUT, Sim, classify, ipv4_packet, secs,
 };
 use sanstun::{
-    Datagram, Error, Interface, PublicKey, Received, ReceivedMessage, Tunnel, TunnelConfig,
+    Datagram, Error, Instant, Interface, PublicKey, Received, ReceivedMessage, Tunnel, TunnelConfig,
 };
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use zeroize::Zeroizing;
 
 #[test]
@@ -173,7 +173,7 @@ fn replayed_handshake_initiation_is_rejected_after_the_tunnel_is_replaced() {
 // The interface only checks initiations for replays if a tunnel for their peer already exists.
 #[test]
 fn initiation_received_before_its_tunnel_exists_is_rejected() {
-    let now = Instant::now();
+    let now = Instant::EPOCH;
     let mut a = Interface::new(Zeroizing::new([1; 32]), now, Duration::ZERO);
     let mut b = Interface::new(Zeroizing::new([2; 32]), now, Duration::ZERO);
     let mut a_to_b = a
@@ -196,7 +196,7 @@ fn initiation_received_before_its_tunnel_exists_is_rejected() {
 
 #[test]
 fn initiation_received_after_its_tunnels_were_dropped_is_rejected() {
-    let now = Instant::now();
+    let now = Instant::EPOCH;
     let mut a = Interface::new(Zeroizing::new([1; 32]), now, Duration::ZERO);
     let mut b = Interface::new(Zeroizing::new([2; 32]), now, Duration::ZERO);
     let mut a_to_b = a
@@ -221,7 +221,7 @@ fn initiation_received_after_its_tunnels_were_dropped_is_rejected() {
 // A peer keeps its replay protection while it has no tunnel, even if tunnels for others come and go.
 #[test]
 fn replayed_handshake_initiation_is_rejected_by_a_later_tunnel_for_the_same_peer() {
-    let now = Instant::now();
+    let now = Instant::EPOCH;
     let (mut b, b_to_a, init) = accepted_initiation(now);
     let a_public = b_to_a.remote_static_public();
     drop(b_to_a);
@@ -462,7 +462,7 @@ fn tunnel_rejects_low_order_peer_static_key() {
             0xd0, 0x9f, 0x11, 0x57,
         ],
     ];
-    let now = Instant::now();
+    let now = Instant::EPOCH;
     let mut interface = Interface::new(
         Zeroizing::new([0; 32]),
         now,

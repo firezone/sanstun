@@ -1,6 +1,8 @@
-use std::convert::TryInto;
-use std::fmt::{self, Debug};
-use std::time::{Duration, Instant};
+use core::fmt::{self, Debug};
+use core::mem;
+use core::time::Duration;
+
+use crate::Instant;
 
 /// A 12-byte [TAI64N](https://cr.yp.to/libtai/tai64.html) timestamp.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -42,7 +44,7 @@ impl Tai64N {
     }
 
     pub(crate) fn parse(buf: &[u8; 12]) -> Tai64N {
-        let (sec_bytes, nano_bytes) = buf.split_at(std::mem::size_of::<u64>());
+        let (sec_bytes, nano_bytes) = buf.split_at(mem::size_of::<u64>());
         let secs = u64::from_be_bytes(sec_bytes.try_into().unwrap());
         let nano = u32::from_be_bytes(nano_bytes.try_into().unwrap());
 

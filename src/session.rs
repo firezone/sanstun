@@ -2,13 +2,15 @@ use super::{
     index::{Index, TunnelId},
     timers::{REJECT_AFTER_MESSAGES, REJECT_AFTER_TIME, REKEY_AFTER_MESSAGES, REKEY_AFTER_TIME},
 };
-use crate::crypto::nonce;
+use crate::crypto::{AeadKey, nonce};
 use crate::errors::Error;
 use crate::message::{AEAD_TAG_SZ, DATA, DATA_HEADER_SZ, DataMessage, TransportData};
 use crate::replay::ReceivingKeyCounterValidator;
-use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
-use std::num::NonZeroUsize;
-use std::time::{Duration, Instant};
+use alloc::vec::Vec;
+use core::num::NonZeroUsize;
+use core::time::Duration;
+
+use crate::Instant;
 use zeroize::Zeroizing;
 
 pub(crate) struct Session {
@@ -25,8 +27,8 @@ pub(crate) struct Session {
     receiving_key_counter: ReceivingKeyCounterValidator,
 }
 
-impl std::fmt::Debug for Session {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for Session {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(
             f,
             "Session: {}<- ->{}",
@@ -472,7 +474,7 @@ impl PendingEncapsulate {
         let mut remaining = self.len.get();
         let mut counter = self.first_counter;
 
-        std::iter::from_fn(move || {
+        core::iter::from_fn(move || {
             if remaining == 0 {
                 debug_assert!(
                     messages.next().is_none(),
@@ -499,7 +501,7 @@ impl PendingEncapsulate {
 }
 
 fn encrypt_payload<'a>(
-    aead: &LessSafeKey,
+    aead: &AeadKey,
     receiver_index: Index,
     counter: u64,
     plaintext: &[u8],
@@ -525,14 +527,8 @@ fn encrypt_payload<'a>(
     payload.copy_from_slice(plaintext);
     padding.fill(0);
 
-    let computed_tag = aead
-        .seal_in_place_separate_tag(
-            Nonce::assume_unique_for_key(nonce(counter)),
-            Aad::from(&[]),
-            data,
-        )
-        .expect("plaintext of a data message is always within the AEAD's limits");
-    tag.copy_from_slice(computed_tag.as_ref());
+    let computed_tag = aead.seal_in_place_separate_tag(nonce(counter), &[], data);
+    tag.copy_from_slice(&computed_tag);
 
     Ok(DataMessage(message))
 }
@@ -633,7 +629,7 @@ impl PendingDecapsulate {
 }
 
 fn decrypt_in_place(
-    aead: &LessSafeKey,
+    aead: &AeadKey,
     receiving_index: Index,
     counter: u64,
     message: &[u8],
@@ -658,13 +654,7 @@ fn decrypt_in_place(
     };
     buf.copy_from_slice(ciphertext);
 
-    let plaintext = aead
-        .open_in_place(
-            Nonce::assume_unique_for_key(nonce(counter)),
-            Aad::from(&[]),
-            buf,
-        )
-        .map_err(|_| Error::InvalidAeadTag)?;
+    let plaintext = aead.open_in_place(nonce(counter), &[], buf)?;
 
     Ok(plaintext.len())
 }
@@ -758,8 +748,8 @@ impl<B> DecryptedBatch<B> {
     }
 }
 
-impl<B> std::fmt::Debug for DecryptedBatch<B> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<B> core::fmt::Debug for DecryptedBatch<B> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("DecryptedBatch")
             .field("receiving_index", &self.receiving_index)
             .field("messages", &self.messages)
@@ -787,8 +777,8 @@ impl<B> Plaintext<B> {
     }
 }
 
-impl<B> std::fmt::Debug for Plaintext<B> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<B> core::fmt::Debug for Plaintext<B> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Keepalive => f.write_str("Keepalive"),
             Self::Data { len, .. } => f
@@ -812,15 +802,13 @@ impl SessionKey {
     }
 
     /// ChaCha20-Poly1305 has no key schedule, so this only copies the key.
-    fn aead(&self) -> LessSafeKey {
-        LessSafeKey::new(
-            UnboundKey::new(&CHACHA20_POLY1305, &self.0[..]).expect("key has 32 bytes"),
-        )
+    fn aead(&self) -> AeadKey {
+        AeadKey::new(&self.0)
     }
 }
 
-impl std::fmt::Debug for SessionKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for SessionKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("SessionKey")
     }
 }
@@ -921,7 +909,7 @@ mod tests {
             &[0; 32],
             &[0; 32],
             Role::Initiator,
-            Instant::now(),
+            Instant::default(),
         )
     }
 }

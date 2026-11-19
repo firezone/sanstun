@@ -1,6 +1,7 @@
-use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr};
-use std::time::{Duration, Instant};
+use core::net::{IpAddr, Ipv4Addr};
+use core::time::Duration;
+
+use crate::{Instant, Map};
 
 const DEFAULT_HANDSHAKE_LIMIT: u64 = 100;
 
@@ -15,7 +16,14 @@ const TOKEN_MAX: Duration = PACKET_COST.saturating_mul(PACKETS_BURSTABLE);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(1);
 const _: () = assert!(IDLE_TIMEOUT.as_nanos() >= TOKEN_MAX.as_nanos());
 
-const MAX_SOURCES: usize = 65536;
+/// How many sources the limiter tracks by default.
+///
+/// Each tracked source costs about 90 bytes of heap on a 32-bit microcontroller. Without `std`,
+/// the default keeps the worst case to about 12 KB.
+#[cfg(feature = "std")]
+const DEFAULT_MAX_SOURCES: usize = 65_536;
+#[cfg(not(feature = "std"))]
+const DEFAULT_MAX_SOURCES: usize = 128;
 
 /// Limits handshake processing under load.
 ///
@@ -25,7 +33,9 @@ pub(crate) struct RateLimiter {
     /// Messages counted since `window_start`.
     count: u64,
     window_start: Instant,
-    buckets: HashMap<Source, Bucket>,
+    buckets: Map<Source, Bucket>,
+    /// Tracked sources beyond this are refused.
+    max_sources: usize,
     last_gc: Instant,
 }
 
@@ -35,13 +45,18 @@ impl RateLimiter {
             limit: DEFAULT_HANDSHAKE_LIMIT,
             count: 0,
             window_start: now,
-            buckets: HashMap::new(),
+            buckets: Map::new(),
+            max_sources: DEFAULT_MAX_SOURCES,
             last_gc: now,
         }
     }
 
     pub(crate) fn set_limit(&mut self, limit: u64) {
         self.limit = limit;
+    }
+
+    pub(crate) fn set_max_sources(&mut self, max_sources: usize) {
+        self.max_sources = max_sources;
     }
 
     /// Counts a handshake message and returns whether it exceeds this second's limit.
@@ -69,7 +84,7 @@ impl RateLimiter {
             return bucket.take(now);
         }
 
-        if self.buckets.len() >= MAX_SOURCES {
+        if self.buckets.len() >= self.max_sources {
             return false;
         }
 
@@ -90,15 +105,13 @@ impl RateLimiter {
             return;
         }
 
-        for _ in self
-            .buckets
-            .extract_if(|_, bucket| now.duration_since(bucket.last_seen) >= IDLE_TIMEOUT)
-        {}
+        self.buckets
+            .retain(|_, bucket| now.duration_since(bucket.last_seen) < IDLE_TIMEOUT);
         self.last_gc = now;
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Source {
     V4(Ipv4Addr),
     /// The upper 64 bits of the address.
@@ -139,9 +152,9 @@ mod tests {
 
     #[test]
     fn full_table_refuses_new_sources_until_idle_ones_are_dropped() {
-        let start = Instant::now();
+        let start = Instant::default();
         let mut limiter = RateLimiter::new(start);
-        for i in 0..MAX_SOURCES as u32 {
+        for i in 0..limiter.max_sources as u32 {
             assert!(limiter.allow(Ipv4Addr::from_bits(i).into(), start));
         }
 
@@ -156,7 +169,7 @@ mod tests {
 
     #[test]
     fn ipv4_mapped_ipv6_sources_are_limited_per_ipv4_address() {
-        let now = Instant::now();
+        let now = Instant::default();
         let mut limiter = RateLimiter::new(now);
         let mapped = |ip: Ipv4Addr| IpAddr::V6(ip.to_ipv6_mapped());
 

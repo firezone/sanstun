@@ -15,9 +15,12 @@ use crate::timers::{MAX_JITTER, TimerName, Timers};
 use crate::rng::ForwardSecureRng;
 use rand::{CryptoRng, RngExt};
 
-use std::iter;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use alloc::sync::Arc;
+use alloc::vec::{self, Vec};
+use core::iter;
+use core::time::Duration;
+
+use crate::Instant;
 
 /// An action for the caller, returned by [`Tunnel::poll_event`].
 #[derive(Debug)]
@@ -54,8 +57,8 @@ pub enum Committed<B> {
     Keepalive,
 }
 
-impl<B> std::fmt::Debug for Committed<B> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<B> core::fmt::Debug for Committed<B> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Committed::Data { len, .. } => f
                 .debug_struct("Data")
@@ -68,7 +71,7 @@ impl<B> std::fmt::Debug for Committed<B> {
 
 /// The result of each message of a committed [`DecryptedBatch`], in the order the messages were
 /// added to the batch.
-pub struct CommittedBatch<B>(std::vec::IntoIter<(u64, Result<Plaintext<B>, Error>)>);
+pub struct CommittedBatch<B>(vec::IntoIter<(u64, Result<Plaintext<B>, Error>)>);
 
 impl<B> CommittedBatch<B> {
     /// Returns the plaintexts of the accepted data messages the batch has yet to yield.
@@ -108,8 +111,8 @@ impl<B> Iterator for CommittedBatch<B> {
 
 impl<B> ExactSizeIterator for CommittedBatch<B> {}
 
-impl<B> std::fmt::Debug for CommittedBatch<B> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<B> core::fmt::Debug for CommittedBatch<B> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("CommittedBatch")
             .field(&self.0.as_slice())
             .finish()
