@@ -154,11 +154,11 @@ mod tests {
     /// Predicts the next index from three observed indices if they follow a masked LFSR.
     ///
     /// Each index is `(state - 1) ^ mask`. Only mask guesses consistent with the LFSR survive.
-    fn predict_next_global_index(observed: [u32; 3]) -> Vec<u32> {
+    fn predict_next_global_index(observed: [u32; 3]) -> alloc::vec::Vec<u32> {
         const POLY: u32 = 0xd80000;
         let step = |s: u32| (s >> 1) ^ (0u32.wrapping_sub(s & 1) & POLY);
 
-        let mut predictions = Vec::new();
+        let mut predictions = alloc::vec::Vec::new();
 
         for mask in 0..1 << 24 {
             let [s0, s1, s2] = observed.map(|o| (o ^ mask) + 1);

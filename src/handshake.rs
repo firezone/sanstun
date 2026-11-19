@@ -1,5 +1,6 @@
 use super::index::Index;
 use super::timers::COOKIE_EXPIRATION_TIME;
+use crate::Instant;
 use crate::crypto::{
     SharedKey, aead_chacha20_open, aead_chacha20_seal, b2s_hash, b2s_hmac, b2s_hmac2,
     b2s_keyed_mac_16, dh, xaead_open,
@@ -12,9 +13,9 @@ use crate::message::{
 };
 use crate::session::{Role, Session};
 use crate::tai64n::{Tai64N, TimeStamper};
+use alloc::boxed::Box;
 use core::fmt::Debug;
 use rand::CryptoRng;
-use std::time::Instant;
 use subtle::ConstantTimeEq as _;
 use zeroize::Zeroizing;
 

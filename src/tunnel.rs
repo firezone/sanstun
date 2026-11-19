@@ -16,9 +16,11 @@ use crate::rng::ForwardSecureRng;
 use rand::{CryptoRng, RngExt};
 
 use alloc::sync::Arc;
+use alloc::vec::{self, Vec};
 use core::iter;
 use core::time::Duration;
-use std::time::Instant;
+
+use crate::Instant;
 
 /// An action for the caller, returned by [`Tunnel::poll_event`].
 #[derive(Debug)]
@@ -69,7 +71,7 @@ impl<B> core::fmt::Debug for Committed<B> {
 
 /// The result of each message of a committed [`DecryptedBatch`], in the order the messages were
 /// added to the batch.
-pub struct CommittedBatch<B>(alloc::vec::IntoIter<(u64, Result<Plaintext<B>, Error>)>);
+pub struct CommittedBatch<B>(vec::IntoIter<(u64, Result<Plaintext<B>, Error>)>);
 
 impl<B> CommittedBatch<B> {
     /// Returns the plaintexts of the accepted data messages the batch has yet to yield.

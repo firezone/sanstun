@@ -2,7 +2,8 @@
 
 use core::ops::{Index, IndexMut};
 use core::time::Duration;
-use std::time::Instant;
+
+use crate::Instant;
 
 pub(crate) const REKEY_AFTER_TIME: Duration = Duration::from_secs(120);
 pub(crate) const REJECT_AFTER_TIME: Duration = Duration::from_secs(180);

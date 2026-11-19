@@ -2,6 +2,7 @@ use crate::PublicKey;
 use crate::index::{Index, TunnelId};
 use crate::tai64n::Tai64N;
 
+use alloc::boxed::Box;
 use core::ops::Deref;
 
 use zeroize::Zeroizing;

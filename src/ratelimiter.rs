@@ -1,7 +1,8 @@
 use alloc::collections::BTreeMap;
 use core::net::{IpAddr, Ipv4Addr};
 use core::time::Duration;
-use std::time::Instant;
+
+use crate::Instant;
 
 const DEFAULT_HANDSHAKE_LIMIT: u64 = 100;
 
@@ -17,7 +18,13 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(1);
 const _: () = assert!(IDLE_TIMEOUT.as_nanos() >= TOKEN_MAX.as_nanos());
 
 /// How many sources the limiter tracks unless configured otherwise.
+///
+/// Lower without `std` so a flood of sources cannot exhaust a microcontroller's heap: 128 sources
+/// take about 12 KB, 65,536 would take about 6 MB.
+#[cfg(feature = "std")]
 const DEFAULT_MAX_SOURCES: usize = 65536;
+#[cfg(not(feature = "std"))]
+const DEFAULT_MAX_SOURCES: usize = 128;
 
 /// Limits handshake processing under load.
 ///
@@ -146,9 +153,9 @@ mod tests {
 
     #[test]
     fn full_table_refuses_new_sources_until_idle_ones_are_dropped() {
-        let start = Instant::now();
+        let start = Instant::ZERO;
         let mut limiter = RateLimiter::new(start);
-        for i in 0..DEFAULT_MAX_SOURCES as u32 {
+        for i in 0..limiter.max_sources as u32 {
             assert!(limiter.allow(Ipv4Addr::from_bits(i).into(), start));
         }
 
@@ -163,7 +170,7 @@ mod tests {
 
     #[test]
     fn ipv4_mapped_ipv6_sources_are_limited_per_ipv4_address() {
-        let now = Instant::now();
+        let now = Instant::ZERO;
         let mut limiter = RateLimiter::new(now);
         let mapped = |ip: Ipv4Addr| IpAddr::V6(ip.to_ipv6_mapped());
 
