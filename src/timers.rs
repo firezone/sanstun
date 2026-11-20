@@ -1,7 +1,9 @@
 //! Timers from the [WireGuard protocol](https://www.wireguard.com/papers/wireguard.pdf#page=14).
 
-use std::ops::{Index, IndexMut};
-use std::time::{Duration, Instant};
+use core::ops::{Index, IndexMut};
+use core::time::Duration;
+
+use crate::Instant;
 
 pub(crate) const REKEY_AFTER_TIME: Duration = Duration::from_secs(120);
 pub(crate) const REJECT_AFTER_TIME: Duration = Duration::from_secs(180);

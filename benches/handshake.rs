@@ -5,11 +5,11 @@
 
 use std::hint::black_box;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use criterion::{BatchSize, Criterion};
 use sanstun::{
-    HandshakeInitiation, HandshakeResponse, Interface, Received, ReceivedMessage, Tunnel,
+    HandshakeInitiation, HandshakeResponse, Instant, Interface, Received, ReceivedMessage, Tunnel,
     TunnelConfig,
 };
 use zeroize::Zeroizing;
@@ -19,7 +19,7 @@ const ADDR: SocketAddr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 0, 0
 const STEP: Duration = Duration::from_nanos(1);
 
 fn bench_handshake(c: &mut Criterion) {
-    let mut now = Instant::now();
+    let mut now = Instant::EPOCH;
     let mut group = c.benchmark_group("handshake");
 
     let mut interface_a = interface(now);

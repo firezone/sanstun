@@ -8,17 +8,17 @@ use std::cell::RefCell;
 use std::hint::black_box;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use criterion::{BatchSize, Criterion};
-use sanstun::{Interface, Received, ReceivedMessage, Tunnel, TunnelConfig};
+use sanstun::{Instant, Interface, Received, ReceivedMessage, Tunnel, TunnelConfig};
 use zeroize::Zeroizing;
 
 const PACKET_SIZES: [usize; 2] = [64, 1280];
 
 fn bench_data_path(c: &mut Criterion) {
     // Freeze time so the sessions stay usable throughout the benchmark.
-    let now = Instant::now();
+    let now = Instant::EPOCH;
     let addr = "10.0.0.1:51820".parse().unwrap();
 
     for size in PACKET_SIZES {

@@ -6,9 +6,10 @@
 use std::collections::VecDeque;
 use std::net::SocketAddr;
 use std::num::NonZeroUsize;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use sanstun::Error;
+use sanstun::Instant;
 use sanstun::{
     Committed, DataMessage, DecryptedBatch, PendingDecapsulate, PendingEncapsulate,
     ReceivedMessage, TransportData, Tunnel, TunnelConfig,
@@ -268,7 +269,7 @@ impl Builder {
     }
 
     pub fn build(self) -> Sim {
-        let start = Instant::now();
+        let start = Instant::EPOCH;
         let unix = Duration::from_secs(1_700_000_000);
 
         let (secret_a, secret_b) = match self.static_keys {

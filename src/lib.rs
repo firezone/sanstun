@@ -1,3 +1,5 @@
+#![no_std]
+
 //! A sans-IO implementation of the WireGuard protocol.
 //!
 //! # Example
@@ -7,19 +9,20 @@
 //! timers with [`Tunnel::poll_timeout`] and [`Tunnel::handle_timeout`].
 //!
 //! ```
-//! use std::num::NonZeroUsize;
-//! use std::time::{Instant, SystemTime, UNIX_EPOCH};
+//! use core::num::NonZeroUsize;
+//! use core::time::Duration;
 //!
-//! use sanstun::{Committed, Interface, Received, ReceivedMessage, TunnelConfig};
+//! use sanstun::{Committed, Instant, Interface, Received, ReceivedMessage, TunnelConfig};
 //! use zeroize::Zeroizing;
 //!
-//! let now = Instant::now();
-//! let unix = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+//! let now = Instant::EPOCH;
+//! let unix = Duration::from_secs(1_700_000_000);
 //! let alice_addr = "192.0.2.1:51820".parse().unwrap();
 //! let bob_addr = "192.0.2.2:51820".parse().unwrap();
 //!
-//! let mut alice = Interface::new(Zeroizing::new(rand::random()), now, unix);
-//! let mut bob = Interface::new(Zeroizing::new(rand::random()), now, unix);
+//! // Use fresh operating-system entropy for the seeds in production.
+//! let mut alice = Interface::new(Zeroizing::new([1; 32]), now, unix);
+//! let mut bob = Interface::new(Zeroizing::new([2; 32]), now, unix);
 //! let mut alice_to_bob = alice.new_tunnel(bob.static_public(), TunnelConfig::default(), now)?;
 //! let mut bob_to_alice = bob.new_tunnel(alice.static_public(), TunnelConfig::default(), now)?;
 //!
@@ -66,6 +69,23 @@
 //! # Ok::<(), sanstun::Error>(())
 //! ```
 //!
+//! # `no_std`
+//!
+//! sanstun is `#![no_std]` and needs `alloc` and atomic pointers. It never reads a clock or an
+//! entropy source of its own: pass [`Instant`]s from your monotonic clock and seed
+//! [`Interface::new`] with operating-system entropy.
+//!
+//! The default `std` feature encrypts data with `ring`, uses `HashMap` internally and adds
+//! `Instant::now`. Without it, sanstun uses the pure-Rust `chacha20poly1305` crate and
+//! `BTreeMap`, which build for bare-metal targets. The `embassy-time` feature converts between
+//! [`Instant`] and `embassy_time::Instant`.
+//!
+//! On a microcontroller, budget heap for the handshake rate limiter. Without `std` it tracks at
+//! most 128 sources by default, about 12 KB in the worst case; adjust this with
+//! [`Interface::with_rate_limit_sources`]. Also lower [`Interface::with_handshake_limit`] to what
+//! the device can process: an ESP32 answers only a few handshakes per second, well below the
+//! default of 100.
+//!
 //! # Caller responsibilities
 //!
 //! sanstun handles the protocol and cryptography. Your application is responsible for:
@@ -89,6 +109,16 @@
 //! - **Time:** use a monotonic clock for `now`. The Unix time passed to [`Interface::new`] must
 //!   not go backwards across restarts, or peers may reject handshake initiations as replays.
 
+extern crate alloc;
+
+#[cfg(any(feature = "std", test))]
+extern crate std;
+
+// Only builds without `std` use the pure-Rust AEAD, but Cargo cannot drop a dependency when a
+// feature is enabled.
+#[cfg(feature = "std")]
+use chacha20poly1305 as _;
+
 mod crypto;
 mod errors;
 mod handshake;
@@ -102,8 +132,15 @@ mod ring_buffer;
 mod rng;
 mod session;
 mod tai64n;
+mod time;
 mod timers;
 mod tunnel;
+
+/// The internal map: `HashMap` with `std`, `BTreeMap` without a hasher in `core` or `alloc`.
+#[cfg(feature = "std")]
+type Map<K, V> = std::collections::HashMap<K, V>;
+#[cfg(not(feature = "std"))]
+type Map<K, V> = alloc::collections::BTreeMap<K, V>;
 
 pub use errors::Error;
 pub use index::TunnelId;
@@ -116,4 +153,5 @@ pub use message::{
 pub use session::{
     DecapsulateBatch, DecryptedBatch, EncapsulateBatch, PendingDecapsulate, PendingEncapsulate,
 };
+pub use time::Instant;
 pub use tunnel::{Committed, CommittedBatch, Event, Tunnel, TunnelConfig};

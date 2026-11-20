@@ -1,4 +1,4 @@
-use std::fmt;
+use core::fmt;
 
 use zeroize::Zeroizing;
 
@@ -92,6 +92,7 @@ impl fmt::Debug for PresharedKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::format;
 
     #[test]
     fn debug_redacts_only_the_secrets() {

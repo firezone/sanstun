@@ -8,12 +8,13 @@ use crate::message::{
 };
 use crate::ratelimiter::RateLimiter;
 use crate::tai64n::{Tai64N, TimeStamper};
-use crate::{Datagram, Error, PublicKey, StaticSecret, Tunnel, TunnelConfig};
+use crate::{Datagram, Error, Map, PublicKey, StaticSecret, Tunnel, TunnelConfig};
 
-use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, Weak};
-use std::time::{Duration, Instant};
+use alloc::sync::{Arc, Weak};
+use core::net::{IpAddr, SocketAddr};
+use core::time::Duration;
+
+use crate::Instant;
 
 use crate::rng::ForwardSecureRng;
 use rand::RngExt;
@@ -54,7 +55,7 @@ pub struct Interface {
     rate_limiter: RateLimiter,
     /// The latest accepted handshake timestamp of each peer, with a handle that is alive while
     /// the peer has a tunnel.
-    last_handshake_timestamps: HashMap<PublicKey, (Tai64N, Weak<()>)>,
+    last_handshake_timestamps: Map<[u8; 32], (Tai64N, Weak<()>)>,
 }
 
 impl Interface {
@@ -86,7 +87,7 @@ impl Interface {
             stamper: TimeStamper::new(now, unix),
             indices,
             rate_limiter: RateLimiter::new(now),
-            last_handshake_timestamps: HashMap::new(),
+            last_handshake_timestamps: Map::new(),
         }
     }
 
@@ -111,6 +112,20 @@ impl Interface {
         self
     }
 
+    /// Sets how many sources the handshake rate limiter tracks at once.
+    ///
+    /// Under load, each IPv4 address or IPv6 /64 that presents a valid cookie gets a token bucket
+    /// of about 90 bytes on a 32-bit microcontroller, kept until it has been idle for a second.
+    /// While the table is full, handshakes from new sources fail with [`Error::RateLimited`].
+    /// This bounds the memory an attacker with many addresses can make the interface allocate.
+    ///
+    /// Defaults to 65,536 with the `std` feature and 128 without it.
+    pub fn with_rate_limit_sources(mut self, max_sources: usize) -> Self {
+        self.rate_limiter.set_max_sources(max_sources);
+
+        self
+    }
+
     /// Returns the interface's static public key.
     pub fn static_public(&self) -> PublicKey {
         self.static_public
@@ -130,11 +145,13 @@ impl Interface {
         now: Instant,
     ) -> Result<Tunnel, Error> {
         let (index, index_lease) = self.indices.next();
-        let (last_timestamp, peer_lease) =
-            match self.last_handshake_timestamps.get(&peer_static_public) {
-                Some((last, tunnels)) => (*last, tunnels.upgrade().unwrap_or_default()),
-                None => (Tai64N::zero(), Arc::default()),
-            };
+        let (last_timestamp, peer_lease) = match self
+            .last_handshake_timestamps
+            .get(peer_static_public.as_bytes())
+        {
+            Some((last, tunnels)) => (*last, tunnels.upgrade().unwrap_or_default()),
+            None => (Tai64N::zero(), Arc::default()),
+        };
         let tunnels = Arc::downgrade(&peer_lease);
 
         let tunnel = Tunnel::new(
@@ -150,12 +167,10 @@ impl Interface {
         )?;
 
         self.last_handshake_timestamps
-            .insert(peer_static_public, (last_timestamp, tunnels));
+            .insert(peer_static_public.to_bytes(), (last_timestamp, tunnels));
         if self.last_handshake_timestamps.len() > MAX_REMEMBERED_PEERS {
-            for _ in self
-                .last_handshake_timestamps
-                .extract_if(|_, (_, tunnels)| tunnels.strong_count() == 0)
-            {}
+            self.last_handshake_timestamps
+                .retain(|_, (_, tunnels)| tunnels.strong_count() > 0);
         }
 
         Ok(tunnel)
@@ -164,8 +179,8 @@ impl Interface {
     /// Parses an incoming datagram and applies handshake cookie and rate-limit checks.
     ///
     /// Under load, handshakes with valid cookies are limited to 20 per second with a burst of 5
-    /// per IPv4 address or IPv6 /64.
-    /// Messages beyond this budget fail with [`Error::RateLimited`].
+    /// per IPv4 address or IPv6 /64, for at most [`Interface::with_rate_limit_sources`] sources at
+    /// once. Messages beyond this budget fail with [`Error::RateLimited`].
     ///
     /// For peers with a tunnel, handshake initiations that are not newer than the last accepted
     /// one are marked as replays: their [`Tunnel`] fails them with
@@ -202,7 +217,7 @@ impl Interface {
 
                 if let Some((last, _)) = self
                     .last_handshake_timestamps
-                    .get_mut(&init.peer_static_public())
+                    .get_mut(init.peer_static_public().as_bytes())
                     .filter(|(_, tunnels)| tunnels.strong_count() > 0)
                 {
                     if init.0.timestamp.after(last) {
@@ -373,7 +388,7 @@ mod tests {
 
     #[test]
     fn cookies_differ_across_address_families() {
-        let now = Instant::now();
+        let now = Instant::default();
         let mut interface = under_load(now);
 
         let v4 = interface.current_cookie("1.2.3.4:51820".parse().unwrap(), now);
@@ -384,7 +399,7 @@ mod tests {
 
     #[test]
     fn cookies_differ_across_ports() {
-        let now = Instant::now();
+        let now = Instant::default();
         let mut interface = under_load(now);
 
         let first = interface.current_cookie("1.2.3.4:51820".parse().unwrap(), now);
@@ -395,7 +410,7 @@ mod tests {
 
     #[test]
     fn cookie_secret_rotates_every_120_seconds() {
-        let start = Instant::now();
+        let start = Instant::default();
         let mut interface = under_load(start);
         let addr = "1.2.3.4:51820".parse().unwrap();
 
@@ -413,7 +428,7 @@ mod tests {
 
     #[test]
     fn mac2_from_the_previous_cookie_secret_is_rejected() {
-        let start = Instant::now();
+        let start = Instant::default();
         let mut interface = under_load(start);
         let addr = "1.2.3.4:51820".parse().unwrap();
         let cookie = interface.current_cookie(addr, start);
@@ -428,7 +443,7 @@ mod tests {
 
     #[test]
     fn initiations_from_unknown_peers_leave_no_state() {
-        let now = Instant::now();
+        let now = Instant::default();
         let mut initiator = Interface::new(Zeroizing::new([1; 32]), now, Duration::ZERO);
         let mut responder = Interface::new(Zeroizing::new([2; 32]), now, Duration::ZERO);
         let mut tunnel = initiator
