@@ -90,7 +90,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
-      - uses: jdx/mise-action@v5.2.8
+      - uses: jdx/mise-action@v5.2.9
         with:
           version: 2026.11.5
           cache_save: ${{ github.ref == 'refs/heads/main' }}
