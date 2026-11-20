@@ -34,7 +34,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: bencherdev/bencher@v0.6.16
+      - uses: bencherdev/bencher@v0.6.17
       # Runs each benchmark once, so a broken one fails here instead of on Bencher.
       - name: Test benches
         run: cargo bench --benches -- --test

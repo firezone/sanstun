@@ -4,10 +4,10 @@
 version: 'v0.0.3'
 workflows:
     '.github/workflows/bencher-results.yaml':
-        - 'bencherdev/bencher@v0.6.16'
+        - 'bencherdev/bencher@v0.6.17'
     '.github/workflows/benchmarks.yaml':
         - 'actions/checkout@v7.0.1'
-        - 'bencherdev/bencher@v0.6.16'
+        - 'bencherdev/bencher@v0.6.17'
         - 'swatinem/rust-cache@v2.9.3'
     '.github/workflows/bump-version.yaml':
         - 'actions/checkout@v7.0.1'
@@ -59,9 +59,9 @@ dependencies:
         repo_id: 496012378
         uses:
             - 'actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f'
-    'bencherdev/bencher@v0.6.16':
-        ref: 'v0.6.16'
-        commit: 'sha1-7de3c69a85380826613050826b4bce062be2f07d'
+    'bencherdev/bencher@v0.6.17':
+        ref: 'v0.6.17'
+        commit: 'sha1-b2484bc6734c8e6da4fad141bd13527a11da3988'
         owner_id: 68773954
         repo_id: 282416261
     'coverallsapp/github-action@v2.3.8':
