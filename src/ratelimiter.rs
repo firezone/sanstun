@@ -1,6 +1,6 @@
+use alloc::collections::BTreeMap;
 use core::net::{IpAddr, Ipv4Addr};
 use core::time::Duration;
-use std::collections::HashMap;
 use std::time::Instant;
 
 const DEFAULT_HANDSHAKE_LIMIT: u64 = 100;
@@ -27,7 +27,7 @@ pub(crate) struct RateLimiter {
     /// Messages counted since `window_start`.
     count: u64,
     window_start: Instant,
-    buckets: HashMap<Source, Bucket>,
+    buckets: BTreeMap<Source, Bucket>,
     /// New sources are refused while this many are tracked.
     max_sources: usize,
     last_gc: Instant,
@@ -39,7 +39,7 @@ impl RateLimiter {
             limit: DEFAULT_HANDSHAKE_LIMIT,
             count: 0,
             window_start: now,
-            buckets: HashMap::new(),
+            buckets: BTreeMap::new(),
             max_sources: DEFAULT_MAX_SOURCES,
             last_gc: now,
         }
@@ -99,15 +99,13 @@ impl RateLimiter {
             return;
         }
 
-        for _ in self
-            .buckets
-            .extract_if(|_, bucket| now.duration_since(bucket.last_seen) >= IDLE_TIMEOUT)
-        {}
+        self.buckets
+            .retain(|_, bucket| now.duration_since(bucket.last_seen) < IDLE_TIMEOUT);
         self.last_gc = now;
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Source {
     V4(Ipv4Addr),
     /// The upper 64 bits of the address.

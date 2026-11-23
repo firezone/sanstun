@@ -1,6 +1,6 @@
+use alloc::collections::BTreeMap;
 use alloc::sync::{Arc, Weak};
 use core::fmt;
-use std::collections::HashMap;
 
 use rand::rngs::StdRng;
 use rand::{CryptoRng, RngExt, SeedableRng};
@@ -59,24 +59,24 @@ impl Index {
 /// Allocates random tunnel indices without reusing those of live tunnels.
 pub(crate) struct TunnelIndices {
     rng: StdRng,
-    in_use: HashMap<u32, Weak<()>>,
+    in_use: BTreeMap<u32, Weak<()>>,
+    prune_at: usize,
 }
 
 impl TunnelIndices {
     pub(crate) fn new(rng: &mut impl CryptoRng) -> Self {
         TunnelIndices {
             rng: StdRng::from_rng(rng),
-            in_use: HashMap::new(),
+            in_use: BTreeMap::new(),
+            prune_at: 0,
         }
     }
 
     /// Allocates a tunnel index, reserved until the returned lease is dropped.
     pub(crate) fn next(&mut self) -> (Index, Arc<()>) {
-        if self.in_use.len() == self.in_use.capacity() {
-            for _ in self
-                .in_use
-                .extract_if(|_, tunnel| tunnel.strong_count() == 0)
-            {}
+        if self.in_use.len() >= self.prune_at {
+            self.in_use.retain(|_, tunnel| tunnel.strong_count() > 0);
+            self.prune_at = self.in_use.len() * 2;
         }
 
         loop {
