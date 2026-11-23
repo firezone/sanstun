@@ -13,6 +13,7 @@ Releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - `Tunnel::rekey_attempt_time` returns the configured `REKEY_ATTEMPT_TIME`.
+- `Interface::with_rate_limit_sources` sets how many sources the handshake rate limiter tracks under load. The default stays at 65,536.
 
 ### Fixed
 

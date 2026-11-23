@@ -15,7 +15,8 @@ const TOKEN_MAX: Duration = PACKET_COST.saturating_mul(PACKETS_BURSTABLE);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(1);
 const _: () = assert!(IDLE_TIMEOUT.as_nanos() >= TOKEN_MAX.as_nanos());
 
-const MAX_SOURCES: usize = 65536;
+/// How many sources the limiter tracks unless configured otherwise.
+const DEFAULT_MAX_SOURCES: usize = 65536;
 
 /// Limits handshake processing under load.
 ///
@@ -26,6 +27,8 @@ pub(crate) struct RateLimiter {
     count: u64,
     window_start: Instant,
     buckets: HashMap<Source, Bucket>,
+    /// New sources are refused while this many are tracked.
+    max_sources: usize,
     last_gc: Instant,
 }
 
@@ -36,12 +39,17 @@ impl RateLimiter {
             count: 0,
             window_start: now,
             buckets: HashMap::new(),
+            max_sources: DEFAULT_MAX_SOURCES,
             last_gc: now,
         }
     }
 
     pub(crate) fn set_limit(&mut self, limit: u64) {
         self.limit = limit;
+    }
+
+    pub(crate) fn set_max_sources(&mut self, max_sources: usize) {
+        self.max_sources = max_sources;
     }
 
     /// Counts a handshake message and returns whether it exceeds this second's limit.
@@ -69,7 +77,7 @@ impl RateLimiter {
             return bucket.take(now);
         }
 
-        if self.buckets.len() >= MAX_SOURCES {
+        if self.buckets.len() >= self.max_sources {
             return false;
         }
 
@@ -141,7 +149,7 @@ mod tests {
     fn full_table_refuses_new_sources_until_idle_ones_are_dropped() {
         let start = Instant::now();
         let mut limiter = RateLimiter::new(start);
-        for i in 0..MAX_SOURCES as u32 {
+        for i in 0..DEFAULT_MAX_SOURCES as u32 {
             assert!(limiter.allow(Ipv4Addr::from_bits(i).into(), start));
         }
 
