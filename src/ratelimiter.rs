@@ -1,6 +1,7 @@
+use core::net::{IpAddr, Ipv4Addr};
+use core::time::Duration;
 use std::collections::HashMap;
-use std::net::{IpAddr, Ipv4Addr};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 const DEFAULT_HANDSHAKE_LIMIT: u64 = 100;
 

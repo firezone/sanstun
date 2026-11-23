@@ -6,9 +6,10 @@ use crate::crypto::nonce;
 use crate::errors::Error;
 use crate::message::{AEAD_TAG_SZ, DATA, DATA_HEADER_SZ, DataMessage, TransportData};
 use crate::replay::ReceivingKeyCounterValidator;
+use core::num::NonZeroUsize;
+use core::time::Duration;
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
-use std::num::NonZeroUsize;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use zeroize::Zeroizing;
 
 pub(crate) struct Session {
@@ -25,8 +26,8 @@ pub(crate) struct Session {
     receiving_key_counter: ReceivingKeyCounterValidator,
 }
 
-impl std::fmt::Debug for Session {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+impl core::fmt::Debug for Session {
+    fn fmt(&self, f: &mut core::fmt::Formatter) -> core::fmt::Result {
         write!(
             f,
             "Session: {}<- ->{}",
@@ -472,7 +473,7 @@ impl PendingEncapsulate {
         let mut remaining = self.len.get();
         let mut counter = self.first_counter;
 
-        std::iter::from_fn(move || {
+        core::iter::from_fn(move || {
             if remaining == 0 {
                 debug_assert!(
                     messages.next().is_none(),
@@ -758,8 +759,8 @@ impl<B> DecryptedBatch<B> {
     }
 }
 
-impl<B> std::fmt::Debug for DecryptedBatch<B> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<B> core::fmt::Debug for DecryptedBatch<B> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("DecryptedBatch")
             .field("receiving_index", &self.receiving_index)
             .field("messages", &self.messages)
@@ -787,8 +788,8 @@ impl<B> Plaintext<B> {
     }
 }
 
-impl<B> std::fmt::Debug for Plaintext<B> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl<B> core::fmt::Debug for Plaintext<B> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Keepalive => f.write_str("Keepalive"),
             Self::Data { len, .. } => f
@@ -819,8 +820,8 @@ impl SessionKey {
     }
 }
 
-impl std::fmt::Debug for SessionKey {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for SessionKey {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.write_str("SessionKey")
     }
 }

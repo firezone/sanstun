@@ -1,6 +1,6 @@
+use alloc::sync::{Arc, Weak};
+use core::fmt;
 use std::collections::HashMap;
-use std::fmt;
-use std::sync::{Arc, Weak};
 
 use rand::rngs::StdRng;
 use rand::{CryptoRng, RngExt, SeedableRng};
@@ -140,7 +140,7 @@ mod tests {
         use rand::SeedableRng as _;
 
         let mut indices = TunnelIndices::new(&mut StdRng::from_seed([1; 32]));
-        let [o0, o1, o2, o3] = std::array::from_fn(|_| indices.next().0.global());
+        let [o0, o1, o2, o3] = core::array::from_fn(|_| indices.next().0.global());
 
         let predictions = predict_next_global_index([o0, o1, o2]);
 

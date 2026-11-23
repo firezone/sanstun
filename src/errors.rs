@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use core::fmt::Display;
 
 #[derive(Debug)]
 pub enum Error {
@@ -27,7 +27,7 @@ pub enum Error {
 }
 
 impl Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Error::DestinationBufferTooSmall {
                 required,
@@ -80,4 +80,4 @@ impl Display for Error {
     }
 }
 
-impl std::error::Error for Error {}
+impl core::error::Error for Error {}
