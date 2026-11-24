@@ -111,6 +111,19 @@ impl Interface {
         self
     }
 
+    /// Sets how many sources the handshake rate limiter tracks at once.
+    ///
+    /// Under load, each IPv4 address or IPv6 /64 that presents a valid cookie gets a token bucket
+    /// until it has been idle for a second. While the table is full, handshakes from new sources
+    /// fail with [`Error::RateLimited`]. Lower this to bound memory on small devices.
+    ///
+    /// Defaults to 65,536.
+    pub fn with_rate_limit_sources(mut self, max_sources: usize) -> Self {
+        self.rate_limiter.set_max_sources(max_sources);
+
+        self
+    }
+
     /// Returns the interface's static public key.
     pub fn static_public(&self) -> PublicKey {
         self.static_public
@@ -164,7 +177,8 @@ impl Interface {
     /// Parses an incoming datagram and applies handshake cookie and rate-limit checks.
     ///
     /// Under load, handshakes with valid cookies are limited to 20 per second with a burst of 5
-    /// per IPv4 address or IPv6 /64.
+    /// per IPv4 address or IPv6 /64, for at most [`Interface::with_rate_limit_sources`] sources at
+    /// once.
     /// Messages beyond this budget fail with [`Error::RateLimited`].
     ///
     /// For peers with a tunnel, handshake initiations that are not newer than the last accepted
