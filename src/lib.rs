@@ -89,6 +89,8 @@
 //! - **Time:** use a monotonic clock for `now`. The Unix time passed to [`Interface::new`] must
 //!   not go backwards across restarts, or peers may reject handshake initiations as replays.
 
+extern crate alloc;
+
 mod crypto;
 mod errors;
 mod handshake;

@@ -338,8 +338,8 @@ mod tests {
         let aad = [
             0x50, 0x51, 0x52, 0x53, 0xc0, 0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7,
         ];
-        let key = std::array::from_fn(|i| 0x80 + i as u8);
-        let nonce = std::array::from_fn(|i| 0x40 + i as u8);
+        let key = core::array::from_fn(|i| 0x80 + i as u8);
+        let nonce = core::array::from_fn(|i| 0x40 + i as u8);
         let mut sealed = vec![0; plaintext.len() + 16];
 
         xaead_seal(&mut sealed, &key, &nonce, plaintext, &aad);

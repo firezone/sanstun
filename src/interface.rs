@@ -10,10 +10,11 @@ use crate::ratelimiter::RateLimiter;
 use crate::tai64n::{Tai64N, TimeStamper};
 use crate::{Datagram, Error, PublicKey, StaticSecret, Tunnel, TunnelConfig};
 
+use alloc::sync::{Arc, Weak};
+use core::net::{IpAddr, SocketAddr};
+use core::time::Duration;
 use std::collections::HashMap;
-use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, Weak};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::rng::ForwardSecureRng;
 use rand::RngExt;
