@@ -327,9 +327,9 @@ checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
 
 [[package]]
 name = "etherparse"
-version = "0.21.0"
+version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "17304d06addb3283cdc4bd528e42dd95e73c8ee2d6492ffce415e93660885449"
+checksum = "c78ea1640fbca18d7d2c7459be6db63705ca8cce8a18be4045f4ad7a1e7c4311"
 dependencies = [
  "arrayvec",
 ]
