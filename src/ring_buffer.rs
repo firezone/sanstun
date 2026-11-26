@@ -88,7 +88,7 @@ mod tests {
         }
     }
 
-    fn drain(buffer: &mut RingBuffer<u8, 4>) -> Vec<u8> {
+    fn drain(buffer: &mut RingBuffer<u8, 4>) -> alloc::vec::Vec<u8> {
         core::iter::from_fn(|| buffer.pop_front()).collect()
     }
 }

@@ -7,6 +7,9 @@ Releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Breaking:** The crate is now `#![no_std]`; without the default `std` feature it only needs `alloc`. Time is passed as `sanstun::Instant`, a re-export of `sans_io_time::Instant`, instead of `std::time::Instant`; with the default `std` feature, `Instant::from_std` and `Instant::to_std` convert between them (#160).
+- Without the default `std` feature, sanstun uses the pure-Rust `chacha20poly1305` crate instead of `ring`, so it builds for bare-metal targets (#160).
+- Without the default `std` feature, the handshake rate limiter tracks at most 128 sources by default, about 12 KB in the worst case on a microcontroller (#160).
 - **Breaking:** Data messages are encrypted, decrypted and committed in batches, which sets up the session and AEAD key once per batch instead of once per message (#129).
 - **Breaking:** A tunnel rejects handshake initiations received before it was created with the new `Error::InitiationPredatesTunnel`, because the replay check could not run for them (#152).
 

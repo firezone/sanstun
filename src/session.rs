@@ -2,14 +2,15 @@ use super::{
     index::{Index, TunnelId},
     timers::{REJECT_AFTER_MESSAGES, REJECT_AFTER_TIME, REKEY_AFTER_MESSAGES, REKEY_AFTER_TIME},
 };
-use crate::crypto::nonce;
+use crate::crypto::{AeadKey, nonce};
 use crate::errors::Error;
 use crate::message::{AEAD_TAG_SZ, DATA, DATA_HEADER_SZ, DataMessage, TransportData};
 use crate::replay::ReceivingKeyCounterValidator;
+use alloc::vec::Vec;
 use core::num::NonZeroUsize;
 use core::time::Duration;
-use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
-use std::time::Instant;
+
+use crate::Instant;
 use zeroize::Zeroizing;
 
 pub(crate) struct Session {
@@ -500,7 +501,7 @@ impl PendingEncapsulate {
 }
 
 fn encrypt_payload<'a>(
-    aead: &LessSafeKey,
+    aead: &AeadKey,
     receiver_index: Index,
     counter: u64,
     plaintext: &[u8],
@@ -526,14 +527,8 @@ fn encrypt_payload<'a>(
     payload.copy_from_slice(plaintext);
     padding.fill(0);
 
-    let computed_tag = aead
-        .seal_in_place_separate_tag(
-            Nonce::assume_unique_for_key(nonce(counter)),
-            Aad::from(&[]),
-            data,
-        )
-        .expect("plaintext of a data message is always within the AEAD's limits");
-    tag.copy_from_slice(computed_tag.as_ref());
+    let computed_tag = aead.seal_in_place_separate_tag(nonce(counter), &[], data);
+    tag.copy_from_slice(&computed_tag);
 
     Ok(DataMessage(message))
 }
@@ -634,7 +629,7 @@ impl PendingDecapsulate {
 }
 
 fn decrypt_in_place(
-    aead: &LessSafeKey,
+    aead: &AeadKey,
     receiving_index: Index,
     counter: u64,
     message: &[u8],
@@ -659,13 +654,7 @@ fn decrypt_in_place(
     };
     buf.copy_from_slice(ciphertext);
 
-    let plaintext = aead
-        .open_in_place(
-            Nonce::assume_unique_for_key(nonce(counter)),
-            Aad::from(&[]),
-            buf,
-        )
-        .map_err(|_| Error::InvalidAeadTag)?;
+    let plaintext = aead.open_in_place(nonce(counter), &[], buf)?;
 
     Ok(plaintext.len())
 }
@@ -813,10 +802,8 @@ impl SessionKey {
     }
 
     /// ChaCha20-Poly1305 has no key schedule, so this only copies the key.
-    fn aead(&self) -> LessSafeKey {
-        LessSafeKey::new(
-            UnboundKey::new(&CHACHA20_POLY1305, &self.0[..]).expect("key has 32 bytes"),
-        )
+    fn aead(&self) -> AeadKey {
+        AeadKey::new(&self.0)
     }
 }
 
@@ -922,7 +909,7 @@ mod tests {
             &[0; 32],
             &[0; 32],
             Role::Initiator,
-            Instant::now(),
+            Instant::ZERO,
         )
     }
 }

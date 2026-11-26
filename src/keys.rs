@@ -3,7 +3,7 @@ use core::fmt;
 use zeroize::Zeroizing;
 
 /// An X25519 public key.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PublicKey([u8; 32]);
 
 impl PublicKey {
@@ -92,6 +92,7 @@ impl fmt::Debug for PresharedKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::format;
 
     #[test]
     fn debug_redacts_only_the_secrets() {

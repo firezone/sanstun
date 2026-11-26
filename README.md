@@ -14,11 +14,18 @@ The fork at [firezone/boringtun](https://github.com/firezone/boringtun) is now d
 The `sanstun` project combines our experience of operating WireGuard in production in a sans-IO setting.
 It features a re-designed API and internals that are tuned for maximizing throughput whilst making it easy and safe to use.
 
+- `#![no_std]`, requiring only `alloc` (so your binary must provide a global allocator) and atomic pointers
 - Fully sans-IO, including time and RNG seeds
 - No internal buffering
 - No locks or atomic counters in the protocol state
 - Multi-core friendly API: Encapsulating and decapsulating packets performs only the minimal book-keeping necessary.
   The actual crypto operations can be deferred to other threads and thus parallelized when processing packets in batches.
+
+## Features
+
+- `std` (default): encrypts data with [`ring`](https://crates.io/crates/ring) and adds conversions between `Instant` and `std::time::Instant`.
+- Without `std`, `sanstun` encrypts with the pure-Rust [`chacha20poly1305`](https://crates.io/crates/chacha20poly1305) crate and builds for bare-metal targets.
+  The handshake rate limiter tracks at most 128 sources by default, about 12 KB in the worst case; see `Interface::with_rate_limit_sources`.
 
 ## Out-of-scope
 
@@ -52,7 +59,7 @@ With great power comes great responsibility.
 
 ### Time
 
-The time passed in needs to be monotonically increasing, otherwise other peers might reject handshakes as replays.
+`sanstun` does not read a clock. Time is passed as `sanstun::Instant`, a re-export of [`sans_io_time::Instant`](https://docs.rs/sans-io-time): nanoseconds since a starting point you choose. With the `std` feature, `Instant::from_std(start)` gives the time elapsed since `start`; otherwise build it from your clock with `Instant::from_nanos`. The time passed in needs to be monotonically increasing, otherwise other peers might reject handshakes as replays.
 
 ## Security
 
