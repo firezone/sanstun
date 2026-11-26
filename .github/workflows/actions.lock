@@ -16,7 +16,7 @@ workflows:
     '.github/workflows/ci.yaml':
         - 'actions/checkout@v7.0.1'
         - 'coverallsapp/github-action@v2.3.8'
-        - 'jdx/mise-action@v5.2.8'
+        - 'jdx/mise-action@v5.3.0'
         - 'swatinem/rust-cache@v2.9.3'
         - 'taiki-e/install-action@v2.90.5'
     '.github/workflows/docs.yaml':
@@ -74,9 +74,9 @@ dependencies:
         commit: 'sha1-f92afb7395591f2205bdcfd42b975c8dcf51bb6b'
         owner_id: 87211124
         repo_id: 1442350782
-    'jdx/mise-action@v5.2.8':
-        ref: 'v5.2.8'
-        commit: 'sha1-d5574b52816a478f9d4e6529a3f6ff17a8a36785'
+    'jdx/mise-action@v5.3.0':
+        ref: 'v5.3.0'
+        commit: 'sha1-924e7c586e33d7d4bae9c14e26c5d22e2beb6e78'
         owner_id: 216188
         repo_id: 738284564
     'rust-lang/crates-io-auth-action@v1.0.6':
