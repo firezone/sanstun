@@ -91,6 +91,11 @@
 
 extern crate alloc;
 
+#[cfg(not(any(feature = "ring", feature = "rust-crypto")))]
+compile_error!(
+    "sanstun needs a ChaCha20-Poly1305 backend: enable the `ring` or `rust-crypto` feature"
+);
+
 mod crypto;
 mod errors;
 mod handshake;

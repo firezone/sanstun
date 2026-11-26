@@ -20,6 +20,12 @@ It features a re-designed API and internals that are tuned for maximizing throug
 - Multi-core friendly API: Encapsulating and decapsulating packets performs only the minimal book-keeping necessary.
   The actual crypto operations can be deferred to other threads and thus parallelized when processing packets in batches.
 
+## Features
+
+- `ring` (default): encrypts data with [`ring`](https://crates.io/crates/ring).
+- `rust-crypto`: encrypts data with the pure-Rust [`chacha20poly1305`](https://crates.io/crates/chacha20poly1305) crate instead, so depending on `sanstun` doesn't need a C compiler.
+  Disable default features to use it. If both are enabled, `ring` is used.
+
 ## Out-of-scope
 
 Being a sans-IO library, `sanstun` does not perform any kind of IO for you, neither towards the user via a TUN device nor on the network to other peers via UDP.
