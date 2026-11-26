@@ -1,7 +1,7 @@
+use crate::Instant;
 use core::convert::TryInto;
 use core::fmt::{self, Debug};
 use core::time::Duration;
-use std::time::Instant;
 
 /// A 12-byte [TAI64N](https://cr.yp.to/libtai/tai64.html) timestamp.
 #[derive(Clone, Copy, PartialEq, Eq)]

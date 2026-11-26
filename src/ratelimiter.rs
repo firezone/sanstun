@@ -1,7 +1,7 @@
+use crate::Instant;
 use core::net::{IpAddr, Ipv4Addr};
 use core::time::Duration;
 use std::collections::HashMap;
-use std::time::Instant;
 
 const DEFAULT_HANDSHAKE_LIMIT: u64 = 100;
 
@@ -148,7 +148,7 @@ mod tests {
 
     #[test]
     fn full_table_refuses_new_sources_until_idle_ones_are_dropped() {
-        let start = Instant::now();
+        let start = Instant::ZERO;
         let mut limiter = RateLimiter::new(start);
         for i in 0..DEFAULT_MAX_SOURCES as u32 {
             assert!(limiter.allow(Ipv4Addr::from_bits(i).into(), start));
@@ -165,7 +165,7 @@ mod tests {
 
     #[test]
     fn ipv4_mapped_ipv6_sources_are_limited_per_ipv4_address() {
-        let now = Instant::now();
+        let now = Instant::ZERO;
         let mut limiter = RateLimiter::new(now);
         let mapped = |ip: Ipv4Addr| IpAddr::V6(ip.to_ipv6_mapped());
 

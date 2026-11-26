@@ -8,13 +8,12 @@ use crate::message::{
 };
 use crate::ratelimiter::RateLimiter;
 use crate::tai64n::{Tai64N, TimeStamper};
-use crate::{Datagram, Error, PublicKey, StaticSecret, Tunnel, TunnelConfig};
+use crate::{Datagram, Error, Instant, PublicKey, StaticSecret, Tunnel, TunnelConfig};
 
 use alloc::sync::{Arc, Weak};
 use core::net::{IpAddr, SocketAddr};
 use core::time::Duration;
 use std::collections::HashMap;
-use std::time::Instant;
 
 use crate::rng::ForwardSecureRng;
 use rand::RngExt;
@@ -388,7 +387,7 @@ mod tests {
 
     #[test]
     fn cookies_differ_across_address_families() {
-        let now = Instant::now();
+        let now = Instant::ZERO;
         let mut interface = under_load(now);
 
         let v4 = interface.current_cookie("1.2.3.4:51820".parse().unwrap(), now);
@@ -399,7 +398,7 @@ mod tests {
 
     #[test]
     fn cookies_differ_across_ports() {
-        let now = Instant::now();
+        let now = Instant::ZERO;
         let mut interface = under_load(now);
 
         let first = interface.current_cookie("1.2.3.4:51820".parse().unwrap(), now);
@@ -410,7 +409,7 @@ mod tests {
 
     #[test]
     fn cookie_secret_rotates_every_120_seconds() {
-        let start = Instant::now();
+        let start = Instant::ZERO;
         let mut interface = under_load(start);
         let addr = "1.2.3.4:51820".parse().unwrap();
 
@@ -428,7 +427,7 @@ mod tests {
 
     #[test]
     fn mac2_from_the_previous_cookie_secret_is_rejected() {
-        let start = Instant::now();
+        let start = Instant::ZERO;
         let mut interface = under_load(start);
         let addr = "1.2.3.4:51820".parse().unwrap();
         let cookie = interface.current_cookie(addr, start);
@@ -443,7 +442,7 @@ mod tests {
 
     #[test]
     fn initiations_from_unknown_peers_leave_no_state() {
-        let now = Instant::now();
+        let now = Instant::ZERO;
         let mut initiator = Interface::new(Zeroizing::new([1; 32]), now, Duration::ZERO);
         let mut responder = Interface::new(Zeroizing::new([2; 32]), now, Duration::ZERO);
         let mut tunnel = initiator
