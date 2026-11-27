@@ -9,6 +9,7 @@ Releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Breaking:** Data messages are encrypted, decrypted and committed in batches, which sets up the session and AEAD key once per batch instead of once per message (#129).
 - **Breaking:** A tunnel rejects handshake initiations received before it was created with the new `Error::InitiationPredatesTunnel`, because the replay check could not run for them (#152).
+- **Breaking:** Every `now` parameter is now `sanstun::Instant`, a re-export of `sans_io_time::Instant` (#171).
 
 ### Added
 

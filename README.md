@@ -52,6 +52,9 @@ With great power comes great responsibility.
 
 ### Time
 
+`sanstun` does not read a clock.
+Time is passed as `sanstun::Instant`, a re-export of [`sans_io_time::Instant`](https://docs.rs/sans-io-time): nanoseconds since a starting point you choose.
+
 The time passed in needs to be monotonically increasing, otherwise other peers might reject handshakes as replays.
 
 ## Security

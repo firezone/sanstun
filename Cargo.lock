@@ -711,6 +711,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "sans-io-time"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6e1c4baf93f2fbecd194191bdb8b911b14f37ae35f0d1e1cbfb4cb6e067e8c52"
+
+[[package]]
 name = "sanstun"
 version = "0.2.0"
 dependencies = [
@@ -721,6 +727,7 @@ dependencies = [
  "hmac",
  "rand",
  "ring",
+ "sans-io-time",
  "subtle",
  "tracing",
  "x25519-dalek",

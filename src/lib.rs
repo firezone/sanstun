@@ -8,12 +8,12 @@
 //!
 //! ```
 //! use std::num::NonZeroUsize;
-//! use std::time::{Instant, SystemTime, UNIX_EPOCH};
+//! use std::time::{SystemTime, UNIX_EPOCH};
 //!
-//! use sanstun::{Committed, Interface, Received, ReceivedMessage, TunnelConfig};
+//! use sanstun::{Committed, Instant, Interface, Received, ReceivedMessage, TunnelConfig};
 //! use zeroize::Zeroizing;
 //!
-//! let now = Instant::now();
+//! let now = Instant::ZERO;
 //! let unix = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
 //! let alice_addr = "192.0.2.1:51820".parse().unwrap();
 //! let bob_addr = "192.0.2.2:51820".parse().unwrap();
@@ -115,6 +115,7 @@ pub use message::{
     CookieReply, DataMessage, Datagram, HandshakeInitiation, HandshakeResponse, ReceivedMessage,
     TransportData,
 };
+pub use sans_io_time::Instant;
 pub use session::{
     DecapsulateBatch, DecryptedBatch, EncapsulateBatch, PendingDecapsulate, PendingEncapsulate,
 };

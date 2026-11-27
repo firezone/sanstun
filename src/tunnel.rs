@@ -1,3 +1,4 @@
+use crate::Instant;
 use crate::errors::Error;
 use crate::handshake::Handshake;
 use crate::index::{Index, TunnelId};
@@ -18,7 +19,6 @@ use rand::{CryptoRng, RngExt};
 use alloc::sync::Arc;
 use core::iter;
 use core::time::Duration;
-use std::time::Instant;
 
 /// An action for the caller, returned by [`Tunnel::poll_event`].
 #[derive(Debug)]

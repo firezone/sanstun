@@ -2,6 +2,7 @@ use super::{
     index::{Index, TunnelId},
     timers::{REJECT_AFTER_MESSAGES, REJECT_AFTER_TIME, REKEY_AFTER_MESSAGES, REKEY_AFTER_TIME},
 };
+use crate::Instant;
 use crate::crypto::nonce;
 use crate::errors::Error;
 use crate::message::{AEAD_TAG_SZ, DATA, DATA_HEADER_SZ, DataMessage, TransportData};
@@ -9,7 +10,6 @@ use crate::replay::ReceivingKeyCounterValidator;
 use core::num::NonZeroUsize;
 use core::time::Duration;
 use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
-use std::time::Instant;
 use zeroize::Zeroizing;
 
 pub(crate) struct Session {
@@ -922,7 +922,7 @@ mod tests {
             &[0; 32],
             &[0; 32],
             Role::Initiator,
-            Instant::now(),
+            Instant::ZERO,
         )
     }
 }
