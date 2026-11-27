@@ -23,7 +23,6 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      checks: write
     env:
       BENCHER_PROJECT: sanstun
       BENCHER_API_KEY: ${{ secrets.BENCHER_API_KEY }}
@@ -34,7 +33,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: bencherdev/bencher@v0.6.17
+      - uses: bencherdev/bencher@v0.6.18
       # Runs each benchmark once, so a broken one fails here instead of on Bencher.
       - name: Test benches
         run: cargo bench --benches -- --test
@@ -79,8 +78,8 @@ jobs:
             )
           fi
 
-          # Bare Metal jobs can queue behind others, so only submit the job and start its GitHub Check.
-          # Once the job has run, Bencher dispatches `bencher_run` to `bencher-results.yaml`, which posts the results.
+          # Bare Metal jobs can queue behind others, so only submit the job.
+          # Bencher starts its GitHub Check, then posts the results once the job has run.
           bencher run "${args[@]}" \
             --testbed "bare-metal-$BENCHER_SPEC" \
             --spec "$BENCHER_SPEC" \
@@ -88,4 +87,5 @@ jobs:
             --job-timeout 1800 \
             --adapter rust_criterion \
             --github-actions "$GH_TOKEN" \
+            --ci-only-on-alert \
             --detach
