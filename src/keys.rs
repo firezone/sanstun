@@ -3,7 +3,7 @@ use core::fmt;
 use zeroize::Zeroizing;
 
 /// An X25519 public key.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PublicKey([u8; 32]);
 
 impl PublicKey {

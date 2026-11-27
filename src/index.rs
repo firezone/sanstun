@@ -1,6 +1,6 @@
+use alloc::collections::BTreeMap;
 use alloc::sync::{Arc, Weak};
 use core::fmt;
-use std::collections::HashMap;
 
 use rand::rngs::StdRng;
 use rand::{CryptoRng, RngExt, SeedableRng};
@@ -59,24 +59,27 @@ impl Index {
 /// Allocates random tunnel indices without reusing those of live tunnels.
 pub(crate) struct TunnelIndices {
     rng: StdRng,
-    in_use: HashMap<u32, Weak<()>>,
+    in_use: BTreeMap<u32, Weak<()>>,
+    prune_at: usize,
 }
 
 impl TunnelIndices {
     pub(crate) fn new(rng: &mut impl CryptoRng) -> Self {
         TunnelIndices {
             rng: StdRng::from_rng(rng),
-            in_use: HashMap::new(),
+            in_use: BTreeMap::new(),
+            prune_at: 0,
         }
     }
 
     /// Allocates a tunnel index, reserved until the returned lease is dropped.
     pub(crate) fn next(&mut self) -> (Index, Arc<()>) {
-        if self.in_use.len() == self.in_use.capacity() {
+        if self.in_use.len() >= self.prune_at {
             for _ in self
                 .in_use
-                .extract_if(|_, tunnel| tunnel.strong_count() == 0)
+                .extract_if(.., |_, tunnel| tunnel.strong_count() == 0)
             {}
+            self.prune_at = self.in_use.len() * 2;
         }
 
         loop {
@@ -133,6 +136,17 @@ mod tests {
         drop(lease);
         indices.rng = fresh().rng;
         assert_eq!(indices.next().0, taken);
+    }
+
+    #[test]
+    fn dropped_tunnel_indices_are_pruned() {
+        let mut indices = TunnelIndices::new(&mut StdRng::from_seed([1; 32]));
+        let leases: alloc::vec::Vec<_> = (0..4).map(|_| indices.next().1).collect();
+        drop(leases);
+
+        let _lease = indices.next();
+
+        assert_eq!(indices.in_use.len(), 1);
     }
 
     #[test]

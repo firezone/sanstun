@@ -10,10 +10,10 @@ use crate::ratelimiter::RateLimiter;
 use crate::tai64n::{Tai64N, TimeStamper};
 use crate::{Datagram, Error, PublicKey, StaticSecret, Tunnel, TunnelConfig};
 
+use alloc::collections::BTreeMap;
 use alloc::sync::{Arc, Weak};
 use core::net::{IpAddr, SocketAddr};
 use core::time::Duration;
-use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::rng::ForwardSecureRng;
@@ -55,7 +55,7 @@ pub struct Interface {
     rate_limiter: RateLimiter,
     /// The latest accepted handshake timestamp of each peer, with a handle that is alive while
     /// the peer has a tunnel.
-    last_handshake_timestamps: HashMap<PublicKey, (Tai64N, Weak<()>)>,
+    last_handshake_timestamps: BTreeMap<PublicKey, (Tai64N, Weak<()>)>,
 }
 
 impl Interface {
@@ -87,7 +87,7 @@ impl Interface {
             stamper: TimeStamper::new(now, unix),
             indices,
             rate_limiter: RateLimiter::new(now),
-            last_handshake_timestamps: HashMap::new(),
+            last_handshake_timestamps: BTreeMap::new(),
         }
     }
 
@@ -168,7 +168,7 @@ impl Interface {
         if self.last_handshake_timestamps.len() > MAX_REMEMBERED_PEERS {
             for _ in self
                 .last_handshake_timestamps
-                .extract_if(|_, (_, tunnels)| tunnels.strong_count() == 0)
+                .extract_if(.., |_, (_, tunnels)| tunnels.strong_count() == 0)
             {}
         }
 
