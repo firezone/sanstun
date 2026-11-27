@@ -8,9 +8,15 @@ repository = "https://github.com/firezone/sanstun"
 edition = "2024"
 rust-version = "1.91"
 
+[features]
+default = ["ring"]
+ring = ["dep:ring"] # Takes priority if both backends are enabled.
+rust-crypto = ["dep:chacha20poly1305"] # Useful for portability as it doesn't depend on a C compiler.
+
 [dependencies]
 tracing = "0.1.44"
-ring = "0.17"
+ring = { version = "0.17", optional = true }
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["zeroize"], optional = true }
 x25519-dalek = { version = "3.0.0", features = [
     "reusable_secrets",
     "static_secrets",
@@ -23,6 +29,7 @@ subtle = "2.6.1"
 zeroize = "1.5.6"
 
 [dev-dependencies]
+ring = "0.17"
 rand = "0.10"
 x25519-dalek = { version = "3.0.0", features = ["getrandom"] }
 etherparse = "0.21.1"

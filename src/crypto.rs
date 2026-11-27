@@ -3,7 +3,6 @@ use crate::errors::Error;
 use blake2::digest::consts::U16;
 use blake2::digest::{FixedOutput, KeyInit};
 use blake2::{Blake2s256, Blake2sMac, Digest};
-use ring::aead::{Aad, CHACHA20_POLY1305, LessSafeKey, Nonce, UnboundKey};
 use x25519_dalek::SharedSecret;
 use zeroize::Zeroizing;
 
@@ -75,19 +74,13 @@ fn aead_chacha20_seal_inner(
     data: &[u8],
     aad: &[u8],
 ) {
-    let key = LessSafeKey::new(UnboundKey::new(&CHACHA20_POLY1305, key).unwrap());
+    let key = AeadKey::new(key);
 
     ciphertext[..data.len()].copy_from_slice(data);
 
-    let tag = key
-        .seal_in_place_separate_tag(
-            Nonce::assume_unique_for_key(nonce),
-            Aad::from(aad),
-            &mut ciphertext[..data.len()],
-        )
-        .unwrap();
+    let tag = key.seal_in_place_separate_tag(nonce, aad, &mut ciphertext[..data.len()]);
 
-    ciphertext[data.len()..].copy_from_slice(tag.as_ref());
+    ciphertext[data.len()..].copy_from_slice(&tag);
 }
 
 #[inline]
@@ -100,8 +93,6 @@ pub(crate) fn aead_chacha20_open(
     aad: &[u8],
 ) -> Result<(), Error> {
     aead_chacha20_open_inner(buffer, key, nonce(counter), data, aad)
-        .map_err(|_| Error::InvalidAeadTag)?;
-    Ok(())
 }
 
 #[inline]
@@ -111,21 +102,34 @@ fn aead_chacha20_open_inner(
     nonce: [u8; 12],
     data: &[u8],
     aad: &[u8],
-) -> Result<(), ring::error::Unspecified> {
-    let key = LessSafeKey::new(UnboundKey::new(&CHACHA20_POLY1305, key).unwrap());
+) -> Result<(), Error> {
+    let key = AeadKey::new(key);
 
     let mut inner_buffer = data.to_owned();
 
-    let plaintext = key.open_in_place(
-        Nonce::assume_unique_for_key(nonce),
-        Aad::from(aad),
-        &mut inner_buffer,
-    )?;
+    let plaintext = key.open_in_place(nonce, aad, &mut inner_buffer)?;
 
     buffer.copy_from_slice(plaintext);
 
     Ok(())
 }
+
+#[cfg(feature = "ring")]
+mod aead_ring;
+#[cfg(feature = "rust-crypto")]
+#[cfg_attr(
+    feature = "ring",
+    expect(
+        dead_code,
+        reason = "`ring` takes priority if both backends are enabled"
+    )
+)]
+mod aead_rust_crypto;
+
+#[cfg(feature = "ring")]
+pub(crate) use aead_ring::AeadKey;
+#[cfg(all(feature = "rust-crypto", not(feature = "ring")))]
+pub(crate) use aead_rust_crypto::AeadKey;
 
 /// Encrypts `data` with XChaCha20-Poly1305 and appends the 16-byte authentication tag.
 pub(crate) fn xaead_seal(
@@ -151,8 +155,6 @@ pub(crate) fn xaead_open(
     let (subkey, nonce) = xchacha20_subkey_and_nonce(key, nonce);
 
     aead_chacha20_open_inner(buffer, &subkey, nonce, data, aad)
-        .map_err(|_| Error::InvalidAeadTag)?;
-    Ok(())
 }
 
 /// Derives the ChaCha20-Poly1305 key and nonce for XChaCha20-Poly1305.

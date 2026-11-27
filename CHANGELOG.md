@@ -15,6 +15,8 @@ Releases follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - `Tunnel::rekey_attempt_time` returns the configured `REKEY_ATTEMPT_TIME`.
 - `Interface::with_rate_limit_sources` sets how many sources the handshake rate limiter tracks under load. The default stays at 65,536.
+- The `rust-crypto` feature encrypts data with the pure-Rust `chacha20poly1305` crate instead of `ring`, so depending on sanstun doesn't need a C compiler.
+  `ring` stays the default and is used if both are enabled.
 
 ### Fixed
 
