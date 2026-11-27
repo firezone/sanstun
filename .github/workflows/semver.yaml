@@ -18,7 +18,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2.9.3
         with:
           save-if: false
-      - uses: taiki-e/install-action@v2.90.5
+      - uses: taiki-e/install-action@v2.90.8
         with:
           tool: cargo-semver-checks
       - run: cargo semver-checks
