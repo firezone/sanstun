@@ -39,7 +39,7 @@ jobs:
           sed -i "0,/^version = \".*\"$/s//version = \"$next\"/" Cargo.toml
           cargo update --workspace
           echo "next=$next" >> "$GITHUB_OUTPUT"
-      - uses: actions/create-github-app-token@v3.3.0
+      - uses: actions/create-github-app-token@v3.4.0
         id: app-token
         if: steps.version.outputs.next
         with:
